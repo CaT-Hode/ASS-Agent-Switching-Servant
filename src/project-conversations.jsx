@@ -134,7 +134,7 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
         <div className="conversation-rows">{items.slice(0, 200).map((p) => <article data-project-id={p.id} className={'conversation-row' + (p.id === project?.id ? ' selected' : '')} key={p.id}>
           <button className="conversation-row-main" aria-pressed={p.id === project?.id} onClick={() => choose(p)}><span className="conversation-row-title">{p.nonProject ? <MessagesSquare size={14} /> : <Folder size={14} />}{p.name}</span>
             <span className="conversation-row-meta">{p.cwd && <span className="conversation-row-project" title={p.cwd}>{p.cwd}</span>}<span className="conversation-row-count">{p.enabled ? p.count : p.counts?.[view] || 0} 个对话</span>{p.enabled && <span className="conversation-retained">同步中</span>}</span></button>
-          <div className="conversation-row-actions"><button className="icon-button conversation-delete" data-delete-opener aria-label={'删除项目对话 ' + p.name} disabled={!!busy || p.enabled} title={p.enabled ? '关闭同步后删除原生记录' : '删除项目的本地对话，保留可恢复备份'} onClick={(e) => deletePrompt(e, p)}><Trash2 size={14} /></button></div></article>)}
+          <div className="conversation-row-actions"><button className="icon-button conversation-delete" data-delete-opener aria-label={'删除项目对话 ' + p.name} disabled={!!busy || p.enabled} title={p.enabled ? '关闭同步后删除原生记录' : '删除项目的本地对话，不保存备份'} onClick={(e) => deletePrompt(e, p)}><Trash2 size={14} /></button></div></article>)}
           {list && !items.length && <div className="empty"><Folder size={30} /><p>暂无项目记录</p></div>}{!list && <div className="empty"><Loader2 className="spin" /></div>}</div>
         <footer className="conversation-pagination">{items.length} 个分组</footer></section>
       <div {...columns.separator('projects')} />
@@ -153,7 +153,7 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
             <strong>{t.title}</strong><small>{t.branchOf ? '分支 · ' : ''}{t.kind === 'native' ? labels[t.harness] : t.harnesses.map((h) => labels[h]).join(' / ')} · {time(t.updatedAt)}</small>
             {(t.syncedFrom || (!t.kind && t.originHarness !== view)) && <span className="conversation-sync-origin">来自 {originLabels[t.syncedFrom || t.originHarness]} 的同步</span>}<HistoryBadge row={t} /></button>
             <div className="conversation-row-actions">{t.libraryId && <button className={'icon-button conversation-pin' + (t.pinned ? ' pinned' : '')} aria-label={t.pinned ? '取消置顶对话' : '置顶对话'} title={t.pinned ? '取消置顶' : '置顶此对话'} disabled={!!busy} onClick={() => action('conversations-pin', t.libraryId, !t.pinned)}><Pin size={14} /></button>}
-            <button className="icon-button conversation-delete" data-delete-opener aria-label={t.retained && !t.nativePresent ? '管理保留副本 ' + t.title : '删除对话 ' + t.title} title={t.retained && !t.nativePresent ? '在历史与存储中查看或清理副本' : project.enabled ? '关闭同步后删除原生记录' : '删除本地对话，保留备份'} disabled={!!busy || project.enabled} onClick={(e) => t.retained && !t.nativePresent ? setHistoryOpen(true) : deletePrompt(e, project, t)}><Trash2 size={14} /></button></div></article>)}
+            <button className="icon-button conversation-delete" data-delete-opener aria-label={t.retained && !t.nativePresent ? '管理保留副本 ' + t.title : '删除对话 ' + t.title} title={t.retained && !t.nativePresent ? '在历史与存储中查看或清理副本' : project.enabled ? '关闭同步后删除原生记录' : '删除本地对话，不保存备份'} disabled={!!busy || project.enabled} onClick={(e) => t.retained && !t.nativePresent ? setHistoryOpen(true) : deletePrompt(e, project, t)}><Trash2 size={14} /></button></div></article>)}
           {!threads && <Loader2 className="spin" />}{threads && !threads.items.length && <p>暂无对话</p>}
           <div className="project-thread-pages"><button className="icon-button" aria-label="上一页对话" disabled={!offset || !threads} onClick={() => setOffset((n) => Math.max(0, n - 40))}><ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /></button><small>{threads?.total || 0} 个对话</small><button className="icon-button" aria-label="下一页对话" disabled={!threads || offset + 40 >= threads.total} onClick={() => setOffset((n) => n + 40)}><ChevronRight size={14} /></button></div></nav>
           <div {...columns.separator('threads')} />
@@ -170,8 +170,7 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
       </> : <div className="empty"><Folder size={30} /><p>选择项目</p></div>}</section>
     </div>
     {deleting && createPortal(<div className="conversation-delete-confirm" role="dialog" aria-label="删除本地记录确认" style={{ left: deleting.left, top: deleting.top }}>
-      <strong>{deleting.title}</strong><p>{deleting.recordId ? '删除本地对话，保留可恢复备份。' : '删除该分组所有客户端的本地对话，保留备份。'}不删除项目文件。</p>
-      <p>Codex：移除 rollout 文件和原生会话索引。Codex 的 thread_history_*.sqlite 正文存储可能仍保留内容；此操作不会清除该存储或远端副本。</p>
+      <strong>{deleting.title}</strong><p>{deleting.recordId ? '删除本地对话，不保存备份，无法撤销。' : '删除该项目所有客户端的本地对话，不保存备份，无法撤销。'}项目文件不受影响。</p>
       <div className="actions"><button className="button" autoFocus onClick={() => setDeleting(null)}>取消</button><button className="button danger" disabled={!!busy} onClick={() => { const input = { projectId: deleting.projectId, recordId: deleting.recordId, confirmed: true }; setDeleting(null); action('project-conversations-delete', input); }}>删除</button></div>
     </div>, document.body)}
     {trash && <div className="conversation-trash-backdrop" onClick={closeTrash}><section className="conversation-trash-panel" role="dialog" aria-modal="true" aria-label="已删除记录" onClick={(e) => e.stopPropagation()}>

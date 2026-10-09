@@ -2,6 +2,7 @@ const { test } = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), crypto = require('node:crypto');
 const { ProjectConversations } = require('../core/project-conversations.cjs');
 const codecs = require('../core/project-codecs.cjs');
+const { legacyDelete } = require('./helpers/legacy-conversation-trash.cjs');
 const ID = '123e4567-e89b-42d3-a456-426614174000', timestamp = '2026-09-30T02:00:00.000Z';
 const messages = [{ role: 'user', text: 'Shared project discussion', timestamp }, { role: 'assistant', text: 'Existing answer', timestamp }];
 const { DatabaseSync } = require('node:sqlite');
@@ -230,14 +231,16 @@ test('CC rename in the middle of a long file overrides sampled summary and first
   const row = codecs.discover(f.sources).rows.find((r) => r.harness === 'claude'); assert.equal(row.title, '准确标题');
 });
 
-test('deleting a native conversation requires confirmation and preserves encrypted, restart-recoverable backup', async (t) => {
-  const f = fixture(t), original = fs.readFileSync(f.file), list = await f.library.list(), projectId = list.items[0].id;
+test('native deletion requires confirmation, creates no backup and stays deleted after restart', async (t) => {
+  const f = fixture(t), list = await f.library.list(), projectId = list.items[0].id;
   const recordId = (await f.library.records(projectId)).items[0].id;
   await assert.rejects(f.library.remove({ projectId, recordId }), /确认/); assert.ok(fs.existsSync(f.file));
   const r = await f.library.remove({ projectId, recordId, confirmed: true }); assert.ok(!fs.existsSync(f.file));
-  assert.equal((await f.library.list()).items.length, 0); assert.equal(f.library.trashList().items.length, 1);
-  const again = new ProjectConversations(f.options); await again.restoreTrash(r.id);
-  assert.deepEqual(fs.readFileSync(f.file), original); assert.equal((await again.list()).items[0].count, 1);
+  assert.equal((await f.library.list()).items.length, 0); assert.equal(f.library.trashList().items.length, 0);
+  assert.ok(!fs.existsSync(path.join(f.library.vault, 'trash')));
+  assert.match(r.message, /未保存备份/);
+  const again = new ProjectConversations(f.options); await assert.rejects(again.restoreTrash(r.id), /备份不存在/);
+  assert.equal((await again.list()).items.length, 0);
   assert.equal(again.trashList().items.length, 0);
   assert.ok(!fs.readFileSync(again.file, 'utf8').includes(messages[0].text));
 });
@@ -249,9 +252,61 @@ test('Codex native deletion removes just its index row and name entry; restorati
   db.prepare('INSERT INTO threads VALUES(?,?,?,?,0)').run('other', 'Keep', f.other, 'other-file');
   const names = path.join(f.dirs.codex, 'session_index.jsonl'); write(names, codecs.jsonl([{ id: ID, thread_name: 'Old name' }, { id: 'other', thread_name: 'Keep' }]));
   const p = (await f.library.list()).items[0], row = (await f.library.records(p.id)).items[0];
-  const deleted = await f.library.remove({ projectId: p.id, recordId: row.id, confirmed: true });
+  const deleted = await legacyDelete(f.library, { projectId: p.id, recordId: row.id, confirmed: true });
   assert.equal(db.prepare('SELECT count(*) AS n FROM threads').get().n, 1); assert.ok(!fs.readFileSync(names, 'utf8').includes(ID));
   await f.library.restoreTrash(deleted.id); assert.equal(db.prepare('SELECT count(*) AS n FROM threads').get().n, 2); assert.ok(fs.readFileSync(names, 'utf8').includes(ID)); db.close();
+});
+
+test('archived Codex deletion works with the client running without saving backups', { skip: process.platform !== 'win32' }, async t => {
+  const f = fixture(t), archived = path.join(f.dirs.codex, 'archived_sessions', path.basename(f.file));
+  fs.mkdirSync(path.dirname(archived)); fs.renameSync(f.file, archived);
+  const db = new DatabaseSync(path.join(f.dirs.codex, 'state_5.sqlite'));
+  try {
+  db.exec('CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,cwd TEXT,rollout_path TEXT,archived INTEGER)');
+  db.prepare('INSERT INTO threads VALUES(?,?,?,?,1)').run(ID, 'Archived', f.cwd, archived);
+  const names = path.join(f.dirs.codex, 'session_index.jsonl');
+  const namesBefore = codecs.jsonl([{ id: ID, thread_name: 'Archived' }, { id: 'other', thread_name: 'Keep' }]);
+  write(names, namesBefore);
+  const guards = [], options = { ...f.options, assertDeletionIdle: async (rows, run, mode) => {
+    guards.push(mode); if (!mode?.allowArchivedCodex) throw Error('运行中不能恢复');
+    assert.ok(rows.every(require('../core/codex-archive-delete.cjs').eligible)); return { liveCodex: true };
+  } };
+  const library = new ProjectConversations(options), p = (await library.list({ scope: 'inactive' })).items[0];
+  const row = (await library.records(p.id)).items[0];
+  const result = await library.remove({ projectId: p.id, recordId: row.id, confirmed: true });
+  assert.equal(guards.length, 2); assert.ok(!fs.existsSync(archived));
+  assert.equal(db.prepare('SELECT count(*) n FROM threads').get().n, 0);
+  assert.equal(fs.readFileSync(names, 'utf8'), namesBefore);
+  await assert.rejects(library.restoreTrash(result.id), /备份不存在/);
+  const restart = new ProjectConversations(f.options);
+  assert.equal((await restart.list({ scope: 'all' })).items.length, 0);
+  assert.equal(restart.trashList().items.length, 0); assert.ok(!fs.existsSync(path.join(library.vault, 'trash')));
+  } finally { db.close(); }
+});
+
+test('live archive deletion refuses occupied targets without creating a backup', { skip: process.platform !== 'win32' }, async t => {
+  const f = fixture(t), archived = path.join(f.dirs.codex, 'archived_sessions', path.basename(f.file));
+  fs.mkdirSync(path.dirname(archived)); fs.renameSync(f.file, archived);
+  const library = new ProjectConversations({ ...f.options, assertDeletionIdle: async () => ({ liveCodex: true }) });
+  const p = (await library.list({ scope: 'inactive' })).items[0], row = (await library.records(p.id)).items[0];
+  await require('../core/codex-archive-delete.cjs').withLocks([row], async () => {
+    await assert.rejects(library.remove({ projectId: p.id, recordId: row.id, confirmed: true }), /占用|会话锁/);
+    assert.ok(fs.existsSync(archived)); assert.equal(library.trashList().items.length, 0);
+    assert.ok(!fs.existsSync(path.join(library.vault, 'trash')));
+  });
+});
+
+test('live archive deletion protects forks that still reference the selected history', { skip: process.platform !== 'win32' }, async t => {
+  const f = fixture(t), archived = path.join(f.dirs.codex, 'archived_sessions', path.basename(f.file));
+  fs.mkdirSync(path.dirname(archived)); fs.renameSync(f.file, archived);
+  const otherId = '123e4567-e89b-42d3-a456-426614174001';
+  const lines = codecs.lines(archived); lines[0].payload.id = otherId;
+  lines[0].payload.history_base = { thread_id: ID, turn_id: 'turn-1' };
+  write(path.join(f.dirs.codex, 'sessions', `rollout-${otherId}.jsonl`), codecs.jsonl(lines));
+  const library = new ProjectConversations({ ...f.options, assertDeletionIdle: async () => ({ liveCodex: true }) });
+  const p = (await library.list({ scope: 'inactive' })).items[0], row = (await library.records(p.id)).items[0];
+  await assert.rejects(library.remove({ projectId: p.id, recordId: row.id, confirmed: true }), /仍引用/);
+  assert.ok(fs.existsSync(archived));
 });
 
 test('project deletion covers CC/pi/DSH, including DSH old generations; code and auth are never removed', async (t) => {
@@ -263,13 +318,14 @@ test('project deletion covers CC/pi/DSH, including DSH old generations; code and
   const p = (await library.list()).items[0], result = await library.remove({ projectId: p.id, confirmed: true });
   assert.equal((await library.list()).items.length, 0); assert.ok(!fs.existsSync(v4)); assert.ok(!fs.existsSync(old));
   assert.equal(fs.readFileSync(code, 'utf8'), 'PROJECT'); assert.equal(fs.readFileSync(auth, 'utf8'), 'AUTH');
-  await library.restoreTrash(result.id); assert.equal((await library.list()).items[0].count, 4); assert.ok(fs.existsSync(v4) && fs.existsSync(old));
+  await assert.rejects(library.restoreTrash(result.id), /备份不存在/);
+  assert.equal(library.trashList().items.length, 0); assert.ok(!fs.existsSync(path.join(library.vault, 'trash')));
 });
 
 test('deletion refuses a running harness and restoration never overwrites a replacement log', async (t) => {
   const f = fixture(t), library = new ProjectConversations({ ...f.options, assertDeletionIdle: async () => { throw Error('运行中'); } });
   const p = (await library.list()).items[0]; await assert.rejects(library.remove({ projectId: p.id, confirmed: true }), /运行中/); assert.ok(fs.existsSync(f.file));
-  const own = (await f.library.list()).items[0], deleted = await f.library.remove({ projectId: own.id, confirmed: true });
+  const own = (await f.library.list()).items[0], deleted = await legacyDelete(f.library, { projectId: own.id, confirmed: true });
   write(f.file, 'REPLACEMENT'); await assert.rejects(f.library.restoreTrash(deleted.id), /同名/); assert.equal(fs.readFileSync(f.file, 'utf8'), 'REPLACEMENT');
 });
 
@@ -294,11 +350,57 @@ test('OpenCode deletion and encrypted recovery go through the native import/dele
   };
   const library = new ProjectConversations({ ...f.options, sources: () => f.sources.filter((r) => r.harness === 'opencode'), releaseImports: adapter });
   const before = codecs.openCodeBundle(database, 'ses_test'), p = (await library.list()).items[0];
-  const result = await library.remove({ projectId: p.id, confirmed: true });
+  const result = await legacyDelete(library, { projectId: p.id, confirmed: true });
   assert.throws(() => codecs.openCodeBundle(database, 'ses_test'), /不存在/);
   const entry = library.state.trash[0]; assert.ok(entry.imports[0].backup.endsWith('.enc')); assert.ok(!JSON.stringify(entry).includes('Existing answer'));
   await library.restoreTrash(result.id); assert.deepEqual(codecs.openCodeBundle(database, 'ses_test'), before);
   assert.deepEqual(calls, ['delete:ses_test', 'import:ses_test']);
+});
+
+test('OpenCode permanent deletion never stores a recovery bundle or creates a trash entry', async t => {
+  const f = fixture(t, true), database = path.join(f.dirs.opencode, 'opencode.db'); let calls = 0;
+  const library = new ProjectConversations({ ...f.options, sources: () => f.sources.filter(r => r.harness === 'opencode'),
+    releaseImports: async ({ imports, returns }) => {
+      calls++; assert.equal(returns.length, 0); assert.ok(imports.every(item => !item.backup));
+      const db = new DatabaseSync(database); try { db.prepare('DELETE FROM session WHERE id=?').run('ses_test'); } finally { db.close(); }
+    } });
+  const p = (await library.list()).items[0]; await library.remove({ projectId: p.id, confirmed: true });
+  assert.equal(calls, 1); assert.equal(library.trashList().items.length, 0);
+  assert.ok(!fs.existsSync(path.join(library.vault, 'trash')));
+  const restarted = new ProjectConversations({ ...f.options, sources: library.sources });
+  assert.equal((await restarted.list()).items.length, 0);
+  assert.ok(!JSON.stringify(restarted.state.removals).includes('Existing answer'));
+});
+
+test('existing backups survive permanent deletion and their explicit restoration stays visible after restart', async t => {
+  const f = fixture(t), original = fs.readFileSync(f.file), p = (await f.library.list()).items[0];
+  const old = await legacyDelete(f.library, { projectId: p.id, confirmed: true });
+  // An unfinished old deletion has a valid backup and a native record that
+  // remained/reappeared. Completing its deletion must not discard that backup.
+  write(f.file, original); f.library.state.deleted = []; f.library.state.trash[0].phase = 'delete-partial'; f.library.persist();
+  await f.library.remove({ projectId: p.id, confirmed: true });
+  assert.equal(f.library.trashList().items.length, 1); assert.equal(f.library.trashList().items[0].id, old.id);
+  await f.library.restoreTrash(old.id);
+  const restarted = new ProjectConversations(f.options);
+  assert.equal((await restarted.list()).items[0].count, 1); assert.deepEqual(fs.readFileSync(f.file), original);
+});
+
+test('partial permanent deletion records only completed identities, never plaintext recovery content', async t => {
+  const f = fixture(t), trash = require('../core/conversation-trash.cjs'), secondId = crypto.randomUUID();
+  const second = path.join(f.dirs.codex, 'sessions', 'rollout-' + secondId + '.jsonl');
+  write(second, codecs.encode('codex', { id: secondId, cwd: f.cwd, messages, title: 'second', createdAt: timestamp }).bytes);
+  await f.library.list();
+  const entry = await trash.plan({ vault: f.library.vault, rows: codecs.discover(f.sources).rows, sources: f.sources, label: 'permanent', backup: false });
+  entry.files.sort((a, b) => Number(a.file === second) - Number(b.file === second));
+  f.library.state.removals = [{ id: entry.id, recoverable: false, rows: entry.rows.map(({ harness, sessionId }) => ({ harness, sessionId })), phase: 'prepared' }]; f.library.persist();
+  const unlink = fs.unlinkSync; fs.unlinkSync = file => { if (file === second) throw Error('synthetic busy'); return unlink(file); };
+  try { await assert.rejects(trash.commit(entry, f.library.vault), /已删除的部分无法恢复/); } finally { fs.unlinkSync = unlink; }
+  const restart = new ProjectConversations(f.options);
+  assert.ok(restart.state.deleted.includes('codex\0' + ID)); assert.ok(!restart.state.deleted.includes('codex\0' + secondId));
+  assert.ok(!fs.existsSync(f.file)); assert.ok(fs.existsSync(second));
+  assert.ok(!fs.existsSync(path.join(f.library.vault, 'trash')));
+  const journal = fs.readFileSync(path.join(f.library.vault, 'deletions', entry.id + '.json'), 'utf8');
+  assert.ok(!journal.includes(messages[0].text)); assert.ok(!journal.includes(f.cwd));
 });
 
 test('Windows extended and UNC paths keep one project identity', () => {
@@ -338,7 +440,7 @@ test('closed-client deletion and encrypted recovery work through the actual Powe
   });
   const library = new ProjectConversations({ ...f.options, assertDeletionIdle: guard });
   const original = fs.readFileSync(f.file), p = (await library.list()).items[0];
-  const removed = await library.remove({ projectId: p.id, confirmed: true });
+  const removed = await legacyDelete(library, { projectId: p.id, confirmed: true });
   assert.equal(fs.existsSync(f.file), false); assert.equal(calls, 2);
   assert.equal(library.trashList().items[0].id, removed.id);
   await library.restoreTrash(removed.id); assert.equal(calls, 3);
@@ -682,6 +784,9 @@ test('partial native deletion is durable and recoverable after a later file fail
   const f = fixture(t), trash = require('../core/conversation-trash.cjs'), secondId = crypto.randomUUID(), second = path.join(f.dirs.codex, 'sessions', 'rollout-' + secondId + '.jsonl');
   write(second, codecs.encode('codex', { id: secondId, cwd: f.cwd, messages, title: 'second', createdAt: timestamp }).bytes);
   await f.library.list(); const entry = await trash.plan({ vault: f.library.vault, secret: f.library.state.secret, rows: codecs.discover(f.sources).rows, sources: f.sources, label: 'partial' });
+  // Discovery order varies with random UUID filenames. Make this specifically
+  // a later-file failure rather than occasionally failing before any deletion.
+  entry.files.sort((a, b) => Number(a.file === second) - Number(b.file === second));
   const original = fs.unlinkSync;
   fs.unlinkSync = file => { if (file === second) throw Error('synthetic later file busy'); return original(file); };
   try { await assert.rejects(trash.commit(entry, f.library.vault), /未全部完成/); } finally { fs.unlinkSync = original; }

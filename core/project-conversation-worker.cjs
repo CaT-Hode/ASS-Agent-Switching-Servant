@@ -278,8 +278,9 @@ function releaseCommit() {
   return { state: data.state, removed: data.plan.files.length + data.plan.imports.length };
 }
 (async () => {
-  if (data.action === 'trash-plan') return require('./conversation-trash.cjs').plan({ vault: data.vault, secret: data.state.secret, rows: data.rows, sources: data.sources, label: data.label });
-  if (data.action === 'trash-commit') return require('./conversation-trash.cjs').commit(data.entry, data.vault);
+  if (data.action === 'trash-plan') return require('./conversation-trash.cjs').plan({ vault: data.vault, secret: data.state.secret, rows: data.rows, sources: data.sources, label: data.label, backup: data.backup });
+  if (data.action === 'delete-failed') return require('./conversation-trash.cjs').failed(data.entry, data.vault);
+  if (data.action === 'trash-commit') return require('./conversation-trash.cjs').commit(data.entry, data.vault, { liveCodex: data.liveCodex });
   if (data.action === 'trash-restore') return require('./conversation-trash.cjs').restore({ vault: data.vault, secret: data.state.secret, entry: data.entry });
   if (data.action === 'discover') return discover();
   if (data.action === 'sync') return sync();

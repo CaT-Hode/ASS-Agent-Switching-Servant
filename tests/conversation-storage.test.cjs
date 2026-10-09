@@ -4,6 +4,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { ConversationLibrary } = require('../core/conversations.cjs');
 const { ProjectConversations } = require('../core/project-conversations.cjs');
 const { historyStatus } = require('../core/conversation-status.cjs');
+const { legacyDelete } = require('./helpers/legacy-conversation-trash.cjs');
 const ID = '123e4567-e89b-42d3-a456-426614174000', ARCHIVE = '223e4567-e89b-42d3-a456-426614174000', RESIDUAL = '323e4567-e89b-42d3-a456-426614174000';
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-storage-test-'));
@@ -83,7 +84,7 @@ test('permanent trash cleanup frees only its backup and keeps deleted retained c
   const f = fixture(t); await f.library.preserve('codex'); await f.library.refresh(true);
   const projects = new ProjectConversations({ ...f.options, history: async () => { await f.library.refresh(true); return f.library.entries.filter(r => r.snapshot).map(r => f.library.publicRow(r)); } });
   const list = await projects.list(), project = list.items[0], row = (await projects.records(project.id, { harness: 'codex' })).items[0];
-  const deleted = await projects.remove({ projectId: project.id, recordId: row.id, confirmed: true });
+  const deleted = await legacyDelete(projects, { projectId: project.id, recordId: row.id, confirmed: true });
   const bytes = projects.trashList().items[0].bytes; assert.ok(bytes > 28);
   await assert.rejects(projects.purgeTrash({ id: deleted.id, confirmed: false }), /确认/);
   const purged = await projects.purgeTrash({ id: deleted.id, confirmed: true }); assert.equal(purged.bytes, bytes);

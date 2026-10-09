@@ -8,6 +8,7 @@ const { providerSessionHeaders, protocolEndpoint } = require("./provider-transpo
 const crypto = require("node:crypto");
 const { toolBridge } = require("./tool-bridge.cjs");
 const { readJSON } = require("./request-body.cjs");
+const { officialCodexHistory } = require("./response-history.cjs");
 const forwarded = [
   "authorization",
   "chatgpt-account-id",
@@ -42,7 +43,7 @@ function routeFor(body, state, suffix = "") {
       url: "https://chatgpt.com/backend-api/codex/responses" + suffix,
       protocol: "openai-responses",
       network: "system",
-      body,
+      body: officialCodexHistory(body),
       official: true,
     };
   const namespace = body.model.slice(0, split);

@@ -89,9 +89,10 @@ function updateMetadata(item, restore, checkOnly = false) {
     if (!checkOnly) atomic(item.file, JSON.stringify(value));
   }
 }
-async function plan({ vault, secret, rows, sources, label }) {
-  const id = crypto.randomUUID(), directory = path.join(vault, 'trash', id); safePath(directory); fs.mkdirSync(directory, { recursive: true });
-  const result = { id, label, createdAt: new Date().toISOString(), phase: 'prepared', rows: [], files: [], indexes: [], metadata: [], imports: [] };
+async function plan({ vault, secret, rows, sources, label, backup = true }) {
+  const id = crypto.randomUUID(), directory = path.join(vault, 'trash', id); safePath(directory);
+  if (backup) fs.mkdirSync(directory, { recursive: true });
+  const result = { id, label, recoverable: backup, createdAt: new Date().toISOString(), phase: 'prepared', rows: [], files: [], indexes: [], metadata: [], imports: [], archiveLockRows: [] };
   const selected = new Map(rows.map((r) => [identity(r), r]));
   const found = codecs.discover(sources);
   // Never remove only one duplicate/older DSH generation, which would make the
@@ -99,14 +100,16 @@ async function plan({ vault, secret, rows, sources, label }) {
   for (const row of selected.values()) {
     const copies = found.rows.filter((r) => identity(r) === identity(row));
     if (!copies.length) throw Error('原生记录已变化或不存在，请刷新');
+    if (row.harness === 'codex') result.archiveLockRows.push(...copies.map(r => ({ harness: r.harness, sessionId: r.sessionId, dir: r.dir, file: r.file, archived: r.archived, nativePresent: r.nativePresent })));
     result.rows.push({ harness: row.harness, sessionId: row.sessionId, title: row.title, cwd: row.cwd });
     if (row.harness === 'opencode') {
       const native = copies[0], bundle = codecs.openCodeBundle(native.file, native.sessionId);
+      if (!backup) { result.imports.push({ ...native, signature: hash(JSON.stringify(bundle)) }); continue; }
       const raw = Buffer.from(JSON.stringify(bundle)), iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(secret, 'base64'), iv);
       const ciphertext = Buffer.concat([cipher.update(raw), cipher.final()]);
-      const backup = hash(identity(native)) + '.opencode.enc';
-      fs.writeFileSync(path.join(directory, backup), Buffer.concat([iv, cipher.getAuthTag(), ciphertext]), { flag: 'wx', mode: 0o600 });
-      result.imports.push({ ...native, signature: hash(JSON.stringify(bundle)), backup }); continue;
+      const backupName = hash(identity(native)) + '.opencode.enc';
+      fs.writeFileSync(path.join(directory, backupName), Buffer.concat([iv, cipher.getAuthTag(), ciphertext]), { flag: 'wx', mode: 0o600 });
+      result.imports.push({ ...native, signature: hash(JSON.stringify(bundle)), backup: backupName }); continue;
     }
     const candidates = new Set(copies.map((r) => r.file));
     if (row.harness === 'dsh') for (const copy of copies) for (const name of fs.readdirSync(path.dirname(copy.file)))
@@ -115,9 +118,15 @@ async function plan({ vault, secret, rows, sources, label }) {
       const source = sources.find((s) => s.harness === row.harness && (files.inside(s.dir, file) || s.sessionDirs?.some((d) => files.inside(d, file))));
       if (!source) throw Error('原生会话位置不在已识别范围');
       safePath(file); const stat = fs.statSync(file); if (!stat.isFile()) throw Error('会话不是普通文件');
-      const native = { ...row, file }, snapshot = await files.preserve(native, directory, secret);
+      const native = { ...row, file };
+      let snapshot, digest;
+      if (backup) snapshot = await files.preserve(native, directory, secret);
+      else {
+        const hasher = crypto.createHash('sha256'); for await (const chunk of fs.createReadStream(file)) hasher.update(chunk);
+        digest = hasher.digest('hex');
+      }
       if (stamp(fs.statSync(file)) !== stamp(stat)) throw Error('会话仍在写入，未删除');
-      result.files.push({ file, signature: stamp(stat), snapshot });
+      result.files.push({ file, harness: row.harness, sessionId: row.sessionId, signature: stamp(stat), ...(backup ? { snapshot } : { digest }) });
     }
     for (const copy of copies) {
       result.metadata.push(...metadataFiles(copy));
@@ -131,11 +140,21 @@ async function plan({ vault, secret, rows, sources, label }) {
 function progressFile(vault, entry) {
   if (!vault) return null;
   if (!/^[a-f0-9-]{36}$/.test(entry.id)) throw Error('备份标识无效');
-  const file = path.join(vault, 'trash', entry.id, 'progress.json'); safePath(file); return file;
+  const file = entry.recoverable === false ? path.join(vault, 'deletions', entry.id + '.json') : path.join(vault, 'trash', entry.id, 'progress.json'); safePath(file); return file;
+}
+function removedIdentities(entry) {
+  return entry.rows.filter(row => {
+    const related = entry.files.filter(f => f.harness === row.harness && f.sessionId === row.sessionId);
+    if (related.length) return related.every(f => !fs.existsSync(f.file));
+    const item = entry.imports.find(f => f.harness === row.harness && f.sessionId === row.sessionId);
+    if (item) { try { codecs.openCodeBundle(item.file, item.sessionId); } catch (error) { return /会话不存在/.test(error.message); } }
+    return false;
+  }).map(identity);
 }
 function progress(vault, entry, phase, step) {
   const file = progressFile(vault, entry);
-  if (file) atomic(file, JSON.stringify({ id: entry.id, phase, step, updatedAt: new Date().toISOString() }));
+  if (file) atomic(file, JSON.stringify({ id: entry.id, phase, step, updatedAt: new Date().toISOString(),
+    ...(entry.recoverable === false ? { removed: removedIdentities(entry) } : {}) }));
 }
 function status(vault, entry) {
   const file = progressFile(vault, entry);
@@ -143,35 +162,66 @@ function status(vault, entry) {
   if (fs.statSync(file).size > 32768) throw Error('删除恢复进度记录过大');
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (!['deleting', 'delete-partial', 'deleted', 'restoring', 'restore-partial', 'restored'].includes(saved.phase)) throw Error('删除恢复进度记录无效');
-  return saved.id === entry.id ? { ...entry, phase: saved.phase, progress: saved.step } : entry;
+  return saved.id === entry.id ? { ...entry, phase: saved.phase, progress: saved.step,
+    ...(entry.recoverable === false ? { removed: (saved.removed || []).filter(id => entry.rows.some(row => identity(row) === id)) } : {}) } : entry;
 }
-async function commit(entry, vault) {
+function failed(entry, vault) {
+  progress(vault, entry, 'delete-partial', '删除未完成，请刷新后重试'); return status(vault, entry);
+}
+async function commit(entry, vault, options = {}) {
+  if (options.liveCodex) {
+    const rows = entry.archiveLockRows || [];
+    return require('./codex-archive-delete.cjs').withLocks(rows, assertHeld => commit(entry, vault, { assertHeld, archived: true }));
+  }
+  const assertHeld = options.assertHeld || (() => {});
+  const preserved = entry.recoverable === false ? '' : '；备份保留';
+  assertHeld();
   for (const item of entry.files) {
+    assertHeld();
+    if (options.archived && entry.archiveLockRows.some(r => pathKey(r.file) === pathKey(item.file)) && !fs.existsSync(item.file)) throw Error('归档记录已移走或恢复，未删除；请刷新');
     safePath(item.file); if (!fs.existsSync(item.file)) continue;
-    if (stamp(fs.statSync(item.file)) !== item.signature) throw Error('会话已变化，未删除；备份保留');
+    if (stamp(fs.statSync(item.file)) !== item.signature) throw Error('会话已变化，未删除' + preserved);
     const digest = crypto.createHash('sha256'); for await (const chunk of fs.createReadStream(item.file)) digest.update(chunk);
-    if (digest.digest('hex') !== item.snapshot.digest || stamp(fs.statSync(item.file)) !== item.signature) throw Error('会话内容已变化，未删除；备份保留');
+    if (digest.digest('hex') !== (item.snapshot?.digest || item.digest) || stamp(fs.statSync(item.file)) !== item.signature) throw Error('会话内容已变化，未删除' + preserved);
   }
   // Revalidate all native metadata before removing any transcript.
+  assertHeld();
+  if (options.archived) {
+    for (const item of entry.indexes) if (![true, 1, '1'].includes(item.value.archived)) throw Error('目标不再是归档对话，未删除');
+    // A paginated fork may reference this rollout. Do not leave that fork with
+    // missing history; refuse deletion instead of expanding its deletion scope.
+    require('./codex-archive-delete.cjs').assertUnreferenced(entry.archiveLockRows);
+  }
   for (const item of entry.indexes) removeCodex(item, true);
   for (const item of entry.metadata) updateMetadata(item, false, true);
   progress(vault, entry, 'deleting', '开始删除索引');
   try {
-    for (const item of entry.indexes) { removeCodex(item); progress(vault, entry, 'deleting', '已处理会话索引'); }
-    for (const item of entry.metadata) { updateMetadata(item, false); progress(vault, entry, 'deleting', '已处理名称索引'); }
+    for (const item of entry.indexes) { assertHeld(); removeCodex(item); progress(vault, entry, 'deleting', '已处理会话索引'); }
+    for (const item of entry.metadata) {
+      assertHeld();
+      // The shared Codex name index has independent writers (e.g. another
+      // chat being renamed). Do not replace that whole file while Codex runs.
+      // A stale name entry cannot resurrect a deleted thread/rollout; keep it
+      // for restoration rather than risking unrelated names in this operation.
+      if (!(options.archived && item.format === 'jsonl')) updateMetadata(item, false);
+      progress(vault, entry, 'deleting', '已处理名称索引');
+    }
     for (const item of entry.files) {
+      assertHeld();
       safePath(item.file); if (!fs.existsSync(item.file)) continue;
-      if (stamp(fs.statSync(item.file)) !== item.signature) throw Error('会话仍在变化，停止删除；可从备份恢复');
+      if (stamp(fs.statSync(item.file)) !== item.signature) throw Error('会话仍在变化，停止删除' + preserved);
       fs.unlinkSync(item.file);
+      if (entry.recoverable === false) progress(vault, entry, 'deleting', '已删除本地记录');
     }
     progress(vault, entry, 'deleted', '删除完成');
-    return { ...entry, phase: 'deleted' };
+    return { ...entry, phase: 'deleted', ...(entry.recoverable === false ? { removed: removedIdentities(entry) } : {}) };
   } catch (error) {
-    progress(vault, entry, 'delete-partial', '部分步骤完成，可重试删除或恢复');
-    throw Error('删除未全部完成，部分索引或记录可能已移除；备份保留，可重试或恢复。' + error.message);
+    progress(vault, entry, 'delete-partial', entry.recoverable === false ? '部分步骤完成，请刷新后重试' : '部分步骤完成，可重试删除或恢复');
+    throw Error(entry.recoverable === false ? '删除未全部完成，已删除的部分无法恢复；请刷新后重试。' + error.message : '删除未全部完成，部分索引或记录可能已移除；备份保留，可重试或恢复。' + error.message);
   }
 }
 async function restore({ vault, secret, entry }) {
+  if (entry.recoverable === false) throw Error('这次删除未保存备份，无法恢复');
   const directory = path.join(vault, 'trash', entry.id), staged = [];
   if (!/^[a-f0-9-]{36}$/.test(entry.id)) throw Error('备份标识无效');
   try {
@@ -217,4 +267,4 @@ function importBundle(vault, secret, entry, item) {
   if (hash(body) !== item.signature) throw Error('OpenCode 备份校验失败');
   return JSON.parse(body.toString('utf8'));
 }
-module.exports = { plan, commit, restore, importBundle, status };
+module.exports = { plan, commit, restore, importBundle, status, failed };

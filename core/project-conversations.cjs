@@ -22,6 +22,10 @@ class ProjectConversations {
           this.state.deleted = (this.state.deleted || []).filter(id => !restored.has(id));
         }
       }
+      for (const entry of this.state.removals || []) {
+        Object.assign(entry, require('./conversation-trash.cjs').status(this.vault, entry));
+        this.state.deleted = [...new Set([...(this.state.deleted || []), ...(entry.removed || [])])];
+      }
     } } catch { this.error = '项目对话索引无法解密，未覆盖'; }
   }
   serial(fn) { const next = this.queue.then(fn); this.queue = next.catch(() => {}); return next; }
@@ -189,22 +193,33 @@ class ProjectConversations {
     const selected = this.recordsCache.filter((r) => r.nativePresent && r.projectId === projectId && (!recordId || r.id === recordId));
     if (threadId) throw Error('请先关闭项目同步，再删除原生对话');
     if (!selected.length) throw Error('没有可删除的原生对话；保留副本请在“历史与存储”中清理');
-    await this.assertDeletionIdle?.(selected);
+    const initialGuard = await this.assertDeletionIdle?.(selected, undefined, { allowArchivedCodex: true });
     return this.serial(async () => {
       this.persist();
       const label = recordId ? selected[0].title : this.candidates.find((p) => p.id === projectId)?.name || '项目对话';
-      const entry = await this.run('trash-plan', { rows: selected, label });
-      (this.state.trash ||= []).push(entry); this.persist(); // Backups + journal durable before removal.
-      await this.assertDeletionIdle?.(selected);
-      if (entry.imports.length) {
-        if (!this.releaseImports) throw Error('OpenCode CLI 不可用，备份保留，未删除');
-        await this.releaseImports({ imports: entry.imports, returns: [] });
-      }
+      const entry = await this.run('trash-plan', { rows: selected, label, backup: false });
+      // Only identity/phase metadata survives restart, never transcript content,
+      // native DB row snapshots or a new restorable trash entry.
+      const removal = { id: entry.id, recoverable: false, phase: 'prepared', rows: entry.rows.map(({ harness, sessionId }) => ({ harness, sessionId })) };
+      (this.state.removals ||= []).push(removal); this.persist();
+      const finalGuard = await this.assertDeletionIdle?.(selected, undefined, { allowArchivedCodex: true });
       let updated;
-      try { updated = await this.run('trash-commit', { entry }); }
-      catch (error) { Object.assign(entry, require('./conversation-trash.cjs').status(this.vault, entry)); this.persist(); throw error; }
-      Object.assign(entry, updated); this.recordsCache = []; this.state.deleted = [...new Set([...(this.state.deleted || []), ...entry.rows.map(r => r.harness + '\0' + r.sessionId)])]; this.persist();
-      return { id: entry.id, message: `已删除 ${entry.rows.length} 个本地对话，可从“已删除记录”恢复。` };
+      try {
+        if (entry.imports.length) {
+          if (!this.releaseImports) throw Error('OpenCode CLI 不可用，未删除');
+          await this.releaseImports({ imports: entry.imports, returns: [] });
+        }
+        updated = await this.run('trash-commit', { entry, liveCodex: !!(initialGuard?.liveCodex || finalGuard?.liveCodex) });
+      } catch (error) {
+        let saved = require('./conversation-trash.cjs').status(this.vault, entry);
+        // Includes partially completed native OpenCode CLI deletion.
+        try { saved = await this.run('delete-failed', { entry }); } catch {}
+        removal.phase = saved.phase; removal.removed = saved.removed || [];
+        this.state.deleted = [...new Set([...(this.state.deleted || []), ...removal.removed])]; this.recordsCache = []; this.persist(); throw error;
+      }
+      removal.phase = updated.phase; removal.removed = updated.removed || [];
+      this.recordsCache = []; this.state.deleted = [...new Set([...(this.state.deleted || []), ...entry.rows.map(r => r.harness + '\0' + r.sessionId)])]; this.persist();
+      return { id: entry.id, message: `已删除 ${entry.rows.length} 个本地对话，未保存备份。` };
     });
   }
   async restoreTrash(id) {
@@ -232,7 +247,15 @@ class ProjectConversations {
       catch (error) { Object.assign(entry, require('./conversation-trash.cjs').status(this.vault, entry)); this.persist(); throw error; }
       Object.assign(entry, updated);
       const keys = new Set(entry.rows.map(r => r.harness + '\0' + r.sessionId));
-      this.state.deleted = (this.state.deleted || []).filter(key => !keys.has(key)); this.persist();
+      this.state.deleted = (this.state.deleted || []).filter(key => !keys.has(key));
+      // An explicit restoration of an existing old backup overrides later
+      // permanent-delete markers. Its old metadata journal must not hide the
+      // newly restored native record on the next restart.
+      for (const removal of this.state.removals || []) {
+        removal.rows = removal.rows.filter(row => !keys.has(row.harness + '\0' + row.sessionId));
+        removal.removed = (removal.removed || []).filter(key => !keys.has(key));
+      }
+      this.persist();
       return { message: '本地对话已恢复，项目文件未改动。' };
     });
   }

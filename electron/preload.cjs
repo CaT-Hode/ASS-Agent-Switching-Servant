@@ -1,5 +1,6 @@
 const { contextBridge, ipcRenderer } = require("electron");
 const allowed = [
+  "window-action",
   "snapshot",
   "ui-preferences",
   "usage-refresh",
@@ -91,6 +92,11 @@ const allowed = [
 ];
 contextBridge.exposeInMainWorld("ass", {
   windowChrome: process.platform === "win32",
+  onWindowState: (callback) => {
+    const handler = (_, value) => callback(value);
+    ipcRenderer.on("ass:window-state", handler);
+    return () => ipcRenderer.removeListener("ass:window-state", handler);
+  },
   onManage: (callback) => {
     const handler = (_, value) => callback(value);
     ipcRenderer.on("ass:manage", handler);

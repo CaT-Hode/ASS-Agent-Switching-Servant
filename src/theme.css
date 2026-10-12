@@ -22,10 +22,17 @@
 }
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
-:root[data-theme="dark"] { --provider-logo-filter: invert(.9); }
-:root[data-theme="dark"] { --pi-logo-filter: invert(1); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --provider-logo-filter: invert(.9); } }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --pi-logo-filter: invert(1); } }
+:root[data-color-theme="dark"] { --provider-logo-filter: invert(.9); --pi-logo-filter: invert(1); }
+:root[data-theme-reveal="circle"]::view-transition,
+:root[data-theme-reveal="circle"]::view-transition-group(root),
+:root[data-theme-reveal="circle"]::view-transition-image-pair(root),
+:root[data-theme-reveal="circle"]::view-transition-old(root),
+:root[data-theme-reveal="circle"]::view-transition-new(root) { pointer-events: none; }
+:root[data-theme-reveal="circle"]::view-transition-group(root),
+:root[data-theme-reveal="circle"]::view-transition-old(root),
+:root[data-theme-reveal="circle"]::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+:root[data-theme-reveal="circle"]::view-transition-old(root) { z-index: 1; opacity: 1; }
+:root[data-theme-reveal="circle"]::view-transition-new(root) { z-index: 2; opacity: 1; }
 img[src^="./providers/"] { filter: var(--provider-logo-filter); }
 img[src="./providers/pi.svg"] { filter: var(--pi-logo-filter); }
 .client-glyph img[src="./providers/pi.svg"] { width: 22px; height: 22px; }
@@ -46,7 +53,7 @@ html { scrollbar-color: light-dark(#b2b2b2, #626262) var(--surface); }
 .app-shell > main { margin-left: var(--sidebar-width); }
 @media (max-width: 1190px) { :root { --sidebar-width: 198px; } }
 .window-chrome {
-  position: fixed; inset: 0 0 auto; height: var(--window-chrome-height); z-index: 10;
+  position: fixed; inset: 0 0 auto; height: var(--window-chrome-height); z-index: 100;
   background: linear-gradient(to right, var(--sidebar-surface) var(--sidebar-width), var(--surface) var(--sidebar-width));
   -webkit-app-region: drag; user-select: none;
 }
@@ -58,6 +65,14 @@ html { scrollbar-color: light-dark(#b2b2b2, #626262) var(--surface); }
 .window-chrome .brand-title { gap: 7px; }
 .window-chrome .version-button { -webkit-app-region: no-drag; flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 3px 2px; height: 24px; min-height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 500; line-height: 14px; letter-spacing: 0; white-space: nowrap; }
 .window-chrome .version-button:hover { background: var(--raised); color: var(--ink); }
+.window-controls { position: absolute; right: 0; top: 0; display: flex; height: var(--window-chrome-height); -webkit-app-region: no-drag; }
+.window-controls > button { display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ink); -webkit-app-region: no-drag; }
+.window-controls > button:hover { background: var(--raised); }
+.window-controls > button:active { background: var(--selected); }
+.window-controls > button:last-child:hover { background: #c74242; color: #fff; }
+.window-controls > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+.window-controls svg { width: 12px; height: 12px; }
+.window-controls[data-focused="false"] > button { color: var(--muted); }
 .app-shell[data-window-chrome="true"] > .sidebar { padding-top: calc(var(--window-chrome-height) + 27px); background: var(--sidebar-surface); }
 .app-shell[data-window-chrome="true"] > main { padding-top: calc(var(--window-chrome-height) + 8px); }
 .page-heading-accessible { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -66,6 +81,7 @@ main { padding-top: 18px; }
 .page-header .button { background: transparent; box-shadow: none; border-color: var(--border); }
 .page-header .button:hover { background: var(--panel); }
 .app-shell[data-window-chrome="true"] .modal { max-height: calc(100vh - var(--window-chrome-height) - 48px); }
+.app-shell[data-window-chrome="true"] .modal::backdrop { inset: var(--window-chrome-height) 0 0; }
 .app-shell[data-window-chrome="true"] :is(.provider-model-dialog, .provider-side-dialog) { top: calc(var(--window-chrome-height) + 24px); height: calc(100vh - var(--window-chrome-height) - 48px); }
 .button.primary { color: #fff; background: var(--primary); border-color: transparent; }
 .button.primary:hover:not(:disabled) { background: var(--primary-hover); }

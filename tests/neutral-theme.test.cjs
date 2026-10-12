@@ -44,7 +44,10 @@ test('native title bar matches the neutral surface and shares responsive sidebar
   assert.ok(css.includes('margin-left: var(--sidebar-width)') && css.includes('width: var(--sidebar-width)'));
   assert.ok(css.includes('var(--sidebar-surface) var(--sidebar-width), var(--surface) var(--sidebar-width)'));
   assert.ok(css.includes('.window-chrome .version-button { -webkit-app-region: no-drag'));
-  assert.ok(jsx.includes('aria-label="应用顶栏">{brand}</header>') && jsx.includes('!api.windowChrome && brand'));
+  assert.ok(jsx.includes('aria-label="应用顶栏">{brand}<WindowControls') && jsx.includes('!api.windowChrome && brand'));
+  assert.ok(main.includes('titleBarOverlay: false') && !main.includes('window.setTitleBarOverlay('));
+  assert.ok(css.includes('height: var(--window-chrome-height); z-index: 100'));
+  assert.ok(css.includes('.modal::backdrop { inset: var(--window-chrome-height) 0 0; }'));
   assert.ok(!css.includes('filter: grayscale(1)'));
   assert.ok(main.includes('"#1a1a1a" : "#f3f3f3"'));
   assert.ok(main.includes('height: 44') && css.includes('--window-chrome-height: 44px'));
@@ -74,4 +77,22 @@ test('theme logo preserves the authoritative petals and orange hub without recol
   assert.ok(component.includes('./ass-app-icon.png') && component.includes('aria-hidden="true"'));
   assert.ok(css.includes('background: light-dark(#151515, transparent)'));
   for (const file of ['main.jsx', 'updates.jsx']) assert.ok(fs.readFileSync(path.join(src, file), 'utf8').includes('<AssLogo />'));
+});
+
+test('only light heatmaps and their legend go from light for less activity to dark for more', () => {
+  const css = fs.readFileSync(path.join(src, 'overview.css'), 'utf8');
+  const heatmap = css.match(/\.usage-heatmap\s*\{([^}]+)\}/)[1];
+  const palette = ['#ade0f3', '#61b8df', '#218dc0', '#155d85'];
+  const dark = ['#49325f', '#74509b', '#9f76c7', '#c79aed'];
+  const luminance = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
+    .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+  for (let i = 0; i < palette.length; i++) {
+    assert.ok(heatmap.includes(`--usage-level-${i + 1}: light-dark(${palette[i]}, ${dark[i]})`));
+    if (i) assert.ok(luminance(palette[i - 1]) > luminance(palette[i]));
+  }
+  // Base chart tokens stay unchanged: inversion is confined to .usage-heatmap.
+  const overview = css.match(/\.usage-overview\s*\{([^}]+)\}/)[1];
+  assert.ok(overview.includes('--usage-level-1: light-dark(#155d85, #49325f)'));
+  assert.ok(overview.includes('--usage-level-4: light-dark(#ade0f3, #c79aed)'));
 });

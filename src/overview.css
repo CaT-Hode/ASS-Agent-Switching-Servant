@@ -126,6 +126,12 @@
   font-variant-numeric: tabular-nums;
 }
 .usage-heatmap {
+  /* Light heatmaps get darker with more activity; other charts keep their
+     own gradients. Dark heatmaps retain the existing violet intensity scale. */
+  --usage-level-1: light-dark(#ade0f3, #49325f);
+  --usage-level-2: light-dark(#61b8df, #74509b);
+  --usage-level-3: light-dark(#218dc0, #9f76c7);
+  --usage-level-4: light-dark(#155d85, #c79aed);
   margin-top: 26px;
   --cell-gap: 4px;
 }

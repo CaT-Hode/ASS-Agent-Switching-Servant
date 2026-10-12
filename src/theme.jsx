@@ -1,10 +1,30 @@
 import React, { useEffect, useLayoutEffect, useState, useRef, useId } from "react";
+import { flushSync } from "react-dom";
 import { themeMotion, themeAtPoint } from "./theme-motion.mjs";
+import { createThemeReveal, bindRevealInput } from "./theme-reveal.mjs";
 
-export function applyTheme(theme) {
+const resolvedTheme = (theme) => theme === 'system'
+  ? matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light' : theme;
+let reveal;
+export const cancelThemeReveal = () => reveal?.cancel();
+export function applyTheme(theme, resolved) {
   const value = ["light", "dark"].includes(theme) ? theme : "system";
   document.documentElement.dataset.theme = value;
+  document.documentElement.dataset.colorTheme = resolved || resolvedTheme(value);
+  // Freeze the resolved scheme until the transition captures the old theme,
+  // including when a system-media event arrives in automatic mode.
+  document.documentElement.style.colorScheme = resolved || resolvedTheme(value);
   try { localStorage.setItem("ass-theme", value); } catch {}
+}
+function revealTheme(theme, origin, onCommit, resolved = resolvedTheme(theme)) {
+  if (!reveal) {
+    reveal = createThemeReveal({ document, viewport: () => ({ width: innerWidth, height: innerHeight }),
+      reducedMotion: () => matchMedia('(prefers-reduced-motion: reduce)').matches });
+    window.addEventListener('resize', () => reveal.cancel());
+    document.addEventListener('visibilitychange', () => { if (document.hidden) reveal.cancel(); });
+  }
+  return reveal.run(() => { applyTheme(theme, resolved); onCommit?.(); }, origin,
+    { animate: resolved !== document.documentElement.dataset.colorTheme });
 }
 try { applyTheme(localStorage.getItem("ass-theme")); } catch { applyTheme("system"); }
 const themePositions = { light: 0, system: .5, dark: 1 };
@@ -31,6 +51,7 @@ export function ThemeControl({ value = "system", onChange }) {
   const [theme, setTheme] = useState(value);
   const [systemDark, setSystemDark] = useState(() => matchMedia("(prefers-color-scheme: dark)").matches);
   const button = useRef(null), motion = useRef(null), drag = useRef(null), suppressClick = useRef(false);
+  useEffect(() => bindRevealInput(button.current, cancelThemeReveal, { forwardPointer: true }), []);
   useEffect(() => {
     const visibility = () => { button.current.toggleAttribute("data-hidden", document.hidden); };
     visibility(); document.addEventListener("visibilitychange", visibility);
@@ -39,7 +60,11 @@ export function ThemeControl({ value = "system", onChange }) {
   useEffect(() => { setTheme(value); applyTheme(value); }, [value]);
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
-    const update = () => setSystemDark(media.matches);
+    const update = () => {
+      setSystemDark(media.matches);
+      if (document.documentElement.dataset.theme === 'system')
+        revealTheme('system', button.current, undefined, media.matches ? 'dark' : 'light');
+    };
     media.addEventListener("change", update); update();
     return () => media.removeEventListener("change", update);
   }, []);
@@ -63,7 +88,9 @@ export function ThemeControl({ value = "system", onChange }) {
   useEffect(() => { if (!drag.current) motion.current?.settle(position, { instant: instantaneous() }); }, [position]);
   const commit = (choice, options = {}) => {
     motion.current.settle(themePositions[choice], { instant: instantaneous(), ...options });
-    setTheme(choice); applyTheme(choice); if (choice !== theme) onChange(choice);
+    revealTheme(choice, options.origin || button.current, () => {
+      flushSync(() => setTheme(choice)); if (choice !== theme) onChange(choice);
+    });
   };
   const release = (event, cancel = false) => {
     const gesture = drag.current;
@@ -119,7 +146,10 @@ export function ThemeControl({ value = "system", onChange }) {
       onClick={(event) => {
         if (suppressClick.current && event.detail !== 0) { suppressClick.current = false; return; }
         const bounds = event.currentTarget.getBoundingClientRect();
-        commit(event.detail === 0 ? nextMode : themeAtPoint(event.clientX, bounds.left, bounds.width), { instant: event.detail === 0 || instantaneous() });
+        commit(event.detail === 0 ? nextMode : themeAtPoint(event.clientX, bounds.left, bounds.width), {
+          instant: event.detail === 0 || instantaneous(),
+          origin: event.detail === 0 ? button.current : { x: event.clientX, y: event.clientY },
+        });
       }}>
       <svg className="theme-sky" viewBox="0 0 216 40" preserveAspectRatio="none" aria-hidden="true">
         <g className="theme-dawn-glow"><ellipse className="theme-dawn-light" cx="108" cy="36" rx="56" ry="12" /></g>

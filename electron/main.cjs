@@ -822,7 +822,13 @@ function windowChrome() {
 function syncWindowTheme() {
   if (!window || window.isDestroyed()) return;
   window.setBackgroundColor(windowChrome().color);
-  if (process.platform === "win32") window.setTitleBarOverlay(windowChrome());
+}
+let windowStateSequence = 0;
+function publishWindowState() {
+  if (!window || window.isDestroyed()) return;
+  const state = { ...require('../core/window-controls.cjs').windowState(window), sequence: ++windowStateSequence };
+  window.webContents.send('ass:window-state', state);
+  return state;
 }
 nativeTheme.on("updated", syncWindowTheme);
 function showWindow() {
@@ -840,7 +846,7 @@ function showWindow() {
     icon: iconPath,
     backgroundColor: windowChrome().color,
     autoHideMenuBar: true,
-    ...(process.platform === "win32" ? { titleBarStyle: "hidden", titleBarOverlay: windowChrome() } : {}),
+    ...(process.platform === "win32" ? { titleBarStyle: "hidden", titleBarOverlay: false } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       nodeIntegration: false,
@@ -861,6 +867,8 @@ function showWindow() {
   window.loadFile(path.join(__dirname, "../dist/index.html"));
   window.on("show", push);
   window.on("restore", push);
+  for (const event of ['maximize', 'unmaximize', 'minimize', 'restore', 'focus', 'blur', 'show', 'hide'])
+    window.on(event, publishWindowState);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.on("close", (event) => {
@@ -1076,6 +1084,10 @@ else {
         startupError = "端口 " + servicePort + " 无法启动：" + error.message;
       }
       register("snapshot", () => snapshot());
+      register("window-action", (action) => {
+        require('../core/window-controls.cjs').windowAction(window, action);
+        return publishWindowState();
+      });
       register("ui-preferences", (input) => {
         const result = preferences.update(input);
         nativeTheme.themeSource = result.theme;

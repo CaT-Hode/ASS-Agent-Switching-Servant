@@ -37,7 +37,9 @@ test("Pi uses the official compact monochrome mark, black in light and white in 
   assert.equal((svg.match(/<path /g) || []).length, 3);
   assert.ok(read("src/clients.jsx").includes('pi: "pi"'));
   assert.ok(read("src/theme.css").includes('img[src="./providers/pi.svg"] { filter: var(--pi-logo-filter); }'));
-  assert.ok(read("src/theme.css").includes(':root[data-theme="dark"] { --pi-logo-filter: invert(1); }'));
+  const resolved = read("src/theme.css").match(/:root\[data-color-theme="dark"\]\s*\{([^}]+)\}/)?.[1];
+  assert.ok(resolved?.includes('--pi-logo-filter: invert(1);'));
+  assert.ok(read('src/theme.jsx').includes('document.documentElement.dataset.colorTheme = resolved || resolvedTheme(value)'));
 });
 test('Windows app registration and icon export share the stable packaged ASS brand', () => {
   const { windowsBrandSpec } = require('../scripts/local-release.cjs');

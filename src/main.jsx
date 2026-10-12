@@ -34,6 +34,7 @@ import { Overview } from "./overview.jsx";
 import { latestSnapshot } from "./state-snapshot.mjs";
 import { ThemeControl, applyTheme } from "./theme.jsx";
 import { AssLogo } from "./ass-logo.jsx";
+import { WindowControls } from "./window-controls.jsx";
 import { DiagnosticDetails } from "./diagnostic-details.jsx";
 import "./theme.css";
 import "./motion.css";
@@ -425,7 +426,7 @@ function App() {
         e.currentTarget.dataset.input = "keyboard";
       }}
     >
-      {api.windowChrome && <header className="window-chrome" aria-label="应用顶栏">{brand}</header>}
+      {api.windowChrome && <header className="window-chrome" aria-label="应用顶栏">{brand}<WindowControls onError={(message) => setToast({ error: true, message })} /></header>}
       <aside className="sidebar">
         {!api.windowChrome && brand}
         <div className="nav-label">工作空间</div>

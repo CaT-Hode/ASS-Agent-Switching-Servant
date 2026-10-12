@@ -35,7 +35,7 @@
   gap: 25px;
   padding: 24px 8px 34px;
 }
-.ass-brand-hero > img {
+.ass-brand-hero > .ass-logo {
   width: 92px;
   height: 92px;
   flex-shrink: 0;

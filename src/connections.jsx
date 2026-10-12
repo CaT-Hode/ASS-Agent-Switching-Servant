@@ -176,7 +176,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
   if (plan) {
     if (request.accountless !== undefined) {
       warning = request.accountless ? request.scope === "claude"
-        ? "终端和桌面版均使用注入模型；桌面版重新打开后选择 Continue with Gateway。按 API 计费，原有登录保留。"
+        ? "终端和桌面版使用注入模型，按 API 计费；桌面版允许工具访问外网。重新打开后选择 Continue with Gateway，原有登录保留。"
         : "仅使用已注入模型，按供应商 API 计费。原有官方登录保留。"
         : "恢复正常账户启动；已有窗口需重启后生效。";
     } else if (plan.enabled) {

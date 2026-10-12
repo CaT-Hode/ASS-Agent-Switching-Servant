@@ -6,8 +6,9 @@ test('shared UI chrome uses neutral/sage tokens without blue literals or cyclic 
     const css = fs.readFileSync(path.join(src, file), 'utf8');
     assert.ok(!/--([\w-]+)\s*:\s*var\(--\1\)\s*;/.test(css), file + ' has a cyclic token');
     for (const match of css.matchAll(/#[\da-f]{6}(?:[\da-f]{2})?\b/gi)) {
-      // Usage data uses an intentional violet intensity scale, not UI chrome.
-      if (file === 'overview.css' && ['#49325f', '#74509b', '#9f76c7', '#c79aed'].includes(match[0])) continue;
+      // Usage data is sky blue in light mode and violet in dark mode;
+      // the exception is confined to data colors, not general UI chrome.
+      if (file === 'overview.css' && ['#155d85', '#218dc0', '#61b8df', '#ade0f3', '#49325f', '#74509b', '#9f76c7', '#c79aed'].includes(match[0])) continue;
       const rgb = [1, 3, 5].map((i) => parseInt(match[0].slice(i, i + 2), 16)), max = Math.max(...rgb), min = Math.min(...rgb), delta = max - min;
       if (delta < 3) continue;
       let hue = max === rgb[0] ? ((rgb[1] - rgb[2]) / delta + 6) % 6 : max === rgb[1] ? (rgb[2] - rgb[0]) / delta + 2 : (rgb[0] - rgb[1]) / delta + 4;
@@ -16,10 +17,16 @@ test('shared UI chrome uses neutral/sage tokens without blue literals or cyclic 
     }
   }
 });
-test('quota appearance and animation are unchanged from the pre-restyle release', () => {
+test('quota dark appearance and animation stay unchanged while explicit light palette overrides are allowed', () => {
   // Snapshot of v0.2.13, independent of Git history / shallow checkouts.
   const css = fs.readFileSync(path.join(src, 'usage-meter.css'), 'utf8').replaceAll('\r\n', '\n');
-  assert.equal(crypto.createHash('sha256').update(css).digest('hex'), '3b94cb073c0f331d16a829bd4400ba59fb8152e777797314638372046f19cfa2');
+  const overrides = ['light-dark(#147cba, #7555d7)', 'light-dark(#389dce, #9866de)', 'light-dark(#80d0ee, #b68bdd)', 'light-dark(#effaff, #f4ebff)'];
+  let dark = css;
+  for (const value of overrides) {
+    assert.ok(css.includes(value), 'missing explicit light/dark palette: ' + value);
+    dark = dark.replaceAll(value, value.match(/, (#[\da-f]+)\)/)[1]);
+  }
+  assert.equal(crypto.createHash('sha256').update(dark).digest('hex'), '3b94cb073c0f331d16a829bd4400ba59fb8152e777797314638372046f19cfa2');
 });
 test('conversation layout has one search, compact context, explicit pin help and sidebar-only nav geometry', () => {
   const jsx = fs.readFileSync(path.join(src, 'project-conversations.jsx'), 'utf8');
@@ -41,10 +48,30 @@ test('native title bar matches the neutral surface and shares responsive sidebar
   assert.ok(!css.includes('filter: grayscale(1)'));
   assert.ok(main.includes('"#1a1a1a" : "#f3f3f3"'));
   assert.ok(main.includes('height: 44') && css.includes('--window-chrome-height: 44px'));
-  assert.ok(css.includes('.brand img { width: 40px; height: 40px; }'));
+  assert.ok(css.includes('.brand .ass-logo { width: 40px; height: 40px; }'));
   assert.ok(css.includes('font-size: 26px') && css.includes('font-size: 10px; font-weight: 500; line-height: 14px'));
   assert.ok(css.includes('--surface: light-dark(#f3f3f3, #1a1a1a)'));
   assert.ok(css.includes('transform: translateY(2px)'));
   assert.ok(css.includes('transform: translateY(15px)') && css.includes('var(--window-chrome-height) + 27px'));
   assert.ok(!main.includes('#161b23') && !main.includes('#f3f5f8'));
+});
+
+test('light usage heat cells, legend, token chart and model bars share a sky palette with unchanged dark violet', () => {
+  const css = fs.readFileSync(path.join(src, 'overview.css'), 'utf8');
+  for (const [i, light, dark] of [[1, '#155d85', '#49325f'], [2, '#218dc0', '#74509b'], [3, '#61b8df', '#9f76c7'], [4, '#ade0f3', '#c79aed']]) {
+    assert.ok(css.includes(`--usage-level-${i}: light-dark(${light}, ${dark})`));
+    assert.ok(css.includes(`background: var(--usage-level-${i})`));
+  }
+  assert.ok(css.includes('.heatmap-cell') && css.includes('.heatmap-legend') && css.includes('.usage-group-track i'));
+  const conversations = fs.readFileSync(path.join(src, 'conversations.css'), 'utf8');
+  assert.ok(conversations.includes('background: light-dark(#d1d5d2, #303030)'));
+});
+
+test('theme logo preserves the authoritative petals and orange hub without recoloring system icons', () => {
+  const component = fs.readFileSync(path.join(src, 'ass-logo.jsx'), 'utf8');
+  const css = fs.readFileSync(path.join(src, 'theme.css'), 'utf8');
+  assert.ok(component.includes('../public/ass-logo.svg?raw') && component.includes('hub-fitted'));
+  assert.ok(component.includes('./ass-app-icon.png') && component.includes('aria-hidden="true"'));
+  assert.ok(css.includes('background: light-dark(#151515, transparent)'));
+  for (const file of ['main.jsx', 'updates.jsx']) assert.ok(fs.readFileSync(path.join(src, file), 'utf8').includes('<AssLogo />'));
 });

@@ -85,6 +85,7 @@ async function forwardHarness(router, req, res) {
     if (req.method === "GET" && /^\/models\/v1\/models(?:\?[^#]*)?$/.test(req.url)) {
       const data = claudeModels(state.providers).map(m => ({
         id: m.discoveryId, type: "model", display_name: m.label, description: m.description, created_at: "2026-01-01T00:00:00Z",
+        ...(m.claudeIdentity ? { anthropic_family_tier: m.claudeIdentity.tier } : {}),
       }));
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify({ data, has_more: false, first_id: data[0]?.id || null, last_id: data.at(-1)?.id || null }));

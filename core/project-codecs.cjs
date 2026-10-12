@@ -4,6 +4,7 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const { safePath } = require('./native-fields.cjs');
 const HARNESSES = ['codex', 'claude', 'dsh', 'opencode', 'pi'];
 const DSH_TRANSCRIPT_REVISION = 2;
+const TRANSCRIPT_REVISIONS = { dsh: DSH_TRANSCRIPT_REVISION, claude: 2, pi: 2 };
 const hash = (x) => crypto.createHash('sha256').update(x).digest('hex');
 const { displayPath, pathKey } = require('./conversation-paths.cjs');
 const libraryFiles = require('./conversation-files.cjs');
@@ -60,7 +61,8 @@ function dshMessage(role, data, timestamp) {
   return message(role, dshText(data.content), timestamp, data.id);
 }
 function decode(harness, rows, { completed = true } = {}) {
-  let header = {}, messages = [], model = '', title = '', pending = false;
+  const syncOmissions = require('./sync-omissions.cjs').omissions(harness, rows);
+  let header = {}, messages = [], model = '', title = '', pending = false, contextKey = '';
   if (harness === 'codex') {
     header = rows.find((r) => r.type === 'session_meta')?.payload || {};
     const life = rows.filter(r => r.type === 'event_msg' && ['task_started', 'task_complete', 'turn_aborted'].includes(r.payload?.type));
@@ -109,8 +111,11 @@ function decode(harness, rows, { completed = true } = {}) {
       if (r.type === 'user') userAnchor = r.uuid || id;
       // Stream fragments may share an assistant message ID, but a provider
       // reusing that ID in a later turn must not replace an earlier answer.
-      const key = r.type === 'assistant' ? 'assistant:' + userAnchor + ':' + id : 'user:' + (r.uuid || id);
-      const m = message(r.type, r.message?.content, r.timestamp, id);
+      // Separate block indices are separate native content, while snapshots of
+      // the same block replace only that block (at its original ordered slot).
+      const block = Number.isInteger(r.apiBlockIndex) && r.apiBlockIndex >= 0 ? ':block:' + r.apiBlockIndex : ':snapshot';
+      const key = r.type === 'assistant' ? 'assistant:' + userAnchor + ':' + id + block : 'user:' + (r.uuid || id);
+      const m = message(r.type, r.message?.content, r.timestamp, r.type === 'assistant' ? id + block : id);
       if (m) grouped.set(key, m); model = r.message?.model || model;
     }
     messages = [...grouped.values()]; title = rows.filter((r) => r.type === 'custom-title').at(-1)?.customTitle || '';
@@ -131,14 +136,18 @@ function decode(harness, rows, { completed = true } = {}) {
     pending = tail.length > 0;
     if (completed && pending) active = active.slice(0, last + 1);
     for (const r of active) {
+      if (r.type === 'model_change') model = r.modelId;
+      else if (r.type === 'message' && r.message?.role === 'assistant') model = r.message.model || model;
+    }
+    const projected = require('./pi-active-context.cjs').projectContext(active);
+    contextKey = hash(JSON.stringify(projected.modifiers));
+    for (const r of projected.rows) {
       if (r.type === 'message') {
         const m = r.message || {};
         if (!['user', 'assistant', 'toolResult'].includes(m.role)) continue; // Never transport prompt/tool permissions.
         if (m.role === 'assistant' && ['aborted', 'error'].includes(m.stopReason)) continue;
         messages.push(message(m.role, m.role === 'toolResult' ? `[历史工具结果 · ${m.toolName || ''}]\n${blockText(m.content)}` : m.content, r.timestamp || m.timestamp, r.id));
-        if (m.role === 'assistant') model = m.model || model;
       } else if (r.type === 'compaction' || r.type === 'branch_summary') messages.push(message('assistant', '[历史压缩摘要]\n' + (r.summary || ''), r.timestamp, r.id));
-      if (r.type === 'model_change') model = r.modelId;
     }
     title = rows.filter((r) => r.type === 'session_info').at(-1)?.name || '';
   } else if (harness === 'dsh') {
@@ -172,7 +181,9 @@ function decode(harness, rows, { completed = true } = {}) {
   if (filtered[0]?.role === 'user') filtered[0].text = filtered[0].text.replace(syncPrefix, '');
   return { sessionId: String(header.id || ''), cwd: header.cwd || '', createdAt: header.timestamp || new Date(Number(header.createdAt) || 0).toISOString(),
     title: title || header.title || filtered.find((m) => m.role === 'user' && !/^\s*(?:# AGENTS\.md|<environment_context>|<INSTRUCTIONS>|<local-command|<command-)/i.test(m.text))?.text.split('\n')[0].slice(0, 160) || '未命名对话', model, messages: filtered, pending,
-    sidechain: header.origin === 'subagent' || !!header.source?.subagent || Number(header.delegationDepth) > 0 };
+    sidechain: header.origin === 'subagent' || !!header.source?.subagent || Number(header.delegationDepth) > 0,
+    ...(TRANSCRIPT_REVISIONS[harness] ? { transcriptRevision: TRANSCRIPT_REVISIONS[harness] } : {}),
+    ...(harness === 'pi' ? { contextKey } : {}), syncOmissions };
 }
 function database(file, fn) {
   safePath(file); const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(file, { readOnly: true, timeout: 500 });
@@ -269,7 +280,7 @@ function discover(sources, { cwd, includeMessages = false, cache = {}, processed
         const id = hash(source.harness + '\0' + pathKey(file)); if (seen.has(id)) continue; seen.add(id);
         try {
           const stat = fs.statSync(file), sig = stamp(stat), old = cache[id];
-          const cached = old?.signature === sig && (source.harness !== 'dsh' || old.transcriptRevision === DSH_TRANSCRIPT_REVISION);
+          const cached = old?.signature === sig && (!TRANSCRIPT_REVISIONS[source.harness] || old.transcriptRevision === TRANSCRIPT_REVISIONS[source.harness]);
           if (cached && cwd && pathKey(cwd) !== pathKey(old.cwd)) continue;
           if (cached && (!includeMessages || processed[source.harness + '\0' + old.sessionId] === sig)) {
             if (!cwd || pathKey(cwd) === pathKey(old.cwd)) rows.push(old); continue;
@@ -306,7 +317,7 @@ function readConversation(row, options) {
   return value;
 }
 function encode(harness, { id, cwd, title, messages, createdAt = new Date().toISOString(), model = '', nativeVersion = 1 }) {
-  if (harness === 'opencode' && nativeVersion === 2) return { bytes: Buffer.from(JSON.stringify(require('./opencode-version.cjs').encode({ id, cwd, title, messages, createdAt, model: model || 'gpt-5' }))), suffix: '.json' };
+  if (harness === 'opencode' && nativeVersion === 2) return { bytes: Buffer.from(JSON.stringify(require('./opencode-version.cjs').encode({ id, cwd, title, messages, createdAt, model }))), suffix: '.json' };
   const rows = [], emptyUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
   if (harness === 'codex') {
     rows.push({ timestamp: createdAt, type: 'session_meta', payload: { id, cwd, timestamp: createdAt, originator: 'ASS', cli_version: '0.158.0', source: 'cli', model_provider: 'openai' } });
@@ -348,6 +359,7 @@ function encode(harness, { id, cwd, title, messages, createdAt = new Date().toIS
     if (rows.length > 1) frames.push(zlib.zstdCompressSync(Buffer.from(jsonl(rows.slice(1)))));
     return { bytes: Buffer.concat(frames), suffix: '.jsonl.zstd' };
   } else if (harness === 'opencode') {
+    const target = model ? require('./opencode-resume-model.cjs').modelRef(model) : { providerID: 'ASS-history', modelID: 'unassigned' };
     const time = Date.parse(createdAt), info = { id, slug: id, projectID: 'global', directory: cwd, title, version: '1.0.0', time: { created: time, updated: time } };
     let parentID = '';
     const bundle = messages.map((m, i) => {
@@ -355,8 +367,8 @@ function encode(harness, { id, cwd, title, messages, createdAt = new Date().toIS
       // imported context even when its timestamps are correct.
       const mid = 'msg_' + i.toString(16).padStart(16, '0') + hash(id + ':message:' + i).slice(0, 10), when = Date.parse(m.timestamp || createdAt);
       const mi = { id: mid, sessionID: id, role: m.role, time: { created: when },
-        ...(m.role === 'user' ? { agent: 'build', model: { providerID: 'openai', modelID: model || 'gpt-5' } }
-          : { parentID, modelID: model || 'gpt-5', providerID: 'openai', mode: 'build', agent: 'build', path: { cwd, root: cwd }, cost: 0,
+        ...(m.role === 'user' ? { agent: 'build', model: { ...target } }
+          : { parentID, ...target, mode: 'build', agent: 'build', path: { cwd, root: cwd }, cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, finish: 'stop', time: { created: when, completed: when } }) };
       if (m.role === 'user') parentID = mid;
       return { info: mi, parts: [{ id: 'prt_' + hash(id + ':part:' + i).slice(0, 26), sessionID: id, messageID: mid, type: 'text', text: m.text }] };
@@ -365,4 +377,4 @@ function encode(harness, { id, cwd, title, messages, createdAt = new Date().toIS
   } else throw Error('不支持的客户端');
   return { bytes: Buffer.from(jsonl(rows)), suffix: '.jsonl' };
 }
-module.exports = { HARNESSES, NO_PROJECT, projectPath, hash, pathKey, stamp, slug, dshSlug, jsonl, lines, decode, discover, readConversation, encode, openCodeBundle, decodeOpenCode };
+module.exports = { HARNESSES, TRANSCRIPT_REVISIONS, NO_PROJECT, projectPath, hash, pathKey, stamp, slug, dshSlug, jsonl, lines, decode, discover, readConversation, encode, openCodeBundle, decodeOpenCode };

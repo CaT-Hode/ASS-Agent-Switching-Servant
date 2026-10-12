@@ -16,6 +16,7 @@ import {
   detectedClients,
   dayKey,
   overviewAccounts,
+  overviewAccountPriority,
   summarize,
 } from "./usage-view.mjs";
 import { ElapsedTime } from "./diagnostic-time.jsx";
@@ -401,6 +402,8 @@ export function Overview({ state, act, setView, setClientTarget }) {
     [usage.rows, options.client, options.range, options.group, today, clients.map((c) => c.id).join(",")],
   );
   const accounts = overviewAccounts(state, options.client);
+  const quotaAccounts = accounts.filter((row) => overviewAccountPriority(row) > 0);
+  const otherAccounts = accounts.filter((row) => overviewAccountPriority(row) === 0);
   const filteredSources = usage.sources.filter(
     (s) => visibleIds.has(s.client) && (options.client === "all" || s.client === options.client),
   );
@@ -629,7 +632,7 @@ export function Overview({ state, act, setView, setClientTarget }) {
       <section className="overview-accounts">
         <header>
           <h2>
-            账户与额度 <span className="count">{accounts.length}</span>
+            账户与额度 <span className="count">{quotaAccounts.length}</span>
           </h2>
           <button
             className="text-button"
@@ -642,9 +645,9 @@ export function Overview({ state, act, setView, setClientTarget }) {
             <ChevronRight size={14} />
           </button>
         </header>
-        {accounts.length ? (
+        {quotaAccounts.length ? (
           <div className="overview-accounts-grid">
-            {accounts.map((row) => (
+            {quotaAccounts.map((row) => (
               <AccountCard
                 key={row.key}
                 row={row}
@@ -654,7 +657,17 @@ export function Overview({ state, act, setView, setClientTarget }) {
             ))}
           </div>
         ) : (
-          <p className="muted tiny">没有已添加的账户</p>
+          <p className="muted tiny">{accounts.length ? "暂无额度或订阅信息" : "没有已添加的账户"}</p>
+        )}
+        {!!otherAccounts.length && (
+          <details className="overview-other-accounts">
+            <summary>其他账户 <span className="count">{otherAccounts.length}</span></summary>
+            <div className="overview-accounts-grid">
+              {otherAccounts.map((row) => (
+                <AccountCard key={row.key} row={row} busy={refreshing} refresh={refreshAccount} />
+              ))}
+            </div>
+          </details>
         )}
       </section>
       {usage.error && (

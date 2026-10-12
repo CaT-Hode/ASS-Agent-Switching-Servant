@@ -30,6 +30,9 @@ img[src^="./providers/"] { filter: var(--provider-logo-filter); }
 img[src="./providers/pi.svg"] { filter: var(--pi-logo-filter); }
 .client-glyph img[src="./providers/pi.svg"] { width: 22px; height: 22px; }
 .supplier-symbol img[src="./providers/pi.svg"] { width: 25px; height: 25px; }
+.ass-logo { position: relative; display: inline-block; width: 40px; height: 40px; flex: none; }
+.ass-logo > img { display: block; width: 100%; height: 100%; }
+.ass-logo-petals { position: absolute; inset: 0; pointer-events: none; background: light-dark(#151515, transparent); mask-size: 100% 100%; mask-position: center; mask-repeat: no-repeat; mask-mode: alpha; }
 :root, body, main { background: var(--surface); color: var(--ink); }
 button, input, select, textarea { color-scheme: inherit; }
 ::selection { background: light-dark(#e2e8e4, #585c59); color: var(--ink); }
@@ -48,8 +51,8 @@ html { scrollbar-color: light-dark(#b2b2b2, #626262) var(--surface); }
   -webkit-app-region: drag; user-select: none;
 }
 .window-chrome .brand { display: flex; width: var(--sidebar-width); height: 100%; padding: 0 14px; gap: 8px; transform: translateY(15px); }
-.window-chrome .brand img { width: 40px; height: 40px; }
-.window-chrome .brand > img, .window-chrome .brand > div { transform: translateY(2px); }
+.window-chrome .brand .ass-logo { width: 40px; height: 40px; }
+.window-chrome .brand > .ass-logo, .window-chrome .brand > div { transform: translateY(2px); }
 .window-chrome .brand strong { font-size: 26px; line-height: 1; letter-spacing: 1px; }
 .window-chrome .brand small { display: none; }
 .window-chrome .brand-title { gap: 7px; }

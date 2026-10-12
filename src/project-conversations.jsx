@@ -20,6 +20,7 @@ const Transcript = memo(function Transcript({ value }) {
 export function ProjectConversations({ state, initialHarness, onClient, onNotify }) {
   const [list, setList] = useState(null), [query, setQuery] = useState(''), [project, setProject] = useState(null);
   const [threads, setThreads] = useState(null), [selected, setSelected] = useState(null), [preview, setPreview] = useState(null), [before, setBefore] = useState(0);
+  const [contextHistory, setContextHistory] = useState(-1);
   const [revision, setRevision] = useState(0), [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [offset, setOffset] = useState(0), [search, setSearch] = useState(null), [pinned, setPinned] = useState(false);
   const available = detectedClients(state).filter((c) => Object.hasOwn(labels, c.id));
@@ -74,13 +75,14 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
   useEffect(() => {
     let current = true; setPreview(null); setConfirm('');
     const selection = JSON.stringify([selected?.id, selected?.kind]);
+    if (selection !== previewSelection.current && contextHistory !== -1) { setContextHistory(-1); return; }
     if (selection !== previewSelection.current && before) { setBefore(0); return; }
     previewSelection.current = selection;
     if (selected) api.call(selected.kind === 'native' ? 'project-conversations-native-preview' : 'project-conversations-preview',
-      ...(selected.kind === 'native' ? [selected.id, before] : [project.id, selected.id, before])).then((r) => { if (current) setPreview(r); })
+      ...(selected.kind === 'native' ? [selected.id, before] : [project.id, selected.id, before, contextHistory])).then((r) => { if (current) setPreview(r); })
       .catch((e) => { if (current) setError(errorText(e)); });
     return () => { current = false; };
-  }, [selected?.id, selected?.kind, before, revision]);
+  }, [selected?.id, selected?.kind, before, revision, contextHistory]);
   useEffect(() => {
     if (!confirm) return;
     const opener = document.activeElement, focus = requestAnimationFrame(() => document.querySelector('.conversation-resume-confirm button')?.focus());
@@ -158,13 +160,19 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
           <div className="project-thread-pages"><button className="icon-button" aria-label="上一页对话" disabled={!offset || !threads} onClick={() => setOffset((n) => Math.max(0, n - 40))}><ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /></button><small>{threads?.total || 0} 个对话</small><button className="icon-button" aria-label="下一页对话" disabled={!threads || offset + 40 >= threads.total} onClick={() => setOffset((n) => n + 40)}><ChevronRight size={14} /></button></div></nav>
           <div {...columns.separator('threads')} />
           <div className="project-shared-preview">{selected ? <>
+            {!native && <details className="conversation-sync-scope"><summary>同步范围{selected.sourceOmissions?.some(source => source.codes?.includes('system')) ? ' · 来源系统提示未迁移' : ''}</summary>
+              <p>仅同步有效文本上下文。来源系统/开发者提示、工具许可、插件和凭据不迁移；工具仅保留历史文本，附件留在来源记录中。用户角色中的指令仍是用户消息，不提升优先级。</p>
+              {selected.sourceOmissions?.filter(source => source.codes?.length).map(source => <p key={source.harness}>{labels[source.harness]}：{source.codes.map(code => ({ system: '系统提示未迁移', media: '附件正文未迁移', 'tool-structure': '工具调用结构未迁移', 'dsh-non-dialogue': '非对话事件未迁移' })[code]).filter(Boolean).join('、')}</p>)}
+              {selected.contextNotice ? <p>{selected.contextNotice}</p> : null}
+              {!!selected.priorContextCount && <label>查看上下文 <select aria-label="查看当前或只读旧上下文" value={contextHistory} onChange={e => { setContextHistory(Number(e.target.value)); setBefore(0); }}><option value={-1}>当前有效上下文</option>{Array.from({ length: selected.priorContextCount }, (_, i) => <option key={i} value={i}>旧上下文 {i + 1} · 只读</option>)}</select></label>}
+            </details>}
             <div className="conversation-transcript">{native && <HistorySource row={selected} />}<div className="conversation-message-pages"><button className="text-button" disabled={!preview?.hasEarlier} onClick={() => setBefore((n) => n + 40)}><RotateCcw size={13} />更早内容</button>
               <span>{preview?.total || 0} 条消息</span>{before > 0 && <button className="text-button" onClick={() => setBefore((n) => Math.max(0, n - 40))}>较新内容<ChevronRight size={13} /></button>}</div><Transcript value={preview} /></div>
             <footer className="project-resume">{native ? <button className="conversation-current-account" onClick={() => onClient?.(resumeHarness)}><span>当前账户<strong>{account?.profile?.fields?.find((f) => f.id === 'email')?.value || account?.label || labels[resumeHarness]}</strong></span></button>
               : <span className="conversation-retained">共享项目记录</span>}
               <div className="conversation-resume-control">{native && selected.libraryId && selected.harness === 'codex' && client?.desktop && <button className="icon-button" aria-label="在 Codex 桌面打开对话" disabled={!!busy} onClick={() => action('conversations-open-desktop', selected.libraryId)}><Monitor size={17} /></button>}
                 {confirm === 'resume' && <div className="conversation-resume-confirm" role="dialog" aria-label={native ? '继续对话确认' : '跨客户端续聊确认'}><p>在 {labels[resumeHarness]} 继续？请先结束原窗口中的同一对话。</p><div className="actions"><button className="button" onClick={() => setConfirm('')}>取消</button><button className="button primary" onClick={() => native ? action('project-conversations-native-resume', selected.id) : action('project-conversations-resume', project.id, selected.id, target)}>确定</button></div></div>}
-                <button className="button primary" disabled={!!busy || !preview} aria-haspopup="dialog" onClick={() => setConfirm('resume')}><Play size={15} />{busy ? '处理中…' : native ? selected.nativePresent ? '继续对话' : '从副本继续' : '在 ' + labels[target] + ' 继续'}</button></div></footer>
+                <button className="button primary" disabled={!!busy || !preview || preview.readOnly} aria-haspopup="dialog" onClick={() => setConfirm('resume')}><Play size={15} />{preview?.readOnly ? '旧上下文仅供查看' : busy ? '处理中…' : native ? selected.nativePresent ? '继续对话' : '从副本继续' : '在 ' + labels[target] + ' 继续'}</button></div></footer>
             {resumeHarness === 'dsh' && <p className="conversation-resume-note">打开后在 DSH 会话列表选择此记录。{native ? selected.sessionId : ''}</p>}
           </> : <div className="empty"><MessagesSquare size={30} /><p>选择一段对话</p></div>}</div></div>
       </> : <div className="empty"><Folder size={30} /><p>选择项目</p></div>}</section>

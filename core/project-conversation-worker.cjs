@@ -6,6 +6,8 @@ const { hash, pathKey } = codecs;
 const { historyStatus, inScope } = require('./conversation-status.cjs');
 const prefix = (a, b) => a.length <= b.length && a.every((v, i) => v === b[i]);
 const identity = (row) => row.harness + '\0' + row.sessionId;
+const projectionVersion = (refs, harness, nativeVersion, targetModel) => hash(refs.join(':') +
+  (harness === 'opencode' ? ':' + (nativeVersion || 1) + (targetModel === undefined ? '' : ':target:' + targetModel) : ''));
 function project(id) { const p = data.state.projects.find((p) => p.id === id); if (!p) throw Error('项目不存在'); return p; }
 function thread(p, id) { const t = p.threads.find((t) => t.id === id); if (!t) throw Error('对话不存在'); return t; }
 function block(ref, value) {
@@ -27,18 +29,44 @@ function block(ref, value) {
 }
 function refsFor(messages) { return messages.map((m) => { const value = { role: m.role, text: m.text }, ref = hash(JSON.stringify(value)); block(ref, value); return ref; }); }
 function merge(p, row) {
-  if (!row.messages?.length) return 0;
+  if (!Array.isArray(row.messages)) return 0;
   const refs = refsFor(row.messages), key = identity(row), projection = p.threads.flatMap((t) => t.routes.map((r) => ({ t, r })))
     .find(({ r }) => r.harness === row.harness && r.sessionId === row.sessionId);
   let origin = p.origins[key], t;
-  if (!origin && projection) { origin = p.origins[key] = { threadId: projection.t.id, refs: projection.r.refs, signature: '', file: row.file }; }
+  if (origin?.contextStale || projection?.r.contextStale) return 0;
+  if (!origin && projection) { origin = p.origins[key] = { threadId: projection.t.id, refs: projection.r.refs, signature: '', file: row.file,
+    transcriptRevision: row.transcriptRevision, contextKey: row.harness === 'pi' ? hash('[]') : undefined }; }
   if (!origin) {
+    if (!refs.length) return 0;
     const id = hash(p.id + '\0' + key); t = { id, title: row.title, refs, times: row.messages.map((m) => m.timestamp), createdAt: row.createdAt, updatedAt: row.updatedAt,
       home: { harness: row.harness, sessionId: row.sessionId, dir: row.dir, file: row.file }, origins: [{ harness: row.harness, sessionId: row.sessionId }], routes: [] };
-    p.threads.push(t); p.origins[key] = { threadId: id, refs, signature: row.signature, file: row.file }; return 1;
+    p.threads.push(t); p.origins[key] = { threadId: id, refs, signature: row.signature, file: row.file,
+      transcriptRevision: row.transcriptRevision, contextKey: row.contextKey };
+    t.sourceOmissions = [{ harness: row.harness, codes: row.syncOmissions || [] }]; return 1;
   }
   t = thread(p, origin.threadId);
+  t.sourceOmissions = [...(t.sourceOmissions || []).filter(source => source.harness !== row.harness), { harness: row.harness, codes: row.syncOmissions || [] }];
   if (t.home?.harness === row.harness && t.home?.sessionId === row.sessionId && row.title) t.title = row.title;
+  const changed = JSON.stringify(refs) !== JSON.stringify(origin.refs);
+  const reparsed = row.transcriptRevision && row.transcriptRevision !== origin.transcriptRevision;
+  const contextEdited = row.harness === 'pi' && row.contextKey !== origin.contextKey;
+  if (changed && (reparsed || contextEdited)) {
+    // Semantic corrections are not append-only turns. Retire older projections
+    // so their unchanged historical prefix cannot silently resurrect old text.
+    // Preserve the old shared graph as encrypted, read-only context history.
+    if (row.pending) return 0;
+    (t.priorContexts ||= []).push({ refs: [...t.refs], times: [...t.times], at: row.updatedAt,
+      reason: reparsed ? '读取规则升级' : '来源上下文已修改', harness: row.harness });
+    const suffix = row.harness === 'claude' && prefix(origin.refs, t.refs) ? t.refs.slice(origin.refs.length) : [];
+    const suffixTimes = suffix.length ? t.times.slice(origin.refs.length) : [];
+    t.refs = [...refs, ...suffix]; t.times = [...row.messages.map(m => m.timestamp), ...suffixTimes]; t.updatedAt = row.updatedAt;
+    t.contextNotice = suffix.length ? '已修正来源文本块，保留后续对话。' : '已按来源的当前上下文重建；旧上下文仅保留，不参与续聊。';
+    for (const route of t.routes) if (identity(route) !== key) route.contextStale = true;
+    for (const [otherKey, other] of Object.entries(p.origins)) if (other.threadId === t.id && otherKey !== key) other.contextStale = true;
+    origin.refs = refs; origin.signature = row.signature; origin.transcriptRevision = row.transcriptRevision; origin.contextKey = row.contextKey;
+    return 1;
+  }
+  origin.transcriptRevision = row.transcriptRevision; origin.contextKey = row.contextKey;
   if (prefix(refs, origin.refs)) return 0; // Shrunk/truncated/unfinished source never deletes the shared past.
   if (prefix(t.refs, refs)) { t.refs = refs; t.times = row.messages.map((m) => m.timestamp); t.updatedAt = row.updatedAt; }
   else if (prefix(refs, t.refs)) { origin.refs = refs; origin.signature = row.signature; return 0; }
@@ -97,10 +125,15 @@ function sync() {
   let updated = 0;
   for (const p of data.state.projects.filter((p) => p.enabled && (!data.projectId || p.id === data.projectId))) {
     data.state.catalog ||= {};
-    const processed = Object.fromEntries(Object.entries(data.state.observed).filter(([key]) => key.startsWith(p.id + ':')).map(([key, sig]) => [key.slice(p.id.length + 1), sig]));
+    const processed = Object.fromEntries(Object.entries(data.state.observed).filter(([key]) => {
+      if (!key.startsWith(p.id + ':')) return false;
+      const sourceKey = key.slice(p.id.length + 1), harness = sourceKey.split('\0')[0];
+      return !codecs.TRANSCRIPT_REVISIONS[harness] || p.origins[sourceKey]?.transcriptRevision === codecs.TRANSCRIPT_REVISIONS[harness];
+    }).map(([key, sig]) => [key.slice(p.id.length + 1), sig]));
     const r = codecs.discover(data.sources, { cwd: p.cwd, includeMessages: true, cache: data.state.catalog, processed }); p.errors = r.errors;
     const unique = new Map();
     for (const row of r.rows) {
+      if (p.origins[identity(row)]?.contextStale || p.threads.some(t => t.routes.some(route => identity(route) === identity(row) && route.contextStale))) continue;
       if ((p.retired || []).includes(identity(row)) && !p.threads.some(t => t.routes.some(route => identity(route) === identity(row) && pathKey(route.nativeFile) === pathKey(row.file)))) continue;
       const ownedProjection = historyStatus(row) === 'residual' && p.threads.some(t => t.routes.some(route => identity(route) === identity(row) && pathKey(route.nativeFile) === pathKey(row.file)));
       if (!inScope(row) && !ownedProjection) continue;
@@ -109,11 +142,11 @@ function sync() {
     for (const row of unique.values()) {
       const origin = p.origins[identity(row)], shared = origin && p.threads.find((t) => t.id === origin.threadId);
       if (shared?.home?.harness === row.harness && shared.home.sessionId === row.sessionId && row.title) shared.title = row.title;
-      const k = p.id + ':' + identity(row); if (data.state.observed[k] === row.signature) continue;
+      const k = p.id + ':' + identity(row); if (data.state.observed[k] === row.signature && (!codecs.TRANSCRIPT_REVISIONS[row.harness] || origin?.transcriptRevision === row.transcriptRevision)) continue;
       updated += merge(p, row); if (!row.pending) data.state.observed[k] = row.signature;
     }
     // An explicit CC/pi path can be outside the active account's storage tree.
-    for (const route of p.threads.flatMap((t) => t.routes).filter((r) => r.harness !== 'opencode')) {
+    for (const route of p.threads.flatMap((t) => t.routes).filter((r) => r.harness !== 'opencode' && !r.contextStale)) {
       if (r.rows.some((row) => identity(row) === route.harness + '\0' + route.sessionId)) continue;
       try { const decoded = codecs.readConversation({ harness: route.harness, file: route.nativeFile, sessionId: route.sessionId });
         if (!decoded.cwd || pathKey(decoded.cwd) !== pathKey(p.cwd)) continue;
@@ -134,8 +167,14 @@ function nativeFile(harness, dir, cwd, id, timestamp) {
 }
 function preparePlan() {
   const p = project(data.projectId), t = thread(p, data.threadId), harness = data.harness;
+  for (const o of t.origins) {
+    const origin = p.origins[identity(o)];
+    if (!origin?.contextStale && codecs.TRANSCRIPT_REVISIONS[o.harness] && origin?.transcriptRevision !== codecs.TRANSCRIPT_REVISIONS[o.harness])
+      throw Error('来源的新版上下文读取尚未完成，请修复读取错误后重新同步；不会使用旧共享内容');
+  }
+  if (!t.refs.length) throw Error('来源的当前有效上下文为空，未恢复旧内容');
   safePath(data.dir); if (!fs.statSync(p.cwd).isDirectory()) throw Error('项目目录不存在');
-  const version = hash(t.refs.join(':') + (harness === 'opencode' ? ':' + (data.nativeVersion || 1) : '')), prior = t.routes.find((r) => r.harness === harness && r.version === version && pathKey(r.dir) === pathKey(data.dir));
+  const version = projectionVersion(t.refs, harness, data.nativeVersion, data.targetModel), prior = t.routes.find((r) => r.harness === harness && !r.contextStale && r.version === version && pathKey(r.dir) === pathKey(data.dir));
   if (prior && fs.existsSync(prior.nativeFile || prior.file)) {
     safePath(prior.file); safePath(prior.nativeFile || prior.file);
     if (harness !== 'opencode') {
@@ -152,7 +191,7 @@ function preparePlan() {
   const from = t.home?.harness || t.origins[0]?.harness, labels = { codex: 'Codex', claude: 'CC', dsh: 'DSH', opencode: 'OpenCode', pi: 'pi' };
   const title = `来自 ${labels[from]} 的同步 · ${t.title}`;
   if (messages[0]?.role === 'user') messages[0] = { ...messages[0], text: `[来自 ${labels[from]} 的同步]\n` + messages[0].text };
-  const result = codecs.encode(harness, { id: sessionId, cwd: p.cwd, title, messages, createdAt: timestamp, nativeVersion: data.nativeVersion });
+  const result = codecs.encode(harness, { id: sessionId, cwd: p.cwd, title, messages, createdAt: timestamp, nativeVersion: data.nativeVersion, model: data.targetModel });
   const file = path.join(data.vault, 'projections', harness, sessionId + result.suffix); safePath(file); fs.mkdirSync(path.dirname(file), { recursive: true });
   if (!fs.existsSync(file)) {
     const fd = fs.openSync(file, 'wx', 0o600);
@@ -165,7 +204,7 @@ function preparePlan() {
     mode: harness === 'opencode' ? 'import' : 'copy', createdAt: timestamp };
   // Only the vault is written here. The parent must durably record this intent
   // before any native path becomes visible to discovery or another process.
-  return { intent: { projectId: p.id, threadId: t.id, cwd: p.cwd, nativeVersion: data.nativeVersion || 1,
+  return { intent: { projectId: p.id, threadId: t.id, cwd: p.cwd, nativeVersion: data.nativeVersion || 1, targetModel: data.targetModel,
     route, digest: hash(fs.readFileSync(file)) } };
 }
 function preparePublish() {
@@ -173,7 +212,7 @@ function preparePublish() {
   if (!intent) throw Error('同步发布意图不存在');
   const p = project(intent.projectId), t = thread(p, intent.threadId), route = { ...intent.route }, harness = route.harness;
   if (!p.enabled || !p.targets.includes(harness) || !codecs.HARNESSES.includes(harness) || pathKey(p.cwd) !== pathKey(intent.cwd)) throw Error('同步发布身份已变化，未写入');
-  const version = hash(t.refs.join(':') + (harness === 'opencode' ? ':' + intent.nativeVersion : ''));
+  const version = projectionVersion(t.refs, harness, intent.nativeVersion, intent.targetModel);
   const digest = hash(p.id + ':' + t.id + ':' + harness + ':' + version + ':' + pathKey(route.dir));
   const sessionId = harness === 'opencode' ? 'ses_' + digest.slice(0, 26) : `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
   const suffix = harness === 'dsh' ? '.jsonl.zstd' : harness === 'opencode' ? '.json' : '.jsonl';
@@ -248,14 +287,14 @@ function releasePlan() {
         let bundle; try { bundle = codecs.openCodeBundle(db, r.sessionId); } catch (e) { if (/会话不存在/.test(e.message)) continue; throw e; }
         const decoded = codecs.decodeOpenCode(bundle);
         const refs = decoded.messages.map((m) => hash(JSON.stringify({ role: m.role, text: m.text })));
-        const owned = p.origins[r.harness + '\0' + r.sessionId];
+        const owned = p.origins[r.harness + '\0' + r.sessionId] || (r.contextStale ? { refs: r.refs } : null);
         if (!owned || JSON.stringify(refs) !== JSON.stringify(owned.refs)) throw Error('OpenCode 同步记录仍在变化，未移除');
         const backup = path.join(data.vault, 'released', r.sessionId + '.json'); safePath(backup); fs.mkdirSync(path.dirname(backup), { recursive: true }); fs.writeFileSync(backup, JSON.stringify(bundle), { mode: 0o600 });
         imports.push({ harness: r.harness, dir: r.dir, sessionId: r.sessionId, signature: hash(JSON.stringify(bundle)), cwd: p.cwd });
       } else if (fs.existsSync(r.nativeFile)) {
         safePath(r.nativeFile); const stat = fs.statSync(r.nativeFile), row = codecs.readConversation({ ...r, file: r.nativeFile });
         if (row.pending || row.sessionId !== r.sessionId || pathKey(row.cwd) !== pathKey(p.cwd)) throw Error('同步会话仍在进行或身份改变，未移除');
-        const owned = p.origins[r.harness + '\0' + r.sessionId];
+        const owned = p.origins[r.harness + '\0' + r.sessionId] || (r.contextStale ? { refs: r.refs } : null);
         const refs = row.messages.map((m) => hash(JSON.stringify({ role: m.role, text: m.text })));
         if (!owned || JSON.stringify(refs) !== JSON.stringify(owned.refs)) throw Error('同步记录发生变化，请重新关闭同步');
         const backup = path.join(data.vault, 'released', r.harness, r.sessionId + path.extname(r.nativeFile)); safePath(backup); fs.mkdirSync(path.dirname(backup), { recursive: true }); fs.copyFileSync(r.nativeFile, backup);
@@ -290,11 +329,15 @@ function releaseCommit() {
   if (data.action === 'release-commit') return releaseCommit();
   if (data.action === 'native-preview') {
     const row = codecs.readConversation(data.row, { completed: false }), end = Math.max(0, row.messages.length - data.before), start = Math.max(0, end - 40);
-    return { messages: row.messages.slice(start, end), before: data.before, total: row.messages.length, hasEarlier: start > 0 };
+    return { messages: row.messages.slice(start, end), before: data.before, total: row.messages.length, hasEarlier: start > 0, syncOmissions: row.syncOmissions || [] };
   }
   if (data.action === 'preview') {
-    const t = thread(project(data.projectId), data.threadId), end = Math.max(0, t.refs.length - data.before), start = Math.max(0, end - 40);
-    return { messages: t.refs.slice(start, end).map((ref, i) => ({ ...block(ref), timestamp: t.times[start + i] })), before: data.before, total: t.refs.length, hasEarlier: start > 0 };
+    const t = thread(project(data.projectId), data.threadId);
+    const history = data.history >= 0 ? t.priorContexts?.[data.history] : t;
+    if (!history) throw Error('旧上下文不存在');
+    const end = Math.max(0, history.refs.length - data.before), start = Math.max(0, end - 40);
+    return { messages: history.refs.slice(start, end).map((ref, i) => ({ ...block(ref), timestamp: history.times[start + i] })),
+      before: data.before, total: history.refs.length, hasEarlier: start > 0, readOnly: data.history >= 0 };
   }
   throw Error('未知项目对话操作');
 })().then((result) => parentPort.postMessage({ result }), (e) => parentPort.postMessage({ error: e.message }));

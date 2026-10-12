@@ -6,7 +6,9 @@
 
 ASS（Agent-Switching-Servant）是你的 Windows 桌面 AI 路由与账户助手。把模型、API 凭据与官方授权放到一个独立窗口，切换客户端时不必反复搬配置。关闭窗口后继续在托盘运行。
 
-v0.3.5 修复 Codex 从 DeepSeek 等第三方 Responses 模型切回官方 GPT 时的历史思考项不兼容；支持在 Codex 运行中删除未被占用的归档会话。删除仅二级确认，不再新增恢复备份。详见 [v0.3.5 发布说明](docs/release-v0.3.5.md)。
+v0.3.7 优先展示有额度 / 余额 / 订阅信息的账户，优化浅色模式的黑色 logo、天蓝色热力格与用量统计，以及对话管理客户端选中状态；包含 v0.3.6 的会话同步和 Claude Gateway 修复。详见 [v0.3.7 发布说明](docs/release-v0.3.7.md)。
+
+v0.3.5 的 Codex 跨供应商历史思考项及运行中归档删除修复继续保留。删除仅二级确认，不再新增恢复备份。详见 [v0.3.5 发布说明](docs/release-v0.3.5.md)。
 
 ## 能做什么
 
@@ -78,9 +80,13 @@ Codex 唯一入口为 `http://127.0.0.1:25819/clients/ASS/v1`（端口随本机�
 
 无账号开关默认同时配置 Claude 桌面版，不再需要另开一个开关。ASS 在 `%LOCALAPPDATA%\Claude-3p\configLibrary` 创建自己的配置项，同步选中项及 `claude_desktop_config.json` 中的启动模式，无需管理员权限；已有系统策略或生效的其他第三方配置会阻止覆盖。终端和桌面版配置共同提交，失败共同回退。完全退出并重新打开 Claude 桌面版，出现 **Continue with Gateway** 时选择继续，无需 Anthropic 登录。关闭无账号开关会恢复两端原设置，保留官方账户、会话和其他配置。已有终端免登录配置点击一次同步即可补齐桌面版。配置库保存的仅为本机网关令牌，请勿分享；真实供应商密钥仍由 ASS 管理。
 
-Claude 桌面版会按模型 ID 中出现的供应商名称过滤非 Anthropic 模型。ASS 为注入模型生成稳定的 `claude-ass-…` 本地路由 ID，桌面版显示原供应商和模型名称；请求再精确还原到原始模型。Messages 原生及 Responses / Chat 转换模型均可使用，完整的 `供应商::模型` ID 和当前 `claude-ass-…` 本地路由 ID 可路由；旧 `claude-ass/…` 别名不再解析。模型名单只在明确同步接入时更新，不在启动时执行别名迁移。桌面版接入写入明确的模型名单和显示名称，不依赖自动发现。
+Claude 桌面版会按模型 ID 中出现的供应商名称过滤非 Anthropic 模型。明确的原生 Claude 型号使用稳定的 `ass-<哈希>.anthropic.claude-…` 路由 ID，使桌面版可规范化到实际 Claude 型号并读取原生思维选项；同型号的不同供应商仍是不同路由。仅识别完整的原生型号，不根据显示名称或 `claude-opus` 等模糊别名猜型号；不伪装 GPT / DeepSeek 等其他模型，它们继续使用 `claude-ass-…`。原生 Claude 的桌面配置携带已配置的 `maxEffort`（不写 `ultra`），默认模型为原生 Claude 时写入 `defaultModelEffort`；实际可选范围仍由桌面版型号目录与上限共同决定，旧型号不保证有 Effort 控件。请求精确还原到原供应商和模型，历史会话中的旧 ASS 哈希 ID 仅匹配仍启用的对应模型；旧 `claude-ass/…` 别名不解析。模型名单只在明确同步接入时更新，不在启动时迁移；不修改 Claude 安装文件、账户或历史会话。
+
+原生 Claude 配置上下文达到 1,000,000 token 时，桌面模型条目写入 `supports1m: true` 和 `prefer1m: true`，供 Claude 展示并选择 1M 变体；低于该值时不写。此值是部署配置声明，不代表 ASS 已发送百万 token 请求验证上游容量。Claude 会保留用户已有的 200K 选择：更新 ASS、确认同步接入并重开 Claude 后，已有会话需手动选一次 1M 变体。路由移除桌面追加的 `[1m]` 标记，仍调用原模型，并保留请求携带的 Anthropic beta 头。不为非 Claude 模型添加原生 1M 标记，也不改写历史会话。参见 [Claude 桌面模型配置](https://claude.com/docs/third-party/claude-desktop/models)。
 
 ### 接入开关与安全关闭
+
+Claude 桌面 Gateway 默认写入 `coworkEgressAllowedHosts: ["*"]`，恢复 Cowork / 桌面 Code 的工具联网，避免第三方模式默认仅放行本机推理端点而导致 Git、网页读取及安装依赖返回 403。此选项会放开工具出网沙箱限制，但不改变 ASS 的本机监听与推理鉴权；网页读取仍受 Claude 的私网限制。显式保存的域名白名单（或空列表）在后续模型同步中保留。旧版 ASS 本地配置只在新版中确认同步接入时升级，不在后台改写。退出恢复仍只撤回 ASS 自己的配置项，不覆盖其他配置或组织策略。修改生效需要完全退出并重新打开 Claude，再开始新会话，无需重启 ASS。详见 [Claude 官方出网配置](https://claude.com/docs/third-party/claude-desktop/configuration#coworkegressallowedhosts)。
 
 全局“接入 Codex”按钮已移除。Codex / Claude / OpenCode / pi / DSH / Kimi / ZCode 各有接入开关，点击后显示简短警告和“确定 / 取消”，不展示分步菜单或 PID 清单。客户端页只保留一个刷新入口，重新读取账户、额度、目录和模型；已接入时随后确认是否同步接口配置。需要操作运行窗口时提供“仅应用配置 / 强制关闭 / 强制重启”，每次默认仅应用配置。默认焦点在取消；取消、Escape 或默认回车都不会更改接入。
 

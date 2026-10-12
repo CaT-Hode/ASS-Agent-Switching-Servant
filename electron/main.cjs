@@ -1275,12 +1275,13 @@ else {
         const result = await harnesses.launchPlan(row.harness, plan, 'conversation:' + row.sessionId, 'resume', launcher);
         return { ...result, message: result.message || (row.harness === 'dsh' ? plan.hint : '已打开原客户端会话，使用当前账户。') };
       }));
-      register("project-conversations-preview", (id, thread, before) => projectConversations.preview(id, thread, before));
+      register("project-conversations-preview", (id, thread, before, history) => projectConversations.preview(id, thread, before, history));
       register("project-conversations-resume", (id, thread, harness) => connections.launch(async () => {
         const launcher = harnesses.launcher(harness); if (!launcher.ready) throw Error(launcher.message);
         const project = projectConversations.project(id), initial = harnesses.projectConversationPlan(harness, project.cwd);
+        if (harness === 'opencode' && !initial.targetModel) throw Error('OpenCode 尚未选择当前模型，请先配置 provider/model；不会使用同步记录中的历史模型');
         const prepared = await projectConversations.prepare(id, thread, harness, initial.dir,
-          harness === 'opencode' ? require('../core/opencode-version.cjs').version(harnesses.launcher(harness), initial.dir) : 1);
+          harness === 'opencode' ? require('../core/opencode-version.cjs').version(harnesses.launcher(harness), initial.dir) : 1, initial.targetModel);
         if (harness === "opencode") {
           const preCodecs = require('../core/project-codecs.cjs'), preContract = require('../core/opencode-version.cjs');
           if (fs.existsSync(path.join(initial.dir, 'opencode.db'))) {

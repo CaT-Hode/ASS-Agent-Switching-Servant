@@ -40,7 +40,7 @@ async function assertClaudePicker(launcher) {
 
 function claudeModelSettings(providers, selected) {
   const options = require("./claude-models.cjs").claudeModels(providers)
-    .map(({ discoveryId, ...option }) => option);
+    .map(({ model, label, description }) => ({ model, label, description }));
   if (!options.some((m) => m.model === selected)) throw Error("启动模型不在已注入的模型列表中");
   return {
     model: selected,

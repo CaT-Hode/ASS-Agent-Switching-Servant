@@ -1,8 +1,8 @@
 .usage-overview {
-  --usage-level-1: #49325f;
-  --usage-level-2: #74509b;
-  --usage-level-3: #9f76c7;
-  --usage-level-4: #c79aed;
+  --usage-level-1: light-dark(#155d85, #49325f);
+  --usage-level-2: light-dark(#218dc0, #74509b);
+  --usage-level-3: light-dark(#61b8df, #9f76c7);
+  --usage-level-4: light-dark(#ade0f3, #c79aed);
   display: grid;
   gap: 24px;
   max-width: 1500px;
@@ -445,6 +445,15 @@
   grid-template-columns: repeat(auto-fit, minmax(295px, 1fr));
   gap: 14px;
   margin-top: 16px;
+}
+.overview-other-accounts {
+  margin-top: 16px;
+}
+.overview-other-accounts > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
 }
 .overview-account {
   border: 1px solid var(--border);

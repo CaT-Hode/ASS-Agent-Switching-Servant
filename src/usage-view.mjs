@@ -44,6 +44,14 @@ function add(to, row) {
   for (const s of row.sessions || []) to.sessions.add(s);
   to.observations++;
 }
+// Presentation/grouping only: retain the original IDs in native logs and the
+// encrypted usage cache. Historical router IDs are not routing aliases.
+export function usageModelName(model, client) {
+  if (typeof model !== "string") return "未标注";
+  if (client !== "codex") return model;
+  const routed = /^(?:ASS_[a-f0-9]{24}|aimami_relay_[a-f0-9]{8,64})::([^\x00-\x1f\x7f]+)$/.exec(model);
+  return routed ? routed[1] : model;
+}
 export function summarize(rows, options, now = new Date()) {
   const bounds = rangeBounds(options.range, now),
     total = empty(),
@@ -86,7 +94,7 @@ export function summarize(rows, options, now = new Date()) {
       }
     }
     const name =
-      options.group === "model" ? r.model : CLIENT_NAMES[r.client] || r.client;
+      options.group === "model" ? usageModelName(r.model, r.client) : CLIENT_NAMES[r.client] || r.client;
     const group = groups.get(name) || { name, ...empty() };
     add(group, r);
     groups.set(name, group);
@@ -135,6 +143,13 @@ export function summarize(rows, options, now = new Date()) {
     ),
   };
 }
+// Rank actual displayable data, not query capability or the presence of a key.
+export function overviewAccountPriority(row) {
+  return row.quotas.length ? 3 : row.amounts.length ? 2 : row.plan && row.plan.toLowerCase() !== "free" ? 1 : 0;
+}
+const validAmount = (f) =>
+  ["number", "string"].includes(typeof f?.value) &&
+  String(f.value).trim() !== "" && Number.isFinite(Number(f.value));
 export function overviewAccounts(state, clientFilter) {
   const accounts = new Map();
   for (const client of detectedClients(state)) {
@@ -149,38 +164,44 @@ export function overviewAccounts(state, clientFilter) {
       // The same bound API key in several clients has one shared balance.
       const key =
         a.kind === "api" ? "api:" + a.providerId : client.id + ":" + a.id;
-      if (accounts.has(key)) {
-        accounts.get(key).clients.push(client.name);
-        continue;
-      }
-      const fields = a.profile?.fields || [],
+      const fields = [...new Map([
+          ...(a.profile?.fields || []), ...(a.quota?.fields || []),
+        ].map((f) => [f.id, f])).values()],
         quota = a.quota || a.profile;
       const get = (id) => fields.find((f) => f.id === id)?.value;
       const balance = state.balances?.[a.providerId];
       const amounts = fields.filter(
-        (f) => f.id.startsWith("balance-") || f.id === "remaining",
+        (f) => (f.id?.startsWith("balance-") || f.id === "remaining") && validAmount(f),
       );
-      accounts.set(key, {
+      const row = {
         key,
         account: a,
         client,
         clients: [client.name],
         name: get("email") || get("name") || a.label,
         plan: accountPlan(a),
-        quotas: (quota?.fields || []).filter((f) => f.kind === "quota"),
+        quotas: fields.filter((f) => f.kind === "quota" && Number.isFinite(f.remainingPercent)),
         amounts: amounts.length
           ? amounts
           : balance?.ok
-            ? (balance.rows || [balance]).map((f, i) => ({
+            ? (balance.rows || [balance]).filter(validAmount).map((f, i) => ({
                 ...f,
                 id: "balance-" + i,
               }))
             : [],
-        updatedAt: quota?.updatedAt,
+        updatedAt: quota?.updatedAt || a.profile?.updatedAt || (balance?.ok ? balance.time : undefined),
         error: quota?.error,
         canRefresh: quota?.canRefresh || a.profile?.canRefresh,
-      });
+      };
+      const previous = accounts.get(key);
+      if (previous) {
+        const clients = [...new Set([...previous.clients, client.name])];
+        // A later binding may have a successful cached query while the first
+        // binding is still an empty native API profile. Keep the richer one.
+        const best = overviewAccountPriority(row) > overviewAccountPriority(previous) ? row : previous;
+        accounts.set(key, { ...best, clients });
+      } else accounts.set(key, row);
     }
   }
-  return [...accounts.values()];
+  return [...accounts.values()].sort((a, b) => overviewAccountPriority(b) - overviewAccountPriority(a));
 }

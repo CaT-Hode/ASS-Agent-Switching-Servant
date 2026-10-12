@@ -1,4 +1,5 @@
 import React from "react";
+import { AssLogo } from "./ass-logo.jsx";
 import {
   ArrowUpRight,
   Download,
@@ -65,7 +66,7 @@ export function Updates({ state, act, busy }) {
   return (
     <div className="updates-page">
       <section className="ass-brand-hero">
-        <img src="./ass-app-icon.png" alt="ASS 菊花标志" />
+        <AssLogo />
         <div>
           <div className="ass-wordmark">
             ASS<span>v{state.version}</span>

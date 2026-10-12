@@ -60,7 +60,7 @@
 .conversation-toolbar > .actions { margin-left: auto; }
 .conversation-tabs { display: flex; padding: 4px; gap: 3px; border: 1px solid var(--border); border-radius: 11px; background: var(--subtle); }
 .conversation-tabs button { border: 0; border-radius: 7px; background: transparent; padding: 9px 13px; display: flex; align-items: center; gap: 9px; color: var(--muted); }
-.conversation-tabs button[aria-pressed="true"] { background: var(--raised); color: var(--ink); box-shadow: var(--shadow-sm); }
+.conversation-tabs button[aria-pressed="true"] { background: light-dark(#d1d5d2, #303030); color: light-dark(#202522, #e4e8e5); box-shadow: var(--shadow-sm); }
 .conversation-tabs img { width: 18px; height: 18px; object-fit: contain; }
 :root[data-theme="dark"] .conversation-tabs img { filter: brightness(0) invert(1); }
 .conversation-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -231,3 +231,8 @@
 .conversation-history-confirm .actions { justify-content: flex-end; }
 .conversation-source-note { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 12px; line-height: 1.7; color: var(--muted); }
 .conversation-source-note small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.conversation-sync-scope { flex-shrink: 0; padding: 8px 14px; color: var(--muted); font-size: 11px; background: light-dark(#f3f3f2, #262727); }
+.conversation-sync-scope summary { cursor: pointer; }
+.conversation-sync-scope p { margin: 6px 0 0; line-height: 1.7; }
+.conversation-sync-scope label { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.conversation-sync-scope select { min-width: 0; color: inherit; background: var(--subtle); border: 0; border-radius: 6px; padding: 5px 7px; font: inherit; }

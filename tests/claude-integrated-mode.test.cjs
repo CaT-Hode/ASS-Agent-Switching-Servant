@@ -30,6 +30,7 @@ test("one accountless sync applies terminal and desktop; off restores both and p
   assert.equal(f.desktop.status(token, 25839, f.proxy.clients.claude.providers).current, true);
   assert.equal(f.proxy.status("claude", true).applied, true);
   const profile = JSON.parse(fs.readFileSync(f.desktop.profileFile(f.desktop.owner().id)));
+  assert.deepEqual(profile.coworkEgressAllowedHosts, ["*"]);
   assert.deepEqual(profile.inferenceModels.map(m => m.name), [
     ...claudeModels(f.proxy.clients.claude.providers).map(m => m.discoveryId),
   ]);

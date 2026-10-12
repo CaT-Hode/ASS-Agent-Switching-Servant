@@ -122,7 +122,10 @@ class ProjectConversations {
     if (!cached) await this.sync(id); const p = this.project(id);
     const filtered = p.threads.filter((t) => t.title.toLowerCase().includes(query.toLowerCase())).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return { ...this.summary(p), total: filtered.length, offset, items: filtered.slice(offset, offset + 40).map((t) => ({ id: t.id, title: t.title, count: t.refs.length, updatedAt: t.updatedAt,
-      branchOf: t.branchOf || '', originHarness: t.home?.harness || t.origins[0]?.harness, harnesses: [...new Set(t.origins.map((o) => o.harness))], projections: t.routes.map((r) => ({ harness: r.harness, mode: r.mode })) })) };
+      branchOf: t.branchOf || '', originHarness: t.home?.harness || t.origins[0]?.harness, harnesses: [...new Set(t.origins.map((o) => o.harness))],
+      contextNotice: t.contextNotice || '', priorContextCount: t.priorContexts?.length || 0,
+      sourceOmissions: t.sourceOmissions || [],
+      projections: t.routes.filter(r => !r.contextStale).map((r) => ({ harness: r.harness, mode: r.mode })) })) };
   }
   async records(id, { offset = 0, query = '', harness = '', pinned = false } = {}) {
     if (!Number.isInteger(offset) || offset < 0 || typeof query !== 'string' || query.length > 500 || (harness && !HARNESSES.includes(harness))) throw Error('会话查询无效');
@@ -263,16 +266,17 @@ class ProjectConversations {
     if (!Number.isInteger(before) || before < 0) throw Error('会话页码无效');
     return this.run('native-preview', { row: this.record(id), before });
   }
-  async preview(projectId, threadId, before = 0) {
+  async preview(projectId, threadId, before = 0, history = -1) {
     if (!Number.isInteger(before) || before < 0) throw Error('对话页码无效');
-    return this.serial(() => this.run('preview', { projectId, threadId, before }));
+    if (!Number.isInteger(history) || history < -1) throw Error('旧上下文索引无效');
+    return this.serial(() => this.run('preview', { projectId, threadId, before, history }));
   }
-  async prepare(projectId, threadId, harness, dir, nativeVersion = 1) {
+  async prepare(projectId, threadId, harness, dir, nativeVersion = 1, targetModel = '') {
     if (!HARNESSES.includes(harness) || !path.isAbsolute(dir)) throw Error('客户端目录无效');
     await this.sync(projectId);
     return this.serial(async () => {
       const p = this.project(projectId); if (!p.enabled || !p.targets.includes(harness)) throw Error('请先启用此项目与客户端的同步');
-      this.persist(); const plan = await this.run('prepare-plan', { projectId, threadId, harness, dir, nativeVersion });
+      this.persist(); const plan = await this.run('prepare-plan', { projectId, threadId, harness, dir, nativeVersion, targetModel });
       let r;
       if (plan.existing) {
         const old = this.state; this.state = plan.state;

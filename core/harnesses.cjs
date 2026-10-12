@@ -452,7 +452,7 @@ class HarnessManager {
     const seen = new Set();
     return sources.filter((s) => { const k = s.harness + "\0" + path.resolve(s.dir).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   }
-  projectConversationPlan(harness, cwd, sessionId = "123e4567-e89b-42d3-a456-426614174000", file = "") {
+  projectConversationPlan(harness, cwd, sessionId = "123e4567-e89b-42d3-a456-426614174000", file = "", options = {}) {
     if (["codex", "claude"].includes(harness)) return this.conversationPlan(harness, { harness, cwd, sessionId }, file);
     if (!["dsh", "opencode", "pi"].includes(harness) || !path.isAbsolute(cwd)) throw Error("项目或客户端无效");
     safePath(cwd); if (!fs.statSync(cwd).isDirectory()) throw Error("项目目录不存在");
@@ -464,6 +464,11 @@ class HarnessManager {
         if (this.nativeEnv[k]) env[k] = this.nativeEnv[k]; else delete env[k];
     }
     const piArgs = ['--session', file];
+    const targetModel = harness === 'opencode' ? require('./opencode-resume-model.cjs').currentModel({
+      home: this.nativeHome, env: this.nativeEnv, cwd, override: options.model,
+    }) : '';
+    if (harness === 'opencode' && sessionId !== '123e4567-e89b-42d3-a456-426614174000' && !targetModel)
+      throw Error('OpenCode 尚未选择当前模型，请先配置 provider/model；不会使用同步记录中的历史模型');
     if (harness === 'pi') {
       // Native pi restores a historical model unless the current defaults are explicit.
       try { const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
@@ -471,8 +476,8 @@ class HarnessManager {
       } catch (e) { if (e.code !== 'ENOENT') throw Error('pi 当前模型配置无法读取，未启动'); }
       piArgs.push('--session-dir', path.dirname(file || path.join(dir, 'sessions', 'placeholder')));
     }
-    return { harness, dir, workspace: cwd, env, files: [], expectInteractive: true,
-      args: harness === 'pi' ? piArgs : harness === 'opencode' ? ['--session', sessionId] : dshConfig.launchArgs(dshConfig.target(dir, this)),
+    return { harness, dir, workspace: cwd, env, files: [], expectInteractive: true, targetModel,
+      args: harness === 'pi' ? piArgs : harness === 'opencode' ? ['--session', sessionId, ...(targetModel ? ['--model', targetModel] : [])] : dshConfig.launchArgs(dshConfig.target(dir, this)),
       hint: harness === "dsh" ? `共享对话 ${sessionId} 已写入本机记录；请在 DSH 会话列表选择它。` : "继续 ASS 项目对话，使用当前客户端的登录与接入配置。" };
   }
   selectOAuthTarget(harness) {

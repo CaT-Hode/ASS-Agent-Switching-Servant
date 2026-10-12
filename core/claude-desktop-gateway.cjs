@@ -9,6 +9,10 @@ const POLICY = "HKCU\\SOFTWARE\\Policies\\Claude";
 const MACHINE_POLICY = "HKLM\\SOFTWARE\\Policies\\Claude";
 const names = ["inferenceProvider", "inferenceCredentialKind", "inferenceGatewayBaseUrl", "inferenceGatewayApiKey"];
 const modelNames = [...names, "inferenceModels", "modelDiscoveryEnabled"];
+const egressKey = "coworkEgressAllowedHosts";
+// Personal desktop deployments need normal tool networking. This is separate
+// from ASS's loopback-only, authenticated inference listener.
+const defaultEgress = ["*"];
 const uuid = /^[a-f0-9-]{36}$/;
 const hash = values => crypto.createHash("sha256").update(JSON.stringify(values)).digest("hex");
 const present = value => ({ exists: true, value });
@@ -16,10 +20,22 @@ const field = (data, name) => Object.hasOwn(data, name) ? present(data[name]) : 
 const json = text => document(text, "json").data;
 const localHash = data => {
   const keys = Object.keys(data);
-  const managed = keys.length === names.length && names.every(name => Object.hasOwn(data, name)) ? names
-    : keys.length === modelNames.length && modelNames.every(name => Object.hasOwn(data, name)) ? modelNames : null;
+  const managed = [names, modelNames, [...names, egressKey], [...modelNames, egressKey],
+    [...modelNames, "defaultModelEffort", egressKey]]
+    .find(candidate => keys.length === candidate.length && candidate.every(name => Object.hasOwn(data, name)));
   return managed ? hash(Object.fromEntries(managed.map(name => [name, data[name]]))) : "";
 };
+
+function validateEgress(hosts) {
+  if (!Array.isArray(hosts) || hosts.length > 500 || hosts.some(host => {
+    if (typeof host !== "string" || host.length > 260) return true;
+    if (host === "*") return false;
+    const match = /^(\*\.)?([a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?)(?::([0-9]{1,5}))?$/.exec(host);
+    return !match || match[2].split(".").some(label => !label || label.length > 63 || /^-|-$/.test(label)) ||
+      (match[3] && (+match[3] < 1 || +match[3] > 65535));
+  })) throw Error("Claude 工具联网域名无效，请使用主机名、*.域名或 *，不要填写 URL");
+  return [...new Set(hosts)];
+}
 
 function reg(args) {
   return execFileSync("reg.exe", args, { encoding: "utf8", windowsHide: true, maxBuffer: 32768, stdio: ["ignore", "pipe", "pipe"] });
@@ -38,7 +54,7 @@ function readPolicy(key) {
   }
   return values;
 }
-function desired(token, port, providers) {
+function desired(token, port, providers, egressHosts = defaultEgress) {
   if (!/^[a-f0-9]{64}$/.test(token || "") || !Number.isInteger(port) || port < 1 || port > 65535)
     throw Error("Claude 桌面版接入凭据尚未就绪");
   const profile = {
@@ -50,9 +66,14 @@ function desired(token, port, providers) {
   if (providers) {
     const models = claudeModels(providers);
     if (!models.length) throw Error("Claude 桌面版没有可接入的模型");
-    profile.inferenceModels = models.map(({ discoveryId, label }) => ({ name: discoveryId, labelOverride: label }));
+    profile.inferenceModels = models.map(({ discoveryId, label, maxEffort, supports1m, prefer1m }) => ({ name: discoveryId, labelOverride: label,
+      ...(supports1m ? { supports1m, prefer1m } : {}),
+      ...(maxEffort ? { maxEffort } : {}) }));
     profile.modelDiscoveryEnabled = false;
+    if (models[0].claudeIdentity && models[0].defaultEffort)
+      profile.defaultModelEffort = models[0].defaultEffort;
   }
+  profile[egressKey] = validateEgress(egressHosts);
   return profile;
 }
 function restorePolicy(policy, previous) {
@@ -114,7 +135,8 @@ class ClaudeDesktopGateway {
     if (owner?.version === 1) {
       const configured = names.every(name => user[name]?.type === "REG_SZ");
       const owned = configured && owner.hash === hash(Object.fromEntries(names.map(name => [name, user[name].value])));
-      return { configured, owned, current: !!(owned && !Object.keys(machine).length && token && owner.hash === hash(desired(token, port))), conflict: !!Object.keys(machine).length || !owned };
+      const expected = token ? Object.fromEntries(names.map(name => [name, desired(token, port)[name]])) : null;
+      return { configured, owned, current: !!(owned && !Object.keys(machine).length && expected && owner.hash === hash(expected)), conflict: !!Object.keys(machine).length || !owned };
     }
     const { meta, settings } = this.local();
     const profile = owner ? json(read(this.profileFile(owner.id))) : {};
@@ -122,7 +144,7 @@ class ClaudeDesktopGateway {
     const selected = !!owner && meta.appliedId === owner.id && !meta.hybridPointer;
     return {
       configured: owned, owned,
-      current: !!(owned && selected && settings.deploymentMode === "3p" && !managed && token && owner.hash === hash(desired(token, port, providers))),
+      current: !!(owned && selected && settings.deploymentMode === "3p" && !managed && token && owner.hash === hash(desired(token, port, providers, profile[egressKey] ?? defaultEgress))),
       conflict: managed || !!meta.hybridPointer || (!!meta.appliedId && !selected) || (!!owner && !owned),
     };
   }
@@ -152,13 +174,13 @@ class ClaudeDesktopGateway {
       throw Error(message + code + (restored ? "；原设置已恢复" : "；部分设置未恢复，请保留 ASS 数据目录"), { cause: error });
     } finally { this.invalidate(); }
   }
-  enable(token, port, providers) {
-    const plan = this.prepareEnable(token, port, providers);
+  enable(token, port, providers, egressHosts) {
+    const plan = this.prepareEnable(token, port, providers, egressHosts);
     this.commit(plan.changes, plan.owner, "Claude 桌面版本地配置写入失败");
     return { ok: true, message: "Claude 桌面版已配置。重新打开 Claude 后可通过 ASS 使用注入模型。" };
   }
-  prepareEnable(token, port, providers) {
-    const expected = desired(token, port, providers), owner = this.owner();
+  prepareEnable(token, port, providers, egressHosts) {
+    const owner = this.owner();
     if (owner?.version === 1) throw Error("请先移除旧版 Claude 桌面策略，再启用一体化无账号接入");
     this.invalidate();
     const { user, machine } = this.policies();
@@ -170,6 +192,9 @@ class ClaudeDesktopGateway {
       throw Error("Claude 桌面版已有生效的本地第三方配置，请先在桌面版中切换或移除该配置");
     if (owner ? localHash(json(profileText)) !== owner.hash : profileText !== null)
       throw Error("Claude 桌面版配置已被其他程序修改，ASS 未覆盖");
+    // Preserve an explicitly saved policy on later model/port/token syncs.
+    // Only a hash-verified ASS profile may supply this value.
+    const expected = desired(token, port, providers, egressHosts ?? json(profileText)[egressKey] ?? defaultEgress);
     const next = { version: 2, id, directory: this.directory, hash: hash(expected), before: owner?.before || {
       appliedId: field(local.meta, "appliedId"), mode: field(local.settings, "deploymentMode"),
       metaExisted: local.metaText !== null, settingsExisted: local.settingsText !== null,
@@ -233,8 +258,8 @@ class ClaudeDesktopGateway {
   }
   // Included in ProxyConfig's encrypted write-ahead transaction so CLI and
   // Desktop either commit together or are both restored after failure/crash.
-  plan(token, port, providers) {
-    const result = token ? this.prepareEnable(token, port, providers) : this.prepareDisable();
+  plan(token, port, providers, egressHosts) {
+    const result = token ? this.prepareEnable(token, port, providers, egressHosts) : this.prepareDisable();
     return [...result.changes, { file: this.file, before: read(this.file),
       after: result.owner ? JSON.stringify(result.owner, null, 2) + "\n" : null }]
       .filter(change => change.before !== change.after);

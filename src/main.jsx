@@ -33,6 +33,7 @@ import { DiagnosticTime } from "./diagnostic-time.jsx";
 import { Overview } from "./overview.jsx";
 import { latestSnapshot } from "./state-snapshot.mjs";
 import { ThemeControl, applyTheme } from "./theme.jsx";
+import { AssLogo } from "./ass-logo.jsx";
 import { DiagnosticDetails } from "./diagnostic-details.jsx";
 import "./theme.css";
 import "./motion.css";
@@ -401,7 +402,7 @@ function App() {
     updates: "关于 ASS",
   }[view];
   const brand = <div className="brand">
-    <img src="./ass-app-icon.png" alt="ASS 菊花标志" />
+    <AssLogo />
     <div><div className="brand-title"><strong>ASS</strong>
       <button className="version-button" aria-label="查看 ASS 版本与更新" title={state.updates.available ? "发现新版本" : "版本与更新"} onClick={() => setView("updates")}>
         {state.updates.available && <span className="update-dot" />}v{state.version}

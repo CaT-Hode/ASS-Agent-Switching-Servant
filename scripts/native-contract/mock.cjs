@@ -1,5 +1,5 @@
 const http = require('node:http');
-async function mock() {
+async function mock({ multiBlock = false } = {}) {
   const requests = [];
   const server = http.createServer(async (req, res) => {
     let text = ''; for await (const b of req) text += b;
@@ -17,9 +17,12 @@ async function mock() {
     res.setHeader('content-type', 'text/event-stream');
     if (req.url.includes('messages')) {
       emit('message_start', { message: { id: 'msg_contract', type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 8, output_tokens: 0 } } });
-      emit('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
-      emit('content_block_delta', { index: 0, delta: { type: 'text_delta', text: content } });
-      emit('content_block_stop', { index: 0 }); emit('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } }); emit('message_stop', {});
+      for (const [index, text] of (multiBlock ? ['NATIVE_BLOCK_ZERO 中文', 'NATIVE_BLOCK_ONE'] : [content]).entries()) {
+        emit('content_block_start', { index, content_block: { type: 'text', text: '' } });
+        emit('content_block_delta', { index, delta: { type: 'text_delta', text } });
+        emit('content_block_stop', { index });
+      }
+      emit('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } }); emit('message_stop', {});
     } else if (req.url.includes('responses')) {
       const response = { id: 'resp_contract', object: 'response', status: 'completed', model: body.model,
         output: [{ id: 'msg_contract', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: content, annotations: [] }] }],

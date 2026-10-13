@@ -1,20 +1,21 @@
-// Low endpoint velocity and a lower peak avoid a front-loaded sweep and a
-// perceptible jump when the last few pixels of the snapshot are removed.
-export const THEME_REVEAL_DURATION = 960;
-export const THEME_REVEAL_EASING = 'cubic-bezier(.4,0,.6,1)';
+// One acceleration peak across the entire radius track, followed by a long
+// deceleration to zero. Never append a second, faster overscan expansion.
+export const THEME_REVEAL_DURATION = 2000;
+export const THEME_REVEAL_EASING = 'cubic-bezier(.2,0,.55,1)';
+export const THEME_REVEAL_HOLD_OFFSET = .98;
 
 export function themeRevealGeometry(origin, width, height) {
   width = Math.max(1, Number.isFinite(width) ? width : 1);
   height = Math.max(1, Number.isFinite(height) ? height : 1);
   const bounds = origin?.getBoundingClientRect?.();
   const point = bounds ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 } : origin;
-  const x = Math.max(0, Math.min(width, Number.isFinite(point?.x) ? point.x : Math.min(100, width / 2)));
-  const y = Math.max(0, Math.min(height, Number.isFinite(point?.y) ? point.y : Math.max(0, height - 38)));
-  const farthest = Math.hypot(Math.max(x, width - x), Math.max(y, height - y));
-  // Cover the corners before the snapshot is removed, not exactly at that
-  // instant. A 2px mathematical margin leaves no useful paint/rounding buffer.
-  const overscan = Math.max(32, Math.min(96, farthest * .06));
-  return { x, y, radius: farthest + overscan };
+  const x = Math.max(0, Math.min(width, Number.isFinite(point?.x) ? point.x : width / 2));
+  const y = Math.max(0, Math.min(height, Number.isFinite(point?.y) ? point.y : height / 2));
+  const diagonal = Math.hypot(width, height);
+  // A single endpoint exceeds the full diagonal, including a centered trigger.
+  // Overscan belongs in that endpoint, not a short, separately accelerated leg.
+  return { x, y, xPercent: x / width * 100, yPercent: y / height * 100,
+    radius: diagonal * 2 + 96 };
 }
 
 // Chromium can retarget pointer hit-testing to <html> while the root is being
@@ -79,32 +80,47 @@ export function createThemeReveal({ document: doc, viewport, reducedMotion }) {
   };
   return {
     run(commit, origin, { animate = true } = {}) {
+      // Native theme/media echoes can arrive after the new color has already
+      // been committed. They must not tear down that color's in-flight mask.
+      if (!animate && active?.applied && !doc.hidden && !reducedMotion()) {
+        commit(); return active.transition;
+      }
       const interrupted = active;
       const ticket = ++generation;
       if (interrupted) skip(interrupted);
-      let applied = false;
+      let applied = false, entry;
       const applyOnce = () => {
         if (applied || ticket !== generation) return;
-        applied = true; commit();
+        applied = true; if (entry) entry.applied = true; commit();
       };
       // Rapid input stays usable. Finish directly at the latest requested
       // theme rather than queueing old full-screen snapshots behind the user.
       if (interrupted || !animate || doc.hidden || reducedMotion() || typeof doc.startViewTransition !== 'function') {
         applyOnce(); return null;
       }
-      const geometry = themeRevealGeometry(origin, viewport().width, viewport().height);
-      const entry = { transition: null, animation: null, applyOnce };
+      const size = viewport();
+      const geometry = themeRevealGeometry(origin, size.width, size.height);
+      entry = { transition: null, animation: null, applyOnce, applied: false, ...size };
       active = entry; root.setAttribute('data-theme-reveal', 'circle');
       try { entry.transition = doc.startViewTransition(applyOnce); }
       catch { applyOnce(); clear(entry); return null; }
       entry.transition.ready.then(() => {
         if (active !== entry || ticket !== generation) return;
-        const { x, y, radius } = geometry;
         try {
-          const full = `circle(${radius}px at ${x}px ${y}px)`;
-          entry.animation = root.animate({ clipPath: [
-            `circle(0px at ${x}px ${y}px)`, full, full,
-          ], offset: [0, .99, 1] }, { duration: THEME_REVEAL_DURATION, easing: THEME_REVEAL_EASING,
+          const style = doc.defaultView?.getComputedStyle?.(root, '::view-transition-new(root)');
+          const cssWidth = parseFloat(style?.width), cssHeight = parseFloat(style?.height);
+          const width = Math.max(size.width, Number.isFinite(cssWidth) ? cssWidth : 0);
+          const height = Math.max(size.height, Number.isFinite(cssHeight) ? cssHeight : 0);
+          const { xPercent, yPercent, radius } = themeRevealGeometry({ x: geometry.x, y: geometry.y }, width, height);
+          // The snapshot is a replaced pseudo-element, not the button's DOM
+          // coordinate space. Its viewport-pinned box owns the clip center.
+          const center = `${xPercent}% ${yPercent}%`;
+          const full = `circle(${radius}px at ${center})`;
+          entry.animation = root.animate([
+            { clipPath: `circle(0px at ${center})`, offset: 0, easing: THEME_REVEAL_EASING },
+            { clipPath: full, offset: THEME_REVEAL_HOLD_OFFSET },
+            { clipPath: full, offset: 1 },
+          ], { duration: THEME_REVEAL_DURATION, easing: 'linear',
             pseudoElement: '::view-transition-new(root)', fill: 'both' });
         } catch { applyOnce(); skip(entry); }
       }, () => { applyOnce(); skip(entry); });
@@ -114,6 +130,11 @@ export function createThemeReveal({ document: doc, viewport, reducedMotion }) {
     cancel() {
       if (!active) return;
       active.applyOnce(); ++generation; skip(active);
+    },
+    resize() {
+      if (!active) return;
+      const size = viewport();
+      if (Math.abs(size.width - active.width) > 2 || Math.abs(size.height - active.height) > 2) this.cancel();
     },
   };
 }

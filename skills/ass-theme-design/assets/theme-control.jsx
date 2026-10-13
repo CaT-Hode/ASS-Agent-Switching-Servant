@@ -20,7 +20,7 @@ function revealTheme(theme, origin, onCommit, resolved = resolvedTheme(theme)) {
   if (!reveal) {
     reveal = createThemeReveal({ document, viewport: () => ({ width: innerWidth, height: innerHeight }),
       reducedMotion: () => matchMedia('(prefers-reduced-motion: reduce)').matches });
-    window.addEventListener('resize', () => reveal.cancel());
+    window.addEventListener('resize', () => reveal.resize());
     document.addEventListener('visibilitychange', () => { if (document.hidden) reveal.cancel(); });
   }
   return reveal.run(() => { applyTheme(theme, resolved); onCommit?.(); }, origin,
@@ -62,8 +62,9 @@ export function ThemeControl({ value = "system", onChange }) {
     const media = matchMedia("(prefers-color-scheme: dark)");
     const update = () => {
       setSystemDark(media.matches);
-      if (document.documentElement.dataset.theme === 'system')
-        revealTheme('system', button.current, undefined, media.matches ? 'dark' : 'light');
+      const resolved = media.matches ? 'dark' : 'light';
+      if (document.documentElement.dataset.theme === 'system' && document.documentElement.dataset.colorTheme !== resolved)
+        revealTheme('system', button.current, undefined, resolved);
     };
     media.addEventListener("change", update); update();
     return () => media.removeEventListener("change", update);
@@ -148,7 +149,7 @@ export function ThemeControl({ value = "system", onChange }) {
         const bounds = event.currentTarget.getBoundingClientRect();
         commit(event.detail === 0 ? nextMode : themeAtPoint(event.clientX, bounds.left, bounds.width), {
           instant: event.detail === 0 || instantaneous(),
-          origin: event.detail === 0 ? button.current : { x: event.clientX, y: event.clientY },
+          origin: event.currentTarget,
         });
       }}>
       <svg className="theme-sky" viewBox="0 0 216 40" preserveAspectRatio="none" aria-hidden="true">

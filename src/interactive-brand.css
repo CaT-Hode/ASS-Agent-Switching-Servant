@@ -1,0 +1,66 @@
+.brand-interactive {
+  --brand-power: 0; --brand-turn: 0deg; --brand-x: 0px; --brand-y: 0px;
+  --brand-tilt: 0deg; --brand-wave: 0px; --brand-hue: 0deg;
+  --brand-light-x: 50%; --brand-light-y: 50%;
+  --brand-spectrum: conic-gradient(from var(--brand-hue) at var(--brand-light-x) var(--brand-light-y),
+    hsl(24 82% 61%), hsl(328 65% 65%), hsl(267 67% 69%), hsl(204 76% 65%), hsl(165 48% 55%), hsl(24 82% 61%));
+  -webkit-app-region: no-drag;
+}
+.brand-interactive .ass-logo {
+  rotate: var(--brand-turn);
+  translate: var(--brand-x) var(--brand-y);
+  scale: calc(1 + var(--brand-power) * .05);
+}
+.brand-logo-color {
+  position: absolute; inset: 0; pointer-events: none;
+  mask-size: 100% 100%; mask-position: center; mask-repeat: no-repeat;
+  background: var(--brand-spectrum); opacity: var(--brand-power);
+}
+.brand-interactive .brand-title { align-items: center; }
+.brand-interactive .brand-wordmark,
+.window-chrome .brand .brand-wordmark {
+  display: inline-flex; align-items: baseline; position: relative;
+  font-family: 'Gabriola', 'Segoe Script', 'Palatino Linotype', cursive;
+  font-size: 40px; font-weight: 400; line-height: 1; letter-spacing: -.8px;
+  font-feature-settings: 'calt' 1, 'swsh' 1, 'ss06' 1;
+  font-optical-sizing: auto; font-synthesis: none;
+  white-space: nowrap; overflow: visible;
+}
+.brand-letter {
+  display: inline-block; position: relative; transform-origin: 50% 72%;
+  transform: translateY(calc(var(--brand-wave) * var(--letter-direction)))
+    rotate(calc(var(--brand-tilt) * var(--letter-direction)))
+    skewX(calc(var(--brand-tilt) * -.8));
+}
+.brand-letter:nth-child(1) { --letter-direction: -.7; }
+.brand-letter:nth-child(2) { --letter-direction: .25; }
+.brand-letter:nth-child(3) { --letter-direction: .8; }
+.brand-letter::after {
+  content: attr(data-letter); position: absolute; inset: 0;
+  background: var(--brand-spectrum); background-clip: text; color: transparent;
+  opacity: calc(var(--brand-power) * .9); pointer-events: none;
+}
+.brand-interactive .version-button {
+  position: relative;
+  rotate: calc(var(--brand-tilt) * -.55);
+  translate: calc(var(--brand-x) * .3) calc(var(--brand-power) * -1.5px);
+}
+.brand-version-label { position: relative; }
+.brand-version-label::after {
+  content: attr(data-version); position: absolute; inset: 0;
+  background: var(--brand-spectrum); background-clip: text; color: transparent;
+  opacity: var(--brand-power); pointer-events: none;
+}
+.brand-interactive .version-button::after {
+  content: ''; position: absolute; left: 2px; right: 2px; bottom: 1px; height: 1px;
+  background: var(--brand-spectrum); opacity: calc(var(--brand-power) * .65);
+  transform: scaleX(var(--brand-power)); transform-origin: var(--brand-light-x) 50%;
+  pointer-events: none;
+}
+.brand-interactive[data-brand-active] .ass-logo,
+.brand-interactive[data-brand-active] .brand-letter { will-change: transform; }
+@media (prefers-reduced-motion: reduce) {
+  .brand-interactive .ass-logo { rotate: none; translate: none; scale: 1; }
+  .brand-interactive .brand-letter { transform: none; }
+  .brand-interactive .version-button { rotate: none; translate: none; }
+}

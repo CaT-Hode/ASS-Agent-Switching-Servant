@@ -20,7 +20,7 @@ test("eight individually traced petals become narrower while keeping their radia
     assert.ok(Math.abs(span(next, tangent) / span(original, tangent) - 0.93) < 0.001);
     assert.ok(Math.abs(span(next, axis) / span(original, axis) - 1) < 0.001);
   }
-  assert.ok(SPEC.gap > 16); assert.ok(SPEC.holeRadius < 132);
+  assert.ok(SPEC.gap > 16);
   assert.equal((svg.match(/id="petal-\d+"/g) || []).length, 8);
   assert.ok(svg.includes('mask="url(#petal-cutouts)"'));
   assert.equal((svg.match(/fill="#000000"/g) || []).length, 9);
@@ -39,18 +39,16 @@ test("actual petal-root facets AND all eight gap-width bridges share the same hu
     assert.ok(hub[i].every(Number.isFinite));
   }
 });
-test("fitted hub stays clear of narrowed Bezier petals and keeps a substantial inward-thickened circular band", () => {
-  const { hub, roots } = createGeometry();
+test("enlarged fitted hub stays clear of the shared petal clipping perimeter and keeps a substantial circular band", () => {
+  const { hub, perimeter } = createGeometry();
   let closest = Infinity;
   for (let i = 0; i < hub.length; i++) {
     const a = hub[i], b = hub[(i + 1) % hub.length];
     for (let step = 0; step <= 4; step++) {
       const p = a.map((v, k) => v + (b[k] - v) * step / 4);
       assert.ok(Math.hypot(...sub(p, SPEC.center)) > SPEC.holeRadius + 32);
-      for (const { samples } of roots) {
-        for (let j = 0; j < samples.length; j++) closest = Math.min(closest,
-          pointSegmentDistance(p, samples[j], samples[(j + 1) % samples.length]));
-      }
+      for (let j = 0; j < perimeter.length; j++) closest = Math.min(closest,
+        pointSegmentDistance(p, perimeter[j], perimeter[(j + 1) % perimeter.length]));
     }
   }
   assert.ok(closest >= SPEC.gap - SPEC.simplifyTolerance - 1.1, `hub clearance: ${closest}`);

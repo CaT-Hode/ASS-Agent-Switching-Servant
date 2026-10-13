@@ -33,6 +33,7 @@ import { DiagnosticTime } from "./diagnostic-time.jsx";
 import { Overview } from "./overview.jsx";
 import { latestSnapshot } from "./state-snapshot.mjs";
 import { ThemeControl, applyTheme } from "./theme.jsx";
+import { InteractiveBrand } from "./interactive-brand.jsx";
 import { AssLogo } from "./ass-logo.jsx";
 import { WindowControls } from "./window-controls.jsx";
 import { DiagnosticDetails } from "./diagnostic-details.jsx";
@@ -402,14 +403,14 @@ function App() {
     diagnostics: "连接诊断",
     updates: "关于 ASS",
   }[view];
-  const brand = <div className="brand">
-    <AssLogo />
-    <div><div className="brand-title"><strong>ASS</strong>
+  const brand = <InteractiveBrand>
+    <AssLogo interactive />
+    <div><div className="brand-title"><strong className="brand-wordmark" aria-label="ASS"><span className="brand-letter" data-letter="A">A</span><span className="brand-letter" data-letter="S">S</span><span className="brand-letter" data-letter="S">S</span></strong>
       <button className="version-button" aria-label="查看 ASS 版本与更新" title={state.updates.available ? "发现新版本" : "版本与更新"} onClick={() => setView("updates")}>
-        {state.updates.available && <span className="update-dot" />}v{state.version}
+        {state.updates.available && <span className="update-dot" />}<span className="brand-version-label" data-version={`v${state.version}`}>v{state.version}</span>
       </button>
     </div><small>AI 路由</small></div>
-  </div>;
+  </InteractiveBrand>;
   return (
     <div
       className="app-shell"

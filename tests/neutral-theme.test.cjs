@@ -21,7 +21,7 @@ test('quota dark appearance and animation stay unchanged while explicit light pa
   // Snapshot of v0.2.13, independent of Git history / shallow checkouts.
   const css = fs.readFileSync(path.join(src, 'usage-meter.css'), 'utf8').replaceAll('\r\n', '\n');
   const overrides = ['light-dark(#147cba, #7555d7)', 'light-dark(#389dce, #9866de)', 'light-dark(#80d0ee, #b68bdd)', 'light-dark(#effaff, #f4ebff)'];
-  let dark = css;
+  let dark = css.replace(/^:root\[data-color-theme="light"\] \.usage-meter-fill \{[^}]*\}\n/m, '');
   for (const value of overrides) {
     assert.ok(css.includes(value), 'missing explicit light/dark palette: ' + value);
     dark = dark.replaceAll(value, value.match(/, (#[\da-f]+)\)/)[1]);
@@ -76,7 +76,7 @@ test('theme logo preserves the authoritative petals and orange hub without recol
   assert.ok(component.includes('../public/ass-logo.svg?raw') && component.includes('hub-fitted'));
   assert.ok(component.includes('./ass-app-icon.png') && component.includes('aria-hidden="true"'));
   assert.ok(css.includes('background: light-dark(#151515, transparent)'));
-  for (const file of ['main.jsx', 'updates.jsx']) assert.ok(fs.readFileSync(path.join(src, file), 'utf8').includes('<AssLogo />'));
+  for (const file of ['main.jsx', 'about-brand.jsx']) assert.match(fs.readFileSync(path.join(src, file), 'utf8'), /<AssLogo(?: interactive)? \/>/);
 });
 
 test('only light heatmaps and their legend go from light for less activity to dark for more', () => {

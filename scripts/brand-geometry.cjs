@@ -6,8 +6,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const SPEC = Object.freeze({
   size: 1254, center: [626.5, 627], petals: 8, gap: 20, petalWidthScale: 0.93,
-  rootDepth: 32, simplifyTolerance: 1.5, holeRadius: 116,
-  petalColor: "#ffffff", petalOutlineWidth: 50, canvasPadding: 32, hubColor: "#dc782f",
+  rootDepth: 32, simplifyTolerance: 1.5, holeRadius: 132, centerScale: 1.24,
+  petalColor: "#ffffff", petalOutlineWidth: 80, canvasPadding: 64, hubColor: "#dc782f",
 });
 const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
@@ -108,7 +108,9 @@ function createGeometry() {
   const perimeter = [], kinds = [];
   for (const root of roots) {
     for (let i = 0; i < root.contour.length; i++) {
-      perimeter.push(root.contour[i]);
+      // Enlarge the fitted center and its clearance mask together. The traced
+      // petal curves remain intact; only their concealed roots are clipped.
+      perimeter.push(add(SPEC.center, mul(sub(root.contour[i], SPEC.center), SPEC.centerScale)));
       kinds.push(i + 1 < root.contour.length ? { type: "petal", id: root.id } : { type: "gap", id: root.id });
     }
   }

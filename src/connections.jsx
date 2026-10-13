@@ -65,6 +65,11 @@ function ExitDialog({ onClose }) {
       try {
         const value = await api.call("app-exit-preview");
         if (!active) return;
+        if (value.canDirectExit) {
+          setBusy("direct");
+          await api.call("app-exit-direct", true);
+          return;
+        }
         setStatus(value);
         if (value.error) { setError(value.error); return; }
         if (value.safeNeeded) {

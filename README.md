@@ -6,7 +6,7 @@
 
 ASS（Agent-Switching-Servant）是你的 Windows 桌面 AI 路由与账户助手。把模型、API 凭据与官方授权放到一个独立窗口，切换客户端时不必反复搬配置。关闭窗口后继续在托盘运行。
 
-v0.3.15 去掉主题动画末尾的第二次快速扩张，全程以一条曲线放大并减速到零；最终半径保持大于窗口对角线。配色、太阳 / 月亮 / 可选黄昏按钮和切换效果同步更新在 [ass-theme-design skill](skills/ass-theme-design/SKILL.md)。详见 [v0.3.15 发布说明](docs/release-v0.3.15.md)。
+v0.3.23 将关于页彩蛋改为绿色短裤、紫色花纹与橙色双瓣的独立 SVG；logo 从中间线条交汇处旋转长出，缩放和转动时保持位置对齐。保留同步收拢、淡出、字母互动与主题切换。详见 [v0.3.23 发布说明](docs/release-v0.3.23.md)，可复用主题见 [ass-theme-design skill](skills/ass-theme-design/SKILL.md)。
 
 v0.3.5 的 Codex 跨供应商历史思考项及运行中归档删除修复继续保留。删除仅二级确认，不再新增恢复备份。详见 [v0.3.5 发布说明](docs/release-v0.3.5.md)。
 

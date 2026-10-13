@@ -3,6 +3,7 @@
 .usage-meter[data-period="week"] { --quota-start: light-dark(#147cba, #7555d7); --quota-middle: light-dark(#389dce, #9866de); --quota-end: light-dark(#80d0ee, #b68bdd); }
 .usage-meter[data-period="month"] { --quota-start: #198c91; --quota-middle: #21a9a3; --quota-end: #67c6af; }
 .usage-meter-fill { position: absolute; inset: 0 auto 0 0; width: var(--quota-fill); min-width: 0; overflow: hidden; border-radius: inherit; background: linear-gradient(105deg, var(--quota-start) 0%, var(--quota-middle) 43%, var(--quota-end) 100%); box-shadow: inset 0 1px 1px #fff3; transition: width 700ms cubic-bezier(.2,.7,.2,1); }
+:root[data-color-theme="light"] .usage-meter-fill { background: linear-gradient(105deg, var(--quota-end) 0%, var(--quota-middle) 57%, var(--quota-start) 100%); }
 .usage-meter-light { position: absolute; inset: -40% -20%; background: radial-gradient(ellipse at 45% 50%, #ffffff52, transparent 62%); animation: quota-light 8s ease-in-out infinite alternate; animation-play-state: paused; }
 .usage-meter-star { position: absolute; left: var(--star-x); top: var(--star-y); width: 2px; height: 2px; border-radius: 50%; background: light-dark(#effaff, #f4ebff); opacity: .48; animation: quota-star 5.5s ease-in-out var(--star-delay) infinite; animation-play-state: paused; }
 .usage-meter.visible .usage-meter-light, .usage-meter.visible .usage-meter-star { animation-play-state: running; }

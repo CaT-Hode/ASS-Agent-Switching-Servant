@@ -881,7 +881,33 @@ function showWindow() {
     window = null;
   });
 }
+function exitStatus() {
+  const status = connections.exitStatus();
+  try {
+    if (claudeDesktop.owner()) {
+      status.safeNeeded = true;
+      status.names.push("Claude 桌面版");
+      claudeDesktop.preflightDisable();
+    }
+  } catch (error) {
+    status.safeNeeded = true;
+    status.error = error.message;
+  }
+  status.canDirectExit = !status.safeNeeded && !status.error && status.active === 0 && !connections.busy;
+  return status;
+}
+function finishDirectExit() {
+  quitting = true;
+  setImmediate(() => app.quit());
+}
 function requestExit() {
+  if (quitting) return;
+  try {
+    if (exitStatus().canDirectExit) {
+      connections.directExit(true, finishDirectExit);
+      return;
+    }
+  } catch { /* The confirmation flow will display the inspection error. */ }
   showWindow();
   const request = () =>
     window?.webContents.send("ass:manage", {
@@ -1139,25 +1165,11 @@ else {
           await nativeLogin.assertIdle(id);
         return connections.repairApply(input);
       });
-      register("app-exit-preview", () => {
-        const status = connections.exitStatus();
-        try {
-          if (claudeDesktop.owner()) {
-            status.safeNeeded = true;
-            status.names.push("Claude 桌面版");
-            claudeDesktop.preflightDisable();
-          }
-        } catch (error) {
-          status.safeNeeded = true;
-          status.error = error.message;
-        }
-        return status;
-      });
+      register("app-exit-preview", exitStatus);
       register("app-exit-direct", (acknowledged) => connections.directExit(acknowledged, () => {
         // Intentionally do not run connection-apply or change any persisted
         // injection, accountless, desktop-gateway or connection-enabled state.
-        quitting = true;
-        setImmediate(() => app.quit());
+        finishDirectExit();
       }));
       register("connection-apply", async (input) => {
         const plan = connections.tickets.get(input?.ticket);
@@ -1740,6 +1752,7 @@ else {
           protocols,
           prepareProtocols,
           balance,
+          requestExit,
           snapshot,
           upstream,
           readAuth,

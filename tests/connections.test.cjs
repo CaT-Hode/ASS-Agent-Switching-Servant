@@ -146,6 +146,22 @@ test("safe exit is offered only for proxy configuration, proxy windows, or unres
   assert.equal(f.connections.exitStatus().safeNeeded, true);
   assert.equal(f.processes.refreshCalls, 0);
 });
+
+test("automatic direct exit is available only without dependencies, requests, or an in-flight configuration write", t => {
+  const f = connectionFixture(t);
+  assert.equal(f.connections.exitStatus().canDirectExit, true);
+  f.router.active.diagnostics = 1;
+  assert.equal(f.connections.exitStatus().canDirectExit, false);
+  f.router.active.diagnostics = 0;
+  f.connections.busy = true;
+  assert.equal(f.connections.exitStatus().canDirectExit, false);
+  f.connections.busy = false;
+  f.connections.enabled.codex = true;
+  assert.equal(f.connections.exitStatus().canDirectExit, false);
+  f.connections.enabled.codex = false;
+  f.connections.error = "unresolved state";
+  assert.equal(f.connections.exitStatus().canDirectExit, false);
+});
 test("connection enable and disable restart only with explicit per-operation opt-in", async (t) => {
   const r = fakeRestarter(), f = connectionFixture(t, { restarter: r });
   const first = await f.connections.preview("codex", true);

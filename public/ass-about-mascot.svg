@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="-25 215 800 800" role="img" aria-labelledby="ass-mascot-title">
+  <title id="ass-mascot-title">ASS cartoon mascot in lime shorts</title>
+  <defs>
+    <linearGradient id="ass-mascot-skin" x1="0" y1="0" x2=".16" y2="1">
+      <stop stop-color="#ffce98"/><stop offset=".45" stop-color="#ffb16d"/><stop offset="1" stop-color="#e97337"/>
+    </linearGradient>
+    <linearGradient id="ass-mascot-cheek" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#ffdfb8"/><stop offset=".65" stop-color="#ffc08e"/><stop offset="1" stop-color="#f38a57"/>
+    </linearGradient>
+    <linearGradient id="ass-mascot-shorts" x1="0" y1="0" x2=".12" y2="1">
+      <stop stop-color="#c9ee34"/><stop offset=".5" stop-color="#aedb15"/><stop offset="1" stop-color="#63a208"/>
+    </linearGradient>
+    <linearGradient id="ass-mascot-patch" x1="0" y1="0" x2=".2" y2="1">
+      <stop stop-color="#ce45b3"/><stop offset="1" stop-color="#a82796"/>
+    </linearGradient>
+    <path id="ass-mascot-shorts-shape" d="M17 571C1 569 12 540 10 527C17 429 64 352 154 319C238 288 320 320 375 382C432 316 507 292 586 315C675 340 731 418 742 518C745 541 744 561 738 570L718 566C711 525 658 488 601 484C501 474 426 528 375 615C324 526 249 474 148 484C89 487 39 523 28 569Z"/>
+    <!-- This opening replaces the red inset. Its top junction is the emergence origin. -->
+    <path id="ass-mascot-seam" d="M375 615C366 628 356 641 347 648C357 664 369 686 375 701C383 680 396 662 411 650C396 640 382 626 375 615Z"/>
+    <clipPath id="ass-mascot-shorts-clip"><use href="#ass-mascot-shorts-shape"/></clipPath>
+    <mask id="ass-mascot-open-seam" maskUnits="userSpaceOnUse" x="-25" y="215" width="800" height="800" style="mask-type:luminance">
+      <rect x="-25" y="215" width="800" height="800" fill="white"/>
+      <use href="#ass-mascot-seam" fill="black"/>
+    </mask>
+  </defs>
+  <g mask="url(#ass-mascot-open-seam)" stroke="#42133f" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Preserve the reference's broad, slightly asymmetric lower silhouette. -->
+    <path d="M37 509C17 624 56 720 127 805C193 884 285 951 375 990C472 946 568 881 637 799C706 717 737 617 716 508C592 436 477 493 375 611C271 493 159 436 37 509Z" fill="url(#ass-mascot-skin)" stroke-width="17"/>
+    <path d="M51 519C39 634 91 736 157 809C224 884 300 938 357 962C373 922 379 875 377 832C348 898 345 917 318 902C224 863 150 786 107 709C74 651 68 583 77 512Z" fill="#fff0c0" stroke="none"/>
+    <path d="M56 529C50 628 91 733 166 811C230 877 298 926 350 950C373 902 380 790 357 710C345 677 338 665 330 660C268 699 179 693 134 651C96 616 68 561 56 529Z" fill="#f49651" stroke="none"/>
+    <path d="M83 630C105 744 235 860 303 884C325 892 339 871 348 842C360 800 352 747 344 718C332 678 307 686 281 692C206 710 137 681 83 630Z" fill="#ffc287" stroke="none" opacity=".81"/>
+    <path d="M694 515C711 628 663 733 594 811C531 881 451 941 387 970L395 940C474 905 545 836 599 770C659 696 685 607 669 511Z" fill="#fff0bd" stroke="none"/>
+    <path d="M674 543C688 641 633 752 562 820C509 870 456 901 419 924C434 865 442 780 413 707C406 685 410 674 423 666C471 695 535 693 582 665C623 641 654 595 674 543Z" fill="#f39450" stroke="none"/>
+    <path d="M655 635C641 728 544 843 461 879C438 890 425 895 429 876C438 821 437 764 421 717C414 691 425 688 448 693C520 711 599 680 655 635Z" fill="#ffc48a" stroke="none" opacity=".8"/>
+    <!-- Soft upper lobes and the flatter cream highlights of the supplied art. -->
+    <path d="M94 503C162 475 287 504 344 580C354 593 359 603 355 613C329 640 281 651 236 650C164 649 111 625 94 588C83 563 80 520 94 503Z" fill="url(#ass-mascot-cheek)" stroke="#efa66c" stroke-width="6"/>
+    <path d="M663 503C591 475 471 506 411 582C400 595 394 606 399 615C426 640 473 651 519 650C587 649 640 625 659 587C673 560 675 519 663 503Z" fill="url(#ass-mascot-cheek)" stroke="#efa66c" stroke-width="6"/>
+    <path d="M119 514C149 494 224 507 264 530C281 539 290 559 275 563C239 548 194 543 151 545C127 546 113 562 107 553C101 541 105 525 119 514Z" fill="#ffe5c2" stroke="none" opacity=".72"/>
+    <path d="M634 514C596 495 528 508 484 535C470 544 466 564 481 568C528 548 574 543 611 545C631 545 645 553 648 543C651 532 646 520 634 514Z" fill="#ffe6c2" stroke="none" opacity=".72"/>
+    <path d="M147 644C215 688 296 682 347 648M411 650C465 683 532 680 592 647" fill="none" stroke-width="14"/>
+    <path d="M152 640C211 670 295 670 359 621M394 621C452 670 531 668 594 642" fill="none" stroke="#fff0ce" stroke-width="6"/>
+    <path d="M167 662C228 696 294 687 335 664M423 667C466 693 527 688 570 670" fill="none" stroke="#e78749" stroke-width="5"/>
+    <!-- Below the small central opening the body is closed, not cut through. -->
+    <path d="M375 701C399 780 402 888 375 982" fill="none" stroke-width="15"/>
+    <path d="M366 710C389 793 389 886 365 965" fill="none" stroke="#fff0c0" stroke-width="5"/>
+    <use href="#ass-mascot-seam" fill="none" stroke-width="15"/>
+    <use href="#ass-mascot-shorts-shape" fill="url(#ass-mascot-shorts)" stroke-width="16"/>
+    <g clip-path="url(#ass-mascot-shorts-clip)">
+      <path d="M59 429C89 374 161 323 215 333C250 337 213 366 265 380C290 387 326 382 345 406C253 389 157 399 88 434C67 445 59 439 59 429Z" fill="#e0f659" stroke="none"/>
+      <path d="M398 470C411 414 459 345 501 333C563 320 639 355 681 415C691 428 672 433 657 424C583 397 487 409 430 457Z" fill="#def255" stroke="none"/>
+      <path d="M82 467C158 439 257 459 319 518L336 545C254 485 165 463 85 493Z" fill="#79b908" stroke="none"/>
+      <path d="M424 531C489 470 589 438 668 460L683 478C580 455 502 491 413 552Z" fill="#71ad08" stroke="none"/>
+      <path d="M346 409C349 481 362 550 375 608C361 570 337 532 318 512C338 490 346 459 346 409Z" fill="#87bf08" stroke="none"/>
+      <path d="M397 412C389 455 391 501 401 537L375 608C375 537 386 449 397 412Z" fill="#95c909" stroke="none"/>
+      <!-- The floral silhouettes are deliberately irregular rather than mirrored. -->
+      <path d="M176 321C185 345 203 328 223 335C245 342 213 366 220 380C229 393 257 400 277 396C294 393 277 366 283 354C288 338 307 363 323 364L345 334L265 303Z" fill="url(#ass-mascot-patch)" stroke-width="6"/>
+      <path d="M447 336C434 346 430 363 432 369C436 382 469 358 476 370C481 381 450 396 449 411C454 426 500 433 527 424C543 419 518 397 518 384C519 367 541 389 551 386C565 381 560 352 562 333L573 311L497 307Z" fill="url(#ass-mascot-patch)" stroke-width="6"/>
+      <path d="M38 423C43 409 57 409 56 424C53 444 52 454 60 463C69 470 82 444 92 437C106 425 116 432 117 444L121 477L117 496L35 523L19 481Z" fill="url(#ass-mascot-patch)" stroke-width="6"/>
+      <path d="M718 405C694 399 685 412 690 427C695 443 681 460 668 455C655 451 647 436 634 439C614 442 617 460 617 474L644 493L719 519L742 498Z" fill="url(#ass-mascot-patch)" stroke-width="6"/>
+      <path d="M272 473C283 464 294 476 308 482C326 491 343 506 335 516C331 523 320 518 319 533L278 518L261 493C259 486 263 477 272 473Z" fill="url(#ass-mascot-patch)" stroke-width="6"/>
+      <path d="M182 325C207 319 260 324 288 338M452 345C478 328 511 320 532 322M49 416C34 447 24 475 22 510M701 414C720 442 726 470 729 500" fill="none" stroke="#e862c2" stroke-width="6" opacity=".6"/>
+      <ellipse cx="499" cy="345" rx="5" ry="6" fill="#eff06a" stroke="#897025" stroke-width="2"/>
+      <circle cx="68" cy="473" r="5.5" fill="#bde542" stroke="none"/>
+      <ellipse cx="36" cy="450" rx="4" ry="6" fill="#a5d52a" stroke="none"/>
+      <circle cx="688" cy="481" r="5" fill="#b4d63b" stroke="none"/>
+      <path d="M360 436C375 447 382 459 383 471M366 467C359 477 378 503 382 517M369 486C378 512 380 536 385 548" fill="none" stroke="#4e8708" stroke-width="5"/>
+      <path d="M357 433L371 458M374 508C378 525 378 552 381 563" fill="none" stroke="#d8ed4c" stroke-width="4"/>
+    </g>
+    <path d="M22 551C64 499 106 479 159 481C257 481 326 530 369 607M382 607C427 529 496 482 586 481C644 479 695 505 729 550" fill="none" stroke-width="9"/>
+    <path d="M372 414C399 365 459 327 521 319" fill="none" stroke="#e5f577" stroke-width="5" opacity=".65"/>
+  </g>
+  <path d="M636 488L642 508L658 514L642 521L636 545L630 522L612 516L630 510Z" fill="#fff9e3"/>
+  <circle cx="615" cy="542" r="3.5" fill="#fff9e3" opacity=".7"/>
+  <circle class="about-figure-origin" cx="375" cy="615" r="0"/>
+</svg>

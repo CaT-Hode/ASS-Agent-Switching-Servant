@@ -103,8 +103,10 @@ class Connections {
       this.injections.entries.some(e => e.harness === id) ||
       sessions.some(s => s.harness === id && s.status !== "gone" && s.transport !== "native")
     ));
-    return { safeNeeded: ids.length > 0 || !!this.error || !!this.injections.error,
-      names: ids.map(id => NAMES[id]), active: this.router.clientActive() + this.extraActive() };
+    const safeNeeded = ids.length > 0 || !!this.error || !!this.injections.error;
+    const active = this.router.clientActive() + this.extraActive();
+    return { safeNeeded, names: ids.map(id => NAMES[id]), active,
+      canDirectExit: !safeNeeded && active === 0 && !this.busy };
   }
   directExit(acknowledged, quit) {
     if (acknowledged !== true) throw Error("请先确认直接退出");

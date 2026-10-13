@@ -66,9 +66,11 @@ async function exitBy(dialog, name) {
 (async () => {
   try {
     await start();
-    const emptyExit = await exitDialog();
-    assert.equal(await emptyExit.getByRole("button", { name: "安全退出", exact: true }).count(), 0);
-    await emptyExit.getByRole("button", { name: "取消", exact: true }).click();
+    const emptyClosed = app.waitForEvent("close");
+    await app.evaluate(() => global.assTest.requestExit());
+    await emptyClosed;
+    app = null;
+    await start();
     await choose("Codex");
     assert.equal(await page.getByRole("switch", { name: "Codex 无账号启动" }).isDisabled(), true);
     await call("save-provider", { id: "fixture", name: "协议测试", baseUrl: "https://fixture.test/v1", apiKey: "synthetic-api", models: [{ model: "dual", wireApi: "openai-chat" }, { model: "chat-only", wireApi: "anthropic" }] });
@@ -194,9 +196,10 @@ async function exitBy(dialog, name) {
     snapshot = await call("snapshot");
     assert.equal(snapshot.connections.clients.codex.enabled, false);
     assert.equal(snapshot.connections.clients.claude.enabled, false);
-    const afterSafeExit = await exitDialog();
-    assert.equal(await afterSafeExit.getByRole("button", { name: "安全退出", exact: true }).count(), 0);
-    await exitBy(afterSafeExit, "直接退出");
+    const afterSafeClosed = app.waitForEvent("close");
+    await app.evaluate(() => global.assTest.requestExit());
+    await afterSafeClosed;
+    app = null;
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ passed: true, accountlessEligibility: true, productionVersionGate: true, oldVersionRejected: true,
       claudeLauncher, bothClients: true, automaticProtocols: true, desktopLocalConfig: true, restartPersistence: true,

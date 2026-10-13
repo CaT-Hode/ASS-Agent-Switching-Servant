@@ -446,6 +446,9 @@
   background: linear-gradient(90deg, var(--usage-level-1), var(--usage-level-4));
   border-radius: 5px;
 }
+:root[data-color-theme="light"] .usage-group-track i {
+  background: linear-gradient(90deg, var(--usage-level-4), var(--usage-level-1));
+}
 .overview-accounts-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(295px, 1fr));

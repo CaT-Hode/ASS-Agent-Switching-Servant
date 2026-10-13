@@ -1,5 +1,5 @@
 import React from "react";
-import { AssLogo } from "./ass-logo.jsx";
+import { AboutBrand } from "./about-brand.jsx";
 import {
   ArrowUpRight,
   Download,
@@ -65,15 +65,7 @@ export function Updates({ state, act, busy }) {
     act("update-open", () => api.call("update-open", kind));
   return (
     <div className="updates-page">
-      <section className="ass-brand-hero">
-        <AssLogo />
-        <div>
-          <div className="ass-wordmark">
-            ASS<span>v{state.version}</span>
-          </div>
-          <p>Agent-Switching-Servant</p>
-        </div>
-      </section>
+      <AboutBrand version={state.version} />
       <section className="update-card" aria-label="软件更新">
         <div className="update-card-heading">
           <div

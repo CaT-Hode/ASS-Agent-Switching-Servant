@@ -1,5 +1,7 @@
-export const THEME_REVEAL_DURATION = 620;
-export const THEME_REVEAL_EASING = 'cubic-bezier(.22,.8,.26,1)';
+// Low endpoint velocity and a lower peak avoid a front-loaded sweep and a
+// perceptible jump when the last few pixels of the snapshot are removed.
+export const THEME_REVEAL_DURATION = 960;
+export const THEME_REVEAL_EASING = 'cubic-bezier(.4,0,.6,1)';
 
 export function themeRevealGeometry(origin, width, height) {
   width = Math.max(1, Number.isFinite(width) ? width : 1);
@@ -8,7 +10,11 @@ export function themeRevealGeometry(origin, width, height) {
   const point = bounds ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 } : origin;
   const x = Math.max(0, Math.min(width, Number.isFinite(point?.x) ? point.x : Math.min(100, width / 2)));
   const y = Math.max(0, Math.min(height, Number.isFinite(point?.y) ? point.y : Math.max(0, height - 38)));
-  return { x, y, radius: Math.hypot(Math.max(x, width - x), Math.max(y, height - y)) + 2 };
+  const farthest = Math.hypot(Math.max(x, width - x), Math.max(y, height - y));
+  // Cover the corners before the snapshot is removed, not exactly at that
+  // instant. A 2px mathematical margin leaves no useful paint/rounding buffer.
+  const overscan = Math.max(32, Math.min(96, farthest * .06));
+  return { x, y, radius: farthest + overscan };
 }
 
 // Chromium can retarget pointer hit-testing to <html> while the root is being
@@ -95,9 +101,10 @@ export function createThemeReveal({ document: doc, viewport, reducedMotion }) {
         if (active !== entry || ticket !== generation) return;
         const { x, y, radius } = geometry;
         try {
+          const full = `circle(${radius}px at ${x}px ${y}px)`;
           entry.animation = root.animate({ clipPath: [
-            `circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`,
-          ] }, { duration: THEME_REVEAL_DURATION, easing: THEME_REVEAL_EASING,
+            `circle(0px at ${x}px ${y}px)`, full, full,
+          ], offset: [0, .99, 1] }, { duration: THEME_REVEAL_DURATION, easing: THEME_REVEAL_EASING,
             pseudoElement: '::view-transition-new(root)', fill: 'both' });
         } catch { applyOnce(); skip(entry); }
       }, () => { applyOnce(); skip(entry); });

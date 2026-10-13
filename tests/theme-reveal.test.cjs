@@ -1,7 +1,7 @@
 const { test } = require('node:test'), assert = require('node:assert/strict');
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 async function fixture(options = {}) {
-  const { createThemeReveal } = await import('../src/theme-reveal.mjs');
+  const { createThemeReveal } = await import(options.module || '../src/theme-reveal.mjs');
   const attributes = new Map(), transitions = [], animations = [];
   const root = { setAttribute: (k, v) => attributes.set(k, v), removeAttribute: k => attributes.delete(k),
     animate: (frames, timing) => { if (options.animationThrows) throw Error('unsupported');
@@ -20,6 +20,35 @@ async function fixture(options = {}) {
 }
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 
+test('reveal pacing lowers early/middle progress and peak speed, with a continuously slowing tail', async () => {
+  const { THEME_REVEAL_DURATION: duration, THEME_REVEAL_EASING: easing } = await import('../src/theme-reveal.mjs');
+  const bezier = text => {
+    const [x1, y1, x2, y2] = text.match(/[\d.]+/g).map(Number);
+    const coordinate = (t, a, b) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+    return time => {
+      let lo = 0, hi = 1;
+      for (let i = 0; i < 45; i++) { const t = (lo + hi) / 2; if (coordinate(t, x1, x2) < time) lo = t; else hi = t; }
+      return coordinate((lo + hi) / 2, y1, y2);
+    };
+  };
+  const progress = bezier(easing), old = bezier('cubic-bezier(.22,.8,.26,1)');
+  const speed = (f, t, ms) => (f(Math.min(1, t + .0001)) - f(Math.max(0, t - .0001))) / (Math.min(1, t + .0001) - Math.max(0, t - .0001)) / ms;
+  const peak = (f, ms) => Math.max(...Array.from({ length: 1001 }, (_, i) => speed(f, i / 1000, ms)));
+  assert.ok(duration > 620);
+  for (const t of [.1, .25, .5]) assert.ok(progress(t) < old(t), 'early/middle sweep should advance more gently');
+  assert.ok(peak(progress, duration) < peak(old, 620) * .4);
+  let previous = Infinity;
+  for (const t of [.5, .6, .7, .8, .9, .96, .99, .999]) {
+    const current = speed(progress, t, duration);
+    assert.ok(current < previous, 'tail cannot accelerate again'); previous = current;
+  }
+  assert.ok(speed(progress, 0, duration) < peak(progress, duration) * .001);
+  assert.ok(speed(progress, 1, duration) < peak(progress, duration) * .001);
+  const { themeRevealGeometry } = await import('../src/theme-reveal.mjs');
+  const radius = themeRevealGeometry({ x: 0, y: 0 }, 1440, 960).radius;
+  assert.ok((1 - progress(1 - (1000 / 60) / duration)) * radius < 2, 'no large residual mask is discarded at the last frame');
+});
+
 test('reveal geometry covers every corner from bottom-left, top-right and keyboard button centers', async () => {
   const { themeRevealGeometry } = await import('../src/theme-reveal.mjs');
   for (const [width, height] of [[1440, 960], [3840, 2160], [1100, 740]]) {
@@ -27,6 +56,8 @@ test('reveal geometry covers every corner from bottom-left, top-right and keyboa
       { getBoundingClientRect: () => ({ left: 20, top: height - 70, width: 180, height: 40 }) }]) {
       const p = themeRevealGeometry(origin, width, height);
       for (const [x, y] of [[0, 0], [width, 0], [0, height], [width, height]]) assert.ok(p.radius > Math.hypot(p.x - x, p.y - y));
+      const farthest = Math.max(...[[0, 0], [width, 0], [0, height], [width, height]].map(([x, y]) => Math.hypot(p.x - x, p.y - y)));
+      assert.ok(p.radius - farthest >= 32 && p.radius - farthest <= 96.00001, 'paint-safe overscan must be substantial but bounded');
     }
     const keyboard = themeRevealGeometry({ getBoundingClientRect: () => ({ left: 20, top: height - 70, width: 180, height: 40 }) }, width, height);
     assert.equal(keyboard.x, 110); assert.equal(keyboard.y, height - 50);
@@ -45,12 +76,24 @@ test('both directions reveal only the new full-window snapshot, anchored to the 
     const a = f.animations[0];
     assert.equal(a.frames.clipPath[0], 'circle(0px at 1380px 24px)');
     assert.ok(a.frames.clipPath[1].endsWith('at 1380px 24px)'));
+    assert.equal(a.frames.clipPath[2], a.frames.clipPath[1], 'final frame holds the already complete mask');
+    assert.deepEqual(a.frames.offset, [0, .99, 1]);
     assert.equal(a.timing.pseudoElement, '::view-transition-new(root)');
     assert.equal(a.timing.duration, THEME_REVEAL_DURATION); assert.equal(a.timing.easing, THEME_REVEAL_EASING);
     assert.notEqual(a.timing.easing, 'linear');
     f.transitions[0].done(); await flush(); assert.equal(f.attributes.size, 0);
     assert.ok(a.cancelled, 'finished fill:both effects must not survive into the next reveal');
   }
+});
+
+test('portable skill reveal preserves mask lifetime, pacing and single-commit interruption', async () => {
+  const f = await fixture({ module: '../skills/ass-theme-design/assets/theme-reveal.mjs' });
+  let count = 0;
+  f.controller.run(() => count++, { x: 40, y: 920 });
+  f.transitions[0].update(); f.transitions[0].readyNow(); await flush();
+  assert.equal(f.animations[0].timing.duration, 960);
+  f.controller.cancel(); f.transitions[0].update(); await flush();
+  assert.equal(count, 1); assert.ok(f.animations[0].cancelled); assert.equal(f.attributes.size, 0);
 });
 
 test('latest input wins before capture; skipped callbacks cannot apply an obsolete theme', async () => {

@@ -9,6 +9,10 @@ test('shared UI chrome uses neutral/sage tokens without blue literals or cyclic 
       // Usage data is sky blue in light mode and violet in dark mode;
       // the exception is confined to data colors, not general UI chrome.
       if (file === 'overview.css' && ['#155d85', '#218dc0', '#61b8df', '#ade0f3', '#49325f', '#74509b', '#9f76c7', '#c79aed'].includes(match[0])) continue;
+      // Sunset sea is deliberately blue. Keep the exception scoped to its
+      // three scene-local tokens, never arbitrary blue application chrome.
+      if (file === 'theme.css' && [...css.matchAll(/--theme-sea-(?:far|near|ripple)\s*:\s*(#[\da-f]{6})\s*;/gi)]
+        .some(token => token.index + token[0].indexOf('#') === match.index)) continue;
       const rgb = [1, 3, 5].map((i) => parseInt(match[0].slice(i, i + 2), 16)), max = Math.max(...rgb), min = Math.min(...rgb), delta = max - min;
       if (delta < 3) continue;
       let hue = max === rgb[0] ? ((rgb[1] - rgb[2]) / delta + 6) % 6 : max === rgb[1] ? (rgb[2] - rgb[0]) / delta + 2 : (rgb[0] - rgb[1]) / delta + 4;

@@ -4,6 +4,30 @@ const TOML = require("@iarna/toml");
 const { isDeepStrictEqual: equal } = require("node:util");
 const START = "# >>> ass managed start";
 const END = "# <<< ass managed end";
+// Codex owns these live UI preferences even when they happen to sit between
+// ASS markers. Connection/authentication fields remain strictly ASS-owned.
+const SELECTION_KEYS = ["model", "model_reasoning_effort"];
+function selection(value) {
+  for (const key of SELECTION_KEYS) if (Object.hasOwn(value, key) &&
+      (typeof value[key] !== "string" || !value[key].trim() || value[key].length > 1024 || /[\r\n]/.test(value[key])))
+    throw Error("Codex 模型选择字段无效，未覆盖");
+  return Object.fromEntries(SELECTION_KEYS.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+}
+function managedBlocks(current) {
+  const blocks = current.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g) || [];
+  if (blocks.length !== 2 || current.split(START).length !== 3 || current.split(END).length !== 3)
+    throw Error("Codex 管理标记缺失或不完整，未覆盖");
+  return blocks;
+}
+function withSelection(block, current) {
+  let text = block;
+  const values = selection(current);
+  for (const key of SELECTION_KEYS) {
+    text = text.replace(new RegExp("^" + key + "\\s*=.*(?:\\r?\\n|$)", "m"), "");
+    if (Object.hasOwn(values, key)) text = text.replace(END, `${key} = ${JSON.stringify(values[key])}\n${END}`);
+  }
+  return text;
+}
 function atomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = file + "." + process.pid + ".tmp";
@@ -44,7 +68,6 @@ function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/
   let top = clean.slice(0, first),
     rest = clean.slice(first);
   const managedTopKeys = ["model_provider", "model_catalog_json", "openai_base_url",
-    ...(gatewayAuth ? ["chatgpt_base_url"] : []),
     ...(defaultModel ? ["model", "model_reasoning_effort"] : [])];
   for (const key of managedTopKeys) {
     replaced[key] = parsed[key] ?? null;
@@ -57,11 +80,10 @@ function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/
   // Resumed threads may retain their provider, independently of the global
   // default. Redirect built-in OpenAI via its supported setting, NOT an
   // ignored [model_providers.openai] override. Never edit session history.
-  const chatgptBaseUrl = gatewayAuth
-    ? baseUrl.replace(/\/clients\/ASS\/v1\/?$/, "/clients/ASS/backend-api/")
-    : "";
-  const chatgpt = gatewayAuth ? `chatgpt_base_url = ${JSON.stringify(chatgptBaseUrl)}\n` : "";
-  const block = `${START}\nmodel_provider = "ASS"\nmodel_catalog_json = ${JSON.stringify(catalog)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n${chatgpt}${model}${END}\n`;
+  // chatgpt_base_url also controls workspace authentication and unrelated
+  // official services. Its backend requires HTTPS; keep the user's value (or
+  // native default) independent from our loopback inference endpoint.
+  const block = `${START}\nmodel_provider = "ASS"\nmodel_catalog_json = ${JSON.stringify(catalog)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n${model}${END}\n`;
   // Keep the native ChatGPT account visible for ordinary gateway routing.
   // The local bearer is only written for the explicit accountless mode.
   const auth = gatewayAuth
@@ -82,7 +104,9 @@ class ConfigManager {
     this.catalog = path.join(dataDir, "catalog.json");
     this.record = path.join(dataDir, "codex-attachment.json");
     this.baseUrl = `http://127.0.0.1:${port}/clients/ASS/v1`;
-    this.chatgptBaseUrl = `http://127.0.0.1:${port}/clients/ASS/backend-api/`;
+    // v0.3.28 ownership is accepted only so explicit sync/repair/detach can
+    // restore its saved baseline. New attachments never write this endpoint.
+    this.legacyChatgptBaseUrl = `http://127.0.0.1:${port}/clients/ASS/backend-api/`;
   }
   status() {
     try {
@@ -102,7 +126,7 @@ class ConfigManager {
           !c.model_providers?.aimai1 && !c.model_providers?.ass_router &&
           c.model_catalog_json === this.catalog &&
           provider?.wire_api === "responses",
-        workspaceRelay: c.chatgpt_base_url === this.chatgptBaseUrl,
+        legacyWorkspaceRelay: c.chatgpt_base_url === this.legacyChatgptBaseUrl,
         authMode,
         managed: text.includes(START),
         provider: c.model_provider || "openai",
@@ -116,7 +140,7 @@ class ConfigManager {
     // Validate ownership, restore the baseline in memory, then apply the new
     // desired default. Never strip an externally edited managed block.
     const baseline = old.includes(START) ? this.preflightDetach().next : old;
-    const attached = old.includes(START) ? TOML.parse(JSON.parse(fs.readFileSync(this.record, "utf8")).blocks[0]) : null;
+    const attached = old.includes(START) ? TOML.parse(managedBlocks(old)[0]) : null;
     const selection = !defaultModel && attached?.model && attached.model_reasoning_effort === undefined ? attached.model : null;
     const prepared = prepareConfig(baseline, this.catalog, this.baseUrl, defaultModel, localToken, gatewayAuth);
     if (selection) {
@@ -167,7 +191,8 @@ class ConfigManager {
     const providerKeys = ["name", "base_url", "wire_api", "requires_openai_auth", "supports_websockets", "experimental_bearer_token"];
     if (Object.keys(top).some(k => !topKeys.includes(k)) || top.model_provider !== "ASS" ||
         top.model_catalog_json !== this.catalog || top.openai_base_url !== this.baseUrl ||
-        (top.chatgpt_base_url !== undefined && top.chatgpt_base_url !== this.chatgptBaseUrl) ||
+        (top.chatgpt_base_url !== undefined && (top.chatgpt_base_url !== this.legacyChatgptBaseUrl ||
+          !Object.hasOwn(record.replaced || {}, "chatgpt_base_url"))) ||
         (top.model !== undefined && !(/^ASS_[a-f0-9]{24}::.+$/.test(top.model) ||
           /^gpt-[\w.-]+$/.test(top.model))) ||
         (top.model_reasoning_effort !== undefined && typeof top.model_reasoning_effort !== "string") ||
@@ -198,14 +223,19 @@ class ConfigManager {
         throw Error("Codex 配置中存在无法归属的 ASS 字段，请先检查配置，未自动删除");
       return null;
     }
-    let next = withoutOwn(current);
     const record = JSON.parse(fs.readFileSync(this.record, "utf8"));
-    const expected = record.blocks;
-    this.validateRecord(record);
-    const blocks = current.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g);
-    if (JSON.stringify(blocks) !== JSON.stringify(expected))
+    const owned = this.validateRecord(record); managedBlocks(current);
+    const parsed = TOML.parse(current);
+    selection(parsed);
+    // Codex's TOML writer may place new root preferences/tables before our EOF
+    // comment. Markers are not ownership: validate only the recorded fields and
+    // remove only those fields, retaining every unrelated native setting.
+    if (Object.entries(owned[0]).some(([key,value]) => !SELECTION_KEYS.includes(key) && !equal(parsed[key],value)) ||
+        !equal(parsed.model_providers?.ASS, owned[1].model_providers.ASS))
       throw Error("Codex 的 ASS 管理区段已被外部修改，未覆盖；请检查备份和当前配置");
-    const parsed = TOML.parse(next);
+    for (const key of Object.keys(owned[0])) if (!SELECTION_KEYS.includes(key)) delete parsed[key];
+    delete parsed.model_providers.ASS;
+    if (!Object.keys(parsed.model_providers).length) delete parsed.model_providers;
     for (const [key, value] of Object.entries(record.replaced)) {
       if (key === "agents.default_subagent_model") {
         const agents = parsed.agents || {};
@@ -218,20 +248,20 @@ class ConfigManager {
       if (value === null) delete parsed[key];
       else parsed[key] = value;
     }
-    next = TOML.stringify(parsed);
-    return { current, next };
+    return { current, next: TOML.stringify(parsed) };
   }
   prepareRepair() {
-    let record, current, parsed;
+    let record, recordText, current, parsed;
     try {
-      record = JSON.parse(fs.readFileSync(this.record, "utf8"));
+      recordText = fs.readFileSync(this.record, "utf8");
+      record = JSON.parse(recordText);
       current = fs.existsSync(this.file) ? fs.readFileSync(this.file, "utf8") : "";
       parsed = TOML.parse(current);
     } catch { throw Error("Codex 配置或接入记录无法解析，未修复"); }
     if (current.includes("aimami-relay codex-router top start"))
       throw Error("检测到其他路由工具仍接管 Codex。请先关闭旧路由，再修复接入。");
-    const expected = record.blocks;
     const owned = this.validateRecord(record);
+    const expected = [...record.blocks];
     const savedProviders = owned[1].model_providers;
     const blocks = [...current.matchAll(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g)];
     if ((current.split(START).length - 1 !== blocks.length) ||
@@ -239,30 +269,51 @@ class ConfigManager {
       throw Error("Codex 管理标记缺失或不完整，未修复");
     const onlyOwned = (value, keys) => Object.keys(value).every((k) => Object.hasOwn(keys, k) &&
       (keys[k] && typeof keys[k] === "object" ? value[k] && typeof value[k] === "object" && onlyOwned(value[k], keys[k]) : true));
-    let next = current;
-    if (blocks.length) {
-      for (let i = blocks.length - 1; i >= 0; i--) {
-        let value;
-        try { value = TOML.parse(blocks[i][0]); }
-        catch { throw Error("Codex 管理区段无法解析，未修复"); }
-        if (!onlyOwned(value, owned[i])) throw Error("Codex 管理区段混入非 ASS 字段，未覆盖");
-        next = next.slice(0, blocks[i].index) + expected[i] + next.slice(blocks[i].index + blocks[i][0].length);
-      }
-    } else {
+    if (!blocks.length) {
       if (Object.keys(owned[0]).some((k) => Object.hasOwn(parsed, k)) || Object.keys(owned[1].model_providers).some(k => parsed.model_providers?.[k]))
         throw Error("Codex 无标记的同名字段无法确认归属，未覆盖");
-      next = expected[0] + "\n" + current + "\n" + expected[1] + "\n";
+    } else if (parsed.model_providers?.ASS && !onlyOwned(parsed.model_providers.ASS, savedProviders.ASS)) {
+      throw Error("Codex 管理区段混入非 ASS 字段，未覆盖");
     }
-    // A marker within a string is not ownership. Compare the entire semantic
-    // document after replacing only the recorded keys, leaving user tables intact.
     const target = structuredClone(parsed);
-    Object.assign(target, owned[0]);
+    const selected = selection(parsed);
+    for (const [key,value] of Object.entries(owned[0]))
+      if (!SELECTION_KEYS.includes(key) || !blocks.length) target[key] = value;
     target.model_providers ||= {};
     Object.assign(target.model_providers, savedProviders);
+    let recordUpdate;
+    if (owned[0].chatgpt_base_url !== undefined) {
+      // Repair the already-applied snapshot, never model/provider drafts.
+      // Restore the old account backend and retire its ownership atomically
+      // with the repaired config through ProxyConfig's write-ahead journal.
+      const baseline = record.replaced.chatgpt_base_url;
+      expected[0] = expected[0].replace(/^chatgpt_base_url\s*=.*\n/m, "");
+      if (baseline === null) delete target.chatgpt_base_url;
+      else {
+        target.chatgpt_base_url = baseline;
+      }
+      const replaced = { ...record.replaced };
+      delete replaced.chatgpt_base_url;
+      recordUpdate = { file: this.record, before: recordText,
+        after: JSON.stringify({ ...record, replaced, blocks: expected }) };
+    }
+    // The common native-write case needs no normalization or config write at
+    // all. For a real repair, rebuild owned fields around all existing native
+    // preferences, even when Codex has moved them inside a marker region.
+    let next = current;
+    if (!equal(target, parsed) || recordUpdate || !blocks.length) {
+      const top = blocks.length ? withSelection(expected[0], selected) : expected[0];
+      const rest = structuredClone(target);
+      for (const key of Object.keys(TOML.parse(top))) delete rest[key];
+      delete rest.model_providers.ASS;
+      if (!Object.keys(rest.model_providers).length) delete rest.model_providers;
+      next = top + "\n" + TOML.stringify(rest) + "\n" + expected[1] + "\n";
+    }
     try {
       if (!equal(target, TOML.parse(next))) throw Error();
     } catch { throw Error("修复会影响非 ASS 的 Codex 配置，未写入"); }
-    return { file: this.file, before: fs.existsSync(this.file) ? current : null, after: next };
+    return { file: this.file, before: fs.existsSync(this.file) ? current : null, after: next,
+      ...(recordUpdate ? { recordUpdate } : {}) };
   }
   detach() {
     const plan = this.preflightDetach();

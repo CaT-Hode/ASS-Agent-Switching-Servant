@@ -7,7 +7,9 @@ $icon = [IO.Path]::GetFullPath($spec.Icon)
 $iconRelative = $icon.Substring([Math]::Min($icon.Length, $releaseRoot.Length + 1))
 $ownedIcon = $icon.StartsWith($releaseRoot + '\', [StringComparison]::OrdinalIgnoreCase) -and
     ($iconRelative -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\\ASS-win32-x64\\resources\\ass\.ico$')
-if ($exe -ne "$releaseRoot\current\ASS.exe" -or !$ownedIcon -or
+$pinnedExe = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($icon))) 'ASS.exe'
+$ownedExe = $exe -eq "$releaseRoot\current\ASS.exe" -or $exe -eq $pinnedExe
+if (!$ownedExe -or !$ownedIcon -or
     !(Test-Path -LiteralPath $exe -PathType Leaf) -or !(Test-Path -LiteralPath $icon -PathType Leaf)) {
     throw 'Unexpected or missing ASS executable/icon'
 }
@@ -23,6 +25,23 @@ $entries = @(
     @{ Key=$application; Name='FriendlyAppName'; Value='ASS' },
     @{ Key=$defaultIcon; Name=''; Value="$icon,0" }
 )
+# Preserve the startup preference. Update only an existing, plain ASS command;
+# never enable startup, alter approval state, or execute the stored command.
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+if (Test-Path -LiteralPath $runKey) {
+    $runValue = (Get-Item -LiteralPath $runKey).GetValue('ASS', $null)
+    if ($null -ne $runValue) {
+        if ([string]$runValue -notmatch '^(?:"([^"]+)"|([^\s"]+))( --hidden)?$') { throw 'Refusing custom ASS startup command' }
+        $runExe = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+        $runSuffix = $Matches[3]
+        $runRelative = $runExe.Substring([Math]::Min($runExe.Length, $releaseRoot.Length + 1))
+        if (!$runExe.StartsWith($releaseRoot + '\', [StringComparison]::OrdinalIgnoreCase) -or
+            $runRelative -notmatch '^(?:current|v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\\ASS-win32-x64)\\ASS\.exe$') {
+            throw 'Refusing foreign ASS startup command'
+        }
+        $entries += @{ Key=$runKey; Name='ASS'; Value=('"' + $exe + '"' + $runSuffix) }
+    }
+}
 $before = @(); $created = @()
 foreach ($entry in $entries) {
     $keyExists = Test-Path -LiteralPath $entry.Key

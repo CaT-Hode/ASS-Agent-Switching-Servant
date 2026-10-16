@@ -30,6 +30,7 @@ import { AccountProfile, AccountPlan } from "./account-profile.jsx";
 import { ConnectionStatus, ConnectionPill, ConnectionService } from "./connections.jsx";
 import { ClientInjection } from "./client-injection.jsx";
 import { ClientProcessChoice } from "./client-process-choice.jsx";
+import { CodexDesktopLaunch } from "./codex-desktop-launch.jsx";
 import { detectedClients } from "./usage-view.mjs";
 const api = window.ass;
 const clientBrands = { codex: "openai", claude: "anthropic", opencode: "opencode", dsh: "deepseek", pi: "pi", kimi: "kimi", zcode: "zai" };
@@ -302,6 +303,8 @@ export function Clients({
     [candidates, setCandidates] = useState(null),
     [switching, setSwitching] = useState(null),
     [loggingIn, setLoggingIn] = useState(null),
+    [refreshResult, setRefreshResult] = useState(null),
+    [launchNotice, setLaunchNotice] = useState(""),
     [notice, setNotice] = useState("");
   const client =
     state.harnesses.clients.find((c) => c.id === selected) ||
@@ -320,7 +323,7 @@ export function Clients({
   const recognized = detectedClients(state);
   const otherClients = state.harnesses.clients.filter((c) => !recognized.some((r) => r.id === c.id));
   const selectClient = (id) => {
-    setSelected(id); onSelectClient?.(id); setNotice(""); setCandidates(null);
+    setSelected(id); onSelectClient?.(id); setNotice(""); setLaunchNotice(""); setCandidates(null);
     if (panelRef.current?.getBoundingClientRect().top < 0)
       requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: "start", behavior: "instant" }));
   };
@@ -377,6 +380,15 @@ export function Clients({
             : "未找到客户端，请选择安装或源码目录。",
         );
     });
+  const openDesktop = () => {
+    setLaunchNotice("");
+    return act("client-open-desktop", async () => {
+      const result = await api.call("client-open-desktop", client.id);
+      if (client.id === "codex") setLaunchNotice(result.message);
+      else setNotice(result.message);
+      return result;
+    });
+  };
   return (
     <>
       {state.connections.error && (
@@ -384,6 +396,23 @@ export function Clients({
           {state.connections.error}
         </p>
       )}
+      <div className="clients-toolbar">
+        <button className="button" disabled={!!busy || state.connections.busy || !Object.values(state.connections.clients).some(c => c.enabled)}
+          title="刷新所有已开启的接入；不重启客户端，跳过正在请求或有配置冲突的项"
+          onClick={() => act("connections-refresh", async () => {
+            setRefreshResult(null);
+            const result = await api.call("connections-refresh");
+            setRefreshResult(result);
+            return result;
+          })}>
+          <RefreshCw size={15} className={busy === "connections-refresh" ? "spin" : undefined} />
+          {busy === "connections-refresh" ? "正在刷新注入…" : "刷新全部注入"}
+        </button>
+      </div>
+      {refreshResult && <div className="clients-refresh-result" role="status">
+        <p>{refreshResult.message}</p>
+        {refreshResult.skipped?.length > 0 && <ul>{refreshResult.skipped.map(item => <li key={item.id}>{item.name}：{item.reason}</li>)}</ul>}
+      </div>}
       <div className="clients-layout">
         <nav className="client-list" aria-label="客户端列表">
           <h3 className="client-rail-title">已识别的客户端</h3>
@@ -447,21 +476,13 @@ export function Clients({
               <div className="actions">
                 <button className="icon-button" aria-label="自动识别客户端" title="自动识别客户端"
                   disabled={!!busy} onClick={detect}><Search size={16} /></button>
-                {client.desktop && (
+                {client.desktop && client.id !== "codex" && (
                   <button
                     className="icon-button"
                     title={"打开 " + client.name + " 桌面端"}
                     aria-label={"打开 " + client.name + " 桌面端"}
                     disabled={!!busy}
-                    onClick={() =>
-                      act("client-open-desktop", async () => {
-                        const result = await api.call(
-                          "client-open-desktop",
-                          client.id,
-                        );
-                        setNotice(result.message);
-                      })
-                    }
+                    onClick={openDesktop}
                   >
                     <ExternalLink size={16} />
                   </button>
@@ -481,10 +502,13 @@ export function Clients({
                 </button>
                 {["codex", "claude"].includes(client.id) && <button className="icon-button" aria-label="查看保留的对话" title="对话管理"
                   onClick={() => onConversations?.(client.id)}><MessagesSquare size={18} /></button>}
+                {client.id === "codex" && <CodexDesktopLaunch desktop={client.desktop}
+                  connection={state.connections.clients.codex} {...{ busy }} onLaunch={openDesktop} />}
                 {!client.injectionUnsupported && <ConnectionPill {...{ client, state, busy, onManage }} />}
               </div>
             </header>
             <ConnectionStatus {...{ client, state, busy, onManage }} />
+            {launchNotice && <p className="codex-launch-result" role="status">{launchNotice}</p>}
             <ClientInjection key={"injection:" + client.id} {...{ client, state, act, busy, onManage }} />
             <header className="client-accounts-heading"><h3>官方账户 <span className="count">{client.accounts.length}</span></h3>
               {!client.nativeLoginOnly && <button className="button" ref={addButton} onClick={() => setAdding(true)}><Plus size={14} />添加账户</button>}

@@ -38,6 +38,15 @@
 :root[data-theme-reveal="circle"]::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 :root[data-theme-reveal="circle"]::view-transition-old(root) { z-index: 1; opacity: 1; }
 :root[data-theme-reveal="circle"]::view-transition-new(root) { z-index: 2; opacity: 1; }
+/* Keep the directly manipulated capsule out of the frozen root snapshot. Its
+   new view is live, so the spring/drag stays visible while the page reveals. */
+:root[data-theme-reveal="circle"]:not(:has(dialog[open], [aria-modal="true"])) .theme-control { view-transition-name: ass-theme-control; }
+:root[data-theme-reveal="circle"]::view-transition-group(ass-theme-control) { animation: none; z-index: 3; pointer-events: none; }
+:root[data-theme-reveal="circle"]::view-transition-image-pair(ass-theme-control) { isolation: isolate; pointer-events: none; }
+:root[data-theme-reveal="circle"]::view-transition-old(ass-theme-control),
+:root[data-theme-reveal="circle"]::view-transition-new(ass-theme-control) { animation: none; mix-blend-mode: normal; pointer-events: none; }
+:root[data-theme-reveal="circle"]::view-transition-old(ass-theme-control) { opacity: 0; }
+:root[data-theme-reveal="circle"]::view-transition-new(ass-theme-control) { opacity: 1; }
 
 :root, body { background: var(--surface); color: var(--ink); }
 button, input, select, textarea { color-scheme: inherit; }
@@ -47,16 +56,17 @@ button, input, select, textarea { color-scheme: inherit; }
 .theme-control .theme-toggle {
   --theme-progress: 0; --theme-position: 0; --theme-transit: 0; --theme-travel: 170px;
   --theme-twilight: 0; --theme-night: 0; --dawn-top: #efa68a; --dawn-bottom: #ffe4b5;
+  --theme-sea-far: #85b4c9; --theme-sea-near: #386f9a; --theme-sea-ripple: #c5e6f3;
   position: relative; isolation: isolate; overflow: hidden; width: 100%; height: 40px; padding: 0;
-  border: 1px solid var(--border); border-radius: 22px;
+  border: 1px solid transparent; border-radius: 22px;
   background: linear-gradient(180deg,
     color-mix(in srgb, color-mix(in srgb, #edf1ee, var(--dawn-top) calc(var(--theme-twilight) * 100%)), #272928 calc(var(--theme-night) * 100%)),
     color-mix(in srgb, color-mix(in srgb, #f5f7f6, var(--dawn-bottom) calc(var(--theme-twilight) * 100%)), #343735 calc(var(--theme-night) * 100%)));
-  box-shadow: inset 0 1px 3px #35373612; touch-action: none; user-select: none; cursor: grab;
+  box-shadow: none; touch-action: none; user-select: none; cursor: grab;
 }
 .theme-control .theme-toggle[data-mode="dark"] { --theme-progress: 1; --theme-position: 1; --theme-night: 1; }
 .theme-control .theme-toggle[data-mode="system"] { --theme-progress: .5; --theme-position: .5; --theme-twilight: 1; }
-.theme-toggle[data-system-dark="true"] { --dawn-top: #848484; --dawn-bottom: #eca67f; }
+.theme-toggle[data-system-dark="true"] { --dawn-top: #848484; --dawn-bottom: #eca67f; --theme-sea-far: #467a9f; --theme-sea-near: #204566; --theme-sea-ripple: #9bcce5; }
 .theme-control .theme-toggle[data-dragging="true"] { cursor: grabbing; }
 .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .theme-orbit {
@@ -74,18 +84,32 @@ button, input, select, textarea { color-scheme: inherit; }
   box-shadow: 0 0 8px 3px currentColor; opacity: .09;
   animation: theme-glow 3.8s ease-in-out infinite; animation-play-state: paused;
 }
+.theme-orbit::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 18%, #fff3d8b3, #ef8e5230 50%, transparent 78%);
+  opacity: 0; animation: theme-dawn-ember 6.8s ease-in-out infinite; animation-play-state: paused;
+}
 .theme-ripples { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
 .theme-ripples i {
   position: absolute; inset: 0; border-radius: 50%;
-  background: radial-gradient(circle, transparent 43%, currentColor 72%, transparent 73%);
-  opacity: .06; transform: scale(1.5);
-  animation: theme-ripple 6s linear infinite; animation-play-state: paused;
+  background: radial-gradient(circle, transparent 47%, currentColor 64%, transparent 69%);
+  opacity: 0; transform: scale(1.02);
+  animation: theme-ripple 4.8s cubic-bezier(.2,.45,.35,1) infinite; animation-play-state: paused;
 }
-.theme-ripples i:nth-child(2) { animation-delay: -2s; }
-.theme-ripples i:nth-child(3) { animation-delay: -4s; }
+.theme-ripples i:nth-child(2) { animation-delay: -1.6s; }
+.theme-ripples i:nth-child(3) { animation-delay: -3.2s; }
 .theme-dawn-glow { opacity: calc(var(--theme-twilight) * .26); }
 .theme-dawn-light { fill: #ffe3aa; transform-origin: 108px 36px; animation: theme-dawn-light 7s ease-in-out infinite; animation-play-state: paused; }
 .theme-sky { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.theme-sea { opacity: var(--theme-twilight); }
+.theme-sea-stop-far { stop-color: var(--theme-sea-far); }
+.theme-sea-stop-near { stop-color: var(--theme-sea-near); }
+.theme-sea-horizon { fill: none; stroke: #f4d7ae; stroke-width: .7; opacity: .7; }
+.theme-sea-wave { fill: none; stroke: var(--theme-sea-ripple); stroke-width: 1; animation: theme-sea-drift 6.6s ease-in-out infinite; animation-play-state: paused; }
+.theme-sea-wave-far { opacity: .55; }
+.theme-sea-wave-mid { opacity: .64; animation-duration: 5.2s; animation-delay: -1.7s; animation-direction: reverse; }
+.theme-sea-wave-near { opacity: .42; animation-duration: 8.4s; animation-delay: -2.8s; }
+.theme-sea-reflection { fill: none; stroke: #ffe2b3; stroke-width: .9; transform-origin: 108px 32px; animation: theme-sea-shimmer 6.8s ease-in-out infinite; animation-play-state: paused; }
 .theme-cloud { fill: #fff; opacity: calc((1 - var(--theme-progress)) * .9); transform: translate(calc(var(--theme-progress) * -9px), calc(var(--theme-progress) * 12px)); }
 .theme-cloud-far { opacity: calc((1 - var(--theme-progress)) * .5); transform: translate(calc(var(--theme-progress) * -17px), calc(var(--theme-progress) * 6px)); }
 .theme-cloud-near { opacity: calc((1 - var(--theme-progress)) * .75); transform: translate(calc(var(--theme-progress) * -5px), calc(var(--theme-progress) * 17px)); }
@@ -93,8 +117,10 @@ button, input, select, textarea { color-scheme: inherit; }
 .theme-stars-early { opacity: clamp(0, calc((var(--theme-progress) - .2) * 1.6), 1); }
 .theme-stars-late { opacity: clamp(0, calc((var(--theme-progress) - .45) * 1.9), 1); }
 .theme-comet { stroke: #eaeeeb; stroke-width: 1; stroke-linecap: round; opacity: calc(var(--theme-transit) * .5); transform: translate(calc(var(--theme-progress) * 15px), calc(var(--theme-progress) * -4px)); }
-.theme-symbol { width: 21px; height: 21px; overflow: visible; }
+.theme-symbol { position: relative; z-index: 1; width: 21px; height: 21px; overflow: visible; }
 .theme-disc { fill: currentColor; stroke: none; }
+.theme-dawn-sun { animation: theme-dawn-sun 6.8s ease-in-out infinite; animation-play-state: paused; }
+.theme-dawn-halo { opacity: 0; transform-origin: 12px 11px; animation: theme-dawn-halo 6.8s ease-in-out infinite; animation-play-state: paused; }
 .theme-cut { transform: translateX(calc((1 - var(--theme-night)) * 16px)); }
 .theme-eclipse-shadow { animation: theme-eclipse 24s ease-in-out infinite; animation-play-state: paused; }
 .theme-moon-rim { opacity: calc(var(--theme-night) * .22); }
@@ -102,26 +128,29 @@ button, input, select, textarea { color-scheme: inherit; }
 .theme-horizon { opacity: var(--theme-twilight); transform: translateY(calc((1 - var(--theme-twilight)) * 3px)); }
 .theme-rays { transform-origin: 12px 12px; opacity: calc(1 - var(--theme-night)); transform: rotate(calc(var(--theme-night) * 90deg)) scale(calc(1 - var(--theme-night) * .6)); }
 .theme-craters { opacity: calc(var(--theme-night) * .25); }
-.theme-sun-idle { transform-origin: 12px 12px; animation: theme-sun-turn 20s linear infinite; animation-play-state: paused; }
+.theme-sun-idle { transform-origin: 12px 12px; animation: theme-sun-turn 42s linear infinite; animation-play-state: paused; }
+.theme-toggle[data-mode="system"] .theme-sun-idle { animation-duration: 26.4s; }
+.theme-toggle[data-mode="system"] .theme-rays { stroke-width: 1.9; stroke-linecap: round; }
 .theme-cloud-idle { animation: theme-cloud-drift 6s ease-in-out infinite alternate; animation-play-state: paused; }
 .theme-cloud-idle:nth-of-type(3) { animation-delay: -2s; animation-duration: 7.5s; }
 .theme-cloud-idle:nth-of-type(4) { animation-delay: -4s; animation-duration: 8.5s; }
 .theme-stars > * { animation: theme-star-glow 3.2s ease-in-out infinite; animation-play-state: paused; }
 .theme-stars > :nth-child(2) { animation-delay: -1.1s; animation-duration: 4.2s; }
 .theme-stars > :nth-child(3) { animation-delay: -2.3s; animation-duration: 5.4s; }
-.theme-horizon > path { animation: theme-dawn-breathe 3.2s ease-in-out infinite; animation-play-state: paused; }
+.theme-horizon > path { transform-box: fill-box; transform-origin: center; animation: theme-dawn-breathe 3.8s ease-in-out infinite; animation-play-state: paused; }
 .theme-horizon > path:nth-child(2) { animation-delay: -.8s; }
 .theme-horizon > path:nth-child(3) { animation-delay: -1.6s; }
 .theme-toggle:not([data-hidden]):not([data-moving]):not([data-dragging]) .theme-orbit::after,
 .theme-toggle:not([data-hidden]):not([data-moving]):not([data-dragging]) .theme-ripples i,
 .theme-toggle[data-mode="light"]:not([data-hidden]):not([data-moving]):not([data-dragging]) :is(.theme-sun-idle, .theme-cloud-idle),
-.theme-toggle[data-mode="system"]:not([data-hidden]):not([data-moving]):not([data-dragging]) :is(.theme-horizon > path, .theme-cloud-idle, .theme-dawn-light),
+.theme-toggle[data-mode="system"]:not([data-hidden]):not([data-moving]):not([data-dragging]) .theme-orbit::before,
+.theme-toggle[data-mode="system"]:not([data-hidden]):not([data-moving]):not([data-dragging]) :is(.theme-sun-idle, .theme-horizon > path, .theme-cloud-idle, .theme-dawn-light, .theme-dawn-sun, .theme-dawn-halo, .theme-sea-wave, .theme-sea-reflection),
 .theme-toggle[data-mode="dark"]:not([data-hidden]):not([data-moving]):not([data-dragging]) :is(.theme-stars > *, .theme-eclipse-shadow) { animation-play-state: running; }
 @keyframes theme-ripple {
-  0% { transform: scale(1.04); opacity: 0; }
-  16% { opacity: .15; }
-  65% { opacity: .06; }
-  100% { transform: scale(3.25); opacity: 0; }
+  0% { transform: scale(1.02); opacity: 0; }
+  12% { opacity: .28; }
+  58% { opacity: .16; }
+  100% { transform: scale(4.2); opacity: 0; }
 }
 /* A shadow advances and recedes over a stationary moon; the faint rim keeps
    the icon legible at totality. Pausing preserves phase during a drag. */
@@ -135,7 +164,14 @@ button, input, select, textarea { color-scheme: inherit; }
 @keyframes theme-cloud-drift { from { transform: translateX(-2px); } to { transform: translateX(3px); } }
 @keyframes theme-star-glow { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 @keyframes theme-glow { 0%, 100% { opacity: .07; } 50% { opacity: .18; } }
-@keyframes theme-dawn-breathe { 0%, 100% { opacity: .55; transform: translateY(.5px); } 50% { opacity: 1; transform: translateY(-.4px); } }
+/* Only the sunset's interior moves; the draggable orbit remains spring-owned.
+   Multiplying by twilight keeps a paused phase from shifting the sun or moon. */
+@keyframes theme-dawn-sun { 0%, 100% { transform: translateY(calc(var(--theme-twilight) * -.6px)); } 50% { transform: translateY(calc(var(--theme-twilight) * 2.4px)); } }
+@keyframes theme-dawn-halo { 0%, 100% { opacity: calc(var(--theme-twilight) * .12); transform: scale(.94); } 50% { opacity: calc(var(--theme-twilight) * .32); transform: scale(1.12); } }
+@keyframes theme-dawn-ember { 0%, 100% { opacity: calc(var(--theme-twilight) * .22); } 50% { opacity: calc(var(--theme-twilight) * .6); } }
+@keyframes theme-sea-drift { 0%, 100% { transform: translate(-14px, -.5px); } 50% { transform: translate(14px, .5px); } }
+@keyframes theme-sea-shimmer { 0%, 100% { opacity: .34; transform: scaleX(.86); } 50% { opacity: .7; transform: scaleX(1.06); } }
+@keyframes theme-dawn-breathe { 0%, 100% { opacity: .45; transform: translateY(.4px) scaleX(.78); } 50% { opacity: 1; transform: translateY(-.3px) scaleX(1.06); } }
 /* One shared presentation value drives every layer; no delayed CSS transition
    can lag behind the pointer or restart when a drag interrupts the spring. */
 .theme-control .theme-toggle, .theme-control .theme-toggle * { transition: none !important; }
@@ -145,5 +181,5 @@ button, input, select, textarea { color-scheme: inherit; }
   .theme-toggle:hover .theme-orbit { box-shadow: 0 2px 6px #292c2a40; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .theme-control :is(.theme-toggle, .theme-toggle *), .theme-orbit::after { transition: none !important; animation: none !important; }
+  .theme-control :is(.theme-toggle, .theme-toggle *), .theme-orbit::before, .theme-orbit::after { transition: none !important; animation: none !important; }
 }

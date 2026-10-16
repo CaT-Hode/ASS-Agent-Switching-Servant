@@ -157,12 +157,13 @@ function assertCurrentTarget(ctx) {
   return validatePackage(ctx, ctx.targetPackage, ctx.version);
 }
 
-function shortcutSpec(ctx) {
-  const target = path.join(ctx.current, "ASS.exe");
+function shortcutSpec(ctx, options = {}) {
+  const directory = options.keepRunning ? ctx.targetPackage : ctx.current;
+  const target = path.join(directory, "ASS.exe");
   return {
     path: ctx.shortcut,
     targetPath: target,
-    workingDirectory: ctx.current,
+    workingDirectory: directory,
     // A concrete version changes the icon cache key on every update while the
     // launch target remains stable. Never read the cached current/EXE icon.
     iconLocation: `${path.join(ctx.targetPackage, 'resources', 'ass.ico')},0`,
@@ -333,10 +334,11 @@ function collectPruneCandidates(ctx) {
 }
 function buildPlan(ctx, options = {}) {
   const prune = Boolean(options.prune);
+  if (options.keepRunning && prune) throw Error("--keep-running cannot prune runtime files");
   assertReleaseRoot(ctx);
   const current = inspectCurrent(ctx);
   const target = assertCurrentTarget(ctx);
-  const shortcut = shortcutSpec(ctx);
+  const shortcut = shortcutSpec(ctx, options);
   const shortcutReader = ctx.osApi.shortcutProbe || ((file) => shortcutProbeDefault(file, ctx));
   const existingShortcut = shortcutReader(ctx.shortcut, ctx);
   ownedShortcut(ctx, existingShortcut);
@@ -344,19 +346,26 @@ function buildPlan(ctx, options = {}) {
   if (prune) pruneData = collectPruneCandidates(ctx);
   const packageDirs = current.exists && !samePath(current.target, ctx.targetPackage) ? [current.target] : [];
   for (const item of pruneData.candidates) packageDirs.push(path.join(item.versionDir, "ASS-win32-x64"));
-  let running = [];
-  try { assertNoRunning(ctx, packageDirs); }
-  catch (e) { running = [e.message]; }
+  let running = [], preservedProcesses = [];
+  if (options.keepRunning) {
+    // Never rebind a path from which a live Electron can lazily load modules.
+    // Only future launch entries change, pinned to the validated new package.
+    preservedProcesses = processProbe(ctx, [...packageDirs.map(dir => path.join(dir, "ASS.exe")), path.join(ctx.current, "ASS.exe")]);
+  } else {
+    try { assertNoRunning(ctx, packageDirs); }
+    catch (e) { running = [e.message]; }
+  }
   return {
     mode: "plan", prune, version: ctx.version,
+    activation: options.keepRunning ? "next-launch" : "current", preservedProcesses,
     releaseRoot: ctx.releaseRoot, targetPackage: ctx.targetPackage, current: ctx.current,
     currentLink: current.exists ? "owned" : "missing", targetMetadata: target,
     shortcut: { ...shortcut, existing: existingShortcut },
     prune: pruneData,
     running,
     actions: [
-      current.exists && samePath(canonicalPath(ctx.current, ctx.fsApi), ctx.targetPackage) ? "keep release/current junction" : "create/update release/current junction",
-      shortcutMatches(existingShortcut, shortcut) ? "keep ASS.lnk" : "write current-based ASS.lnk with app identity",
+      options.keepRunning || current.exists && samePath(canonicalPath(ctx.current, ctx.fsApi), ctx.targetPackage) ? "keep release/current junction" : "create/update release/current junction",
+      shortcutMatches(existingShortcut, shortcut) ? "keep ASS.lnk" : options.keepRunning ? "write version-pinned ASS.lnk for next launch" : "write current-based ASS.lnk with app identity",
       ...pruneData.candidates.map(item => `remove ${path.relative(ctx.root, item.path)}`),
     ],
   };
@@ -462,6 +471,16 @@ function executeInstall(ctx, options = {}) {
   const plan = buildPlan(ctx, options);
   if (plan.running.length) throw new Error(plan.running[0]);
   const oldCurrent = inspectCurrent(ctx);
+  if (options.keepRunning) {
+    if (!shortcutMatches(plan.shortcut.existing, plan.shortcut)) writeShortcut(ctx, plan.shortcut);
+    const reader = ctx.osApi.shortcutProbe || ((file) => shortcutProbeDefault(file, ctx));
+    if (!shortcutMatches(reader(ctx.shortcut, ctx), plan.shortcut)) throw Error("ASS shortcut readback mismatch");
+    const after = inspectCurrent(ctx);
+    if (oldCurrent.exists !== after.exists || oldCurrent.exists && !samePath(oldCurrent.target, after.target))
+      throw Error("release/current changed concurrently; running runtime was not modified by this installer");
+    return { ...plan, mode: "install", installed: true, currentPreserved: true,
+      activeRuntimeReplaced: false, nextLaunchExecutable: plan.shortcut.targetPath };
+  }
   const replacement = replaceCurrent(ctx);
   let shortcutCommitted = false;
   try {
@@ -502,20 +521,22 @@ function prePackageGuard(options = {}) {
 
 function parseArgs(argv = process.argv.slice(2)) {
   let command = "plan", prune = false, json = false;
+  let keepRunning = false;
   for (const arg of argv) {
     if (arg === "plan" || arg === "install") command = arg;
     else if (arg === "--prune") prune = true;
     else if (arg === "--json") json = true;
+    else if (arg === "--keep-running") keepRunning = true;
     else if (arg === "--help" || arg === "-h") return { help: true };
     else throw new Error(`unknown argument: ${arg}`);
   }
-  return { command, prune, json };
+  return { command, prune, json, ...(keepRunning ? { keepRunning: true } : {}) };
 }
 function usage() {
-  return "Usage: node scripts/local-release.cjs [plan|install] [--prune] [--json]";
+  return "Usage: node scripts/local-release.cjs [plan|install] [--prune | --keep-running] [--json]";
 }
-function windowsBrandSpec(ctx) {
-  return { ReleaseRoot: ctx.releaseRoot, Executable: path.join(ctx.current, 'ASS.exe'),
+function windowsBrandSpec(ctx, options = {}) {
+  return { ReleaseRoot: ctx.releaseRoot, Executable: shortcutSpec(ctx, options).targetPath,
     Icon: path.join(ctx.targetPackage, 'resources', 'ass.ico'), AppId: 'local.ass.desktop' };
 }
 function refreshShortcutIcon(ctx) {
@@ -530,8 +551,8 @@ function refreshShortcutIcon(ctx) {
   registerWindowsBrand(ctx);
   return { updated: true, shortcut: spec.path, icon: spec.iconLocation };
 }
-function registerWindowsBrand(ctx) {
-  const spec = windowsBrandSpec(ctx);
+function registerWindowsBrand(ctx, options = {}) {
+  const spec = windowsBrandSpec(ctx, options);
   if (!ctx.fsApi.existsSync(spec.Icon)) throw Error('Packaged ASS icon is missing');
   const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'windows-brand-registration.ps1')],
     { encoding: 'utf8', windowsHide: true, env: { ...ctx.env, ASS_BRAND_SPEC: JSON.stringify(spec) } });
@@ -543,7 +564,7 @@ function main(argv = process.argv.slice(2), options = {}) {
   if (args.help) { console.log(usage()); return { help: true }; }
   const ctx = makeContext(options);
   const result = args.command === "install" ? executeInstall(ctx, args) : buildPlan(ctx, args);
-  if (args.command === 'install' && process.platform === 'win32') result.brand = registerWindowsBrand(ctx);
+  if (args.command === 'install' && process.platform === 'win32') result.brand = registerWindowsBrand(ctx, args);
   console.log(JSON.stringify(result, null, args.json ? 2 : 0));
   return result;
 }

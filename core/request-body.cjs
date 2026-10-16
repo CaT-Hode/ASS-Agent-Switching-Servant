@@ -3,7 +3,7 @@ const { promisify } = require("node:util");
 const LIMIT = 128 * 1024 * 1024;
 const decoders = { gzip: zlib.gunzip, deflate: zlib.inflate, br: zlib.brotliDecompress, zstd: zlib.zstdDecompress };
 
-async function readJSON(req, limit = LIMIT) {
+async function readBytes(req, limit = LIMIT) {
   const encoding = String(req.headers["content-encoding"] || "identity").trim().toLowerCase();
   if (encoding !== "identity" && typeof decoders[encoding] !== "function")
     throw Object.assign(Error("不支持的请求压缩格式"), { status: 415 });
@@ -21,7 +21,11 @@ async function readJSON(req, limit = LIMIT) {
         { status: error.code === "ERR_BUFFER_TOO_LARGE" ? 413 : 400 });
     }
   }
+  return bytes;
+}
+async function readJSON(req, limit = LIMIT) {
+  const bytes = await readBytes(req, limit);
   try { return JSON.parse(bytes.toString("utf8")); }
   catch { throw Object.assign(Error("请求不是有效 JSON"), { status: 400 }); }
 }
-module.exports = { readJSON };
+module.exports = { readJSON, readBytes };

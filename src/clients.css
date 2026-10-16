@@ -279,6 +279,38 @@
   color: var(--muted);
   margin: 7px 0;
 }
+.clients-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.clients-refresh-result { margin-bottom: 12px; padding: 10px 14px; border-radius: 9px; background: var(--panel); font-size: 12px; line-height: 1.7; }
+.clients-refresh-result p { margin: 0; }
+.clients-refresh-result ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+.client-heading > .actions { flex-wrap: nowrap; gap: 8px; }
+.client-heading > h2 { flex: none; }
+.codex-desktop-launch { position: relative; display: inline-flex; flex: none; }
+.codex-launch-tooltip { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(390px, calc(100vw - 64px)); padding: 16px; border-radius: 11px; background: var(--raised); color: var(--ink); box-shadow: 0 8px 28px #0003; text-align: left; }
+.codex-launch-tooltip::before { content: ""; position: absolute; bottom: 100%; left: 0; right: 0; height: 9px; }
+.codex-launch-copy { min-width: 0; }
+.codex-launch-copy h3 { margin: 0 0 7px; font-size: 15px; font-weight: 650; color: var(--ink); }
+.codex-launch-copy p { margin: 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.codex-launch-issues { display: flex; flex-wrap: wrap; gap: 5px 14px; margin: 8px 0 0; padding: 0; list-style: none; }
+.codex-launch-issues li { font-size: 11px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
+.codex-launch-issues li::before { content: "·"; margin-right: 6px; color: var(--muted); }
+.codex-desktop-launch .button.codex-launch-button {
+  min-height: 36px;
+  padding: 0 13px;
+  gap: 7px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  color: light-dark(#fff, #222623);
+  background: light-dark(#363b37, #dce2dd);
+}
+.codex-desktop-launch .button.codex-launch-button:hover:not(:disabled) { background: light-dark(#252b27, #f0f3f0); }
+.codex-launch-button svg { flex: none; }
+.codex-launch-detection { margin: 12px 0 0; font-size: 12px; line-height: 1.8; color: var(--warning); }
+.codex-desktop-launch .codex-launch-guidance { margin: 12px 0 0; font-size: 11px; line-height: 1.8; color: var(--muted); }
+.codex-launch-boundary { margin: 4px 0 0; font-size: 11px; line-height: 1.7; color: var(--muted); }
+.codex-launch-result { margin: 12px 0 0; font-size: 12px; line-height: 1.8; color: var(--ink); }
 .client-path {
   font-size: 11px;
   color: light-dark(#717171, #b4b4b4);

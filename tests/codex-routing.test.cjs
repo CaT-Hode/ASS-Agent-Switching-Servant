@@ -71,27 +71,25 @@ test("ASS writes only its own provider and restores the exact original endpoint,
   assert.equal(fs.readFileSync(auth, "utf8"), '{"tokens":"synthetic-unchanged"}');
 });
 
-test("normal Codex gateway injection adds the local ChatGPT bootstrap relay and accountless mode does not", t => {
+test("Codex OAuth and accountless injection preserve the native account backend", t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ass-codex-bootstrap-config-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const codex = path.join(dir, "codex"), data = path.join(dir, "data");
   fs.mkdirSync(codex);
-  const baseline = 'chatgpt_base_url = "https://chatgpt.com/backend-api/"\n[features]\nkeep=true\n';
-  atomic(path.join(codex, "config.toml"), baseline);
   const manager = new ConfigManager(codex, data, 32123);
-  const normal = manager.prepareAttach(null, "a".repeat(64), true);
-  const normalParsed = TOML.parse(normal.text);
-  assert.equal(normalParsed.chatgpt_base_url, manager.chatgptBaseUrl);
-  assert.equal(normal.replaced.chatgpt_base_url, "https://chatgpt.com/backend-api/");
-  atomic(manager.record, JSON.stringify({ replaced: normal.replaced,
-    blocks: normal.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g) }));
-  atomic(manager.file, normal.text);
-  assert.deepEqual(TOML.parse(manager.preflightDetach().next), TOML.parse(baseline));
-
-  const accountless = prepareConfig(baseline, manager.catalog, manager.baseUrl, null, "b".repeat(64), false);
-  const accountlessParsed = TOML.parse(accountless.text);
-  assert.equal(accountlessParsed.chatgpt_base_url, "https://chatgpt.com/backend-api/");
-  assert.equal(Object.hasOwn(accountless.replaced, "chatgpt_base_url"), false);
+  for (const endpoint of [null, "https://chatgpt.com/backend-api/", "https://workspace.example/backend-api/"]) {
+    const baseline = (endpoint ? `chatgpt_base_url = ${JSON.stringify(endpoint)}\n` : "") + '[features]\nkeep=true\n';
+    for (const gatewayAuth of [true, false]) {
+      const prepared = prepareConfig(baseline, manager.catalog, manager.baseUrl, null, "a".repeat(64), gatewayAuth);
+      assert.equal(TOML.parse(prepared.text).chatgpt_base_url, endpoint ?? undefined);
+      assert.equal(Object.hasOwn(prepared.replaced, "chatgpt_base_url"), false);
+      atomic(manager.record, JSON.stringify({ replaced: prepared.replaced,
+        blocks: prepared.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g) }));
+      atomic(manager.file, prepared.text);
+      assert.equal(manager.status().legacyWorkspaceRelay, false);
+      assert.deepEqual(TOML.parse(manager.preflightDetach().next), TOML.parse(baseline));
+    }
+  }
 });
 
 test("old provider records are rejected by repair, resync and withdrawal without writes", t => {
@@ -249,6 +247,71 @@ test("repair rejects unknown ownership and preserves non-ASS fields", t => {
   assert.throws(() => manager.attach(), /其他工具/);
   assert.throws(() => manager.detach(), /无法归属/);
   assert.equal(fs.readFileSync(manager.file, "utf8"), unmarked);
+});
+
+test("native model/effort writes and formatting do not invalidate immutable ASS routing ownership", t => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ass-native-selection-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const manager=new ConfigManager(path.join(dir,'codex'),path.join(dir,'data'));
+  atomic(manager.file,'model="gpt-original"\nmodel_reasoning_effort="low"\n[features]\nkeep=true\n');
+  const prepared=manager.prepareAttach({model:'gpt-6.1-sol',effort:'high'},'a'.repeat(64),true);
+  atomic(manager.record,JSON.stringify({replaced:prepared.replaced,blocks:prepared.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g)}));
+  atomic(manager.file,prepared.text);
+  const savedRecord=fs.readFileSync(manager.record,'utf8');
+  for(const model of ['gpt-6-astra',codexModelId('fixture','deepseek-flash')]) {
+    const current=prepared.text.replace('model = "gpt-6.1-sol"',`model = ${JSON.stringify(model)}`).replace('model_reasoning_effort = "high"','model_reasoning_effort = "max"');
+    atomic(manager.file,current);
+    assert.equal(TOML.parse(manager.preflightDetach().next).model,'gpt-original');
+    const repair=manager.prepareRepair();
+    assert.equal(TOML.parse(repair.after).model,model);
+    assert.equal(TOML.parse(repair.after).model_reasoning_effort,'max');
+    assert.equal(repair.after,current);
+    assert.equal(fs.readFileSync(manager.record,'utf8'),savedRecord);
+    assert.equal(fs.readFileSync(manager.file,'utf8'),current);
+    atomic(manager.file,current.replaceAll('\n','\r\n').replace('name = "ASS"',"name = 'ASS' # native formatting"));
+    assert.doesNotThrow(()=>manager.preflightDetach());
+    for(const [before,after] of [['base_url = '+JSON.stringify(manager.baseUrl),'base_url = "https://foreign.invalid/v1"'],
+      ['requires_openai_auth = true','requires_openai_auth = false'],['supports_websockets = false','supports_websockets = true'],
+      ['model_provider = "ASS"','model_provider = "other"'],['wire_api = "responses"','wire_api = "chat"'],
+      ['name = "ASS"','name = "ASS"\nforeign_field = "keep"']]) {
+      atomic(manager.file,current.replace(before,after));
+      assert.throws(()=>manager.preflightDetach(),/外部修改/);
+    }
+  }
+});
+
+test("native-added selection remains on detach if ASS never owned its rollback baseline", t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ass-native-selection-added-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const manager=new ConfigManager(path.join(dir,'codex'),path.join(dir,'data'));
+  atomic(manager.file,'[features]\nkeep=true\n');manager.attach();
+  const current=fs.readFileSync(manager.file,'utf8').replace('# <<< ass managed end','model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n# <<< ass managed end');
+  atomic(manager.file,current);manager.detach();
+  const restored=TOML.parse(fs.readFileSync(manager.file,'utf8'));
+  assert.equal(restored.model,'gpt-6-astra');assert.equal(restored.model_reasoning_effort,'high');assert.equal(restored.features.keep,true);
+});
+
+test("native root settings written inside marker comments survive validation, repair, resync and detach", t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ass-native-root-writes-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const manager=new ConfigManager(path.join(dir,'codex'),path.join(dir,'data'));
+  const original='model="gpt-original"\n[features]\nkeep=true\n';atomic(manager.file,original);
+  const prepared=manager.prepareAttach({model:'gpt-6.1-sol',effort:'high'},'a'.repeat(64),true);
+  atomic(manager.record,JSON.stringify({replaced:prepared.replaced,blocks:prepared.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g)}));
+  const native=prepared.text.replace('# <<< ass managed end','notify = ["fixture-notify", "turn-ended"]\n# <<< ass managed end')
+    .replace(/(# <<< ass managed end)\s*$/, '[desktop]\nfollowUpQueueMode="steer"\n[plugins."fixture@bundled"]\nenabled=true\n[mcp_servers.fixture]\ncommand="fixture-mcp"\n$1\n');
+  const expected=TOML.parse(native);
+  const check=text=>{const parsed=TOML.parse(text);for(const k of ['notify','desktop','plugins','mcp_servers','features'])assert.deepEqual(parsed[k],expected[k],k);};
+  atomic(manager.file,native);
+  check(manager.preflightDetach().next);
+  assert.equal(manager.prepareRepair().after,native,'normal native additions need no writes');
+  atomic(manager.file,native.replace('name = "ASS"','name = "damaged"'));
+  const repair=manager.prepareRepair();check(repair.after);
+  atomic(manager.file,repair.after);assert.doesNotThrow(()=>manager.preflightDetach());
+  const sync=manager.prepareAttach({model:'gpt-6-astra',effort:'xhigh'},'a'.repeat(64),true);check(sync.text);
+  atomic(manager.record,JSON.stringify({replaced:sync.replaced,blocks:sync.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g)}));
+  atomic(manager.file,sync.text);manager.detach();check(fs.readFileSync(manager.file,'utf8'));
+  assert.equal(TOML.parse(fs.readFileSync(manager.file,'utf8')).model,'gpt-original');
 });
 
 test("retained built-in WS explicitly falls back to SSE without sending credentials upstream", async t => {

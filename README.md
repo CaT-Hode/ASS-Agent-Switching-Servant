@@ -6,7 +6,9 @@
 
 ASS（Agent-Switching-Servant）是你的 Windows 桌面 AI 路由与账户助手。把模型、API 凭据与官方授权放到一个独立窗口，切换客户端时不必反复搬配置。关闭窗口后继续在托盘运行。
 
-v0.3.26 修复 Codex 订阅额度耗尽时连带禁止第三方模型发送新消息，采用本机网关认证并保留原有 OAuth。详见 [v0.3.26 发布说明](docs/release-v0.3.26.md)。客户端同步与续聊恢复见 [v0.3.25](docs/release-v0.3.25.md)，统一 128K 默认输出见 [v0.3.24](docs/release-v0.3.24.md)，关于页 SVG 动画见 [v0.3.23](docs/release-v0.3.23.md)，可复用主题见 [ass-theme-design skill](skills/ass-theme-design/SKILL.md)。
+v0.3.40 将太阳光线旋转速度降为此前的三分之一，保留加强后的波纹。累计更新包含 Codex 专用 HTTPS 启动通道、统一桌面识别、全部注入刷新与主题滑动修复；主题资源已提炼为 `best-light-dark-switching`。详见 [v0.3.40](docs/release-v0.3.40.md)、[v0.3.39](docs/release-v0.3.39.md) 和 [v0.3.38](docs/release-v0.3.38.md)。本机可使用 `node scripts/local-release.cjs install --keep-running --json` 仅更新下次启动入口，不关闭当前进程或替换其正在使用的资源。
+
+v0.3.26 修复 Codex 订阅额度耗尽时连带禁止第三方模型发送新消息，采用本机网关认证并保留原有 OAuth。详见 [v0.3.26 发布说明](docs/release-v0.3.26.md)。客户端同步与续聊恢复见 [v0.3.25](docs/release-v0.3.25.md)，统一 128K 默认输出见 [v0.3.24](docs/release-v0.3.24.md)，关于页 SVG 动画见 [v0.3.23](docs/release-v0.3.23.md)，从当前实现提炼的可复用主题见 [best-light-dark-switching skill](skills/best-light-dark-switching/SKILL.md)。
 
 v0.3.5 的 Codex 跨供应商历史思考项及运行中归档删除修复继续保留。删除仅二级确认，不再新增恢复备份。详见 [v0.3.5 发布说明](docs/release-v0.3.5.md)。
 

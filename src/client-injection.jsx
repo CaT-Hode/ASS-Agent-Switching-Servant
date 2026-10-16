@@ -21,7 +21,7 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
     </header>
     {["codex", "claude"].includes(client.id) && <div className="accountless-control">
       <div><strong>无账号启动</strong>{accountlessHint && <small>{accountlessHint}</small>}</div>
-      {connection?.accountless && <button className="button" disabled={!!busy || !connection.accountlessAvailable || !(client.launcher?.ready || (client.id === "codex" && client.desktop))}
+      {connection?.accountless && !(client.id === "codex" && client.desktop) && <button className="button" disabled={!!busy || !connection.accountlessAvailable || !client.launcher?.ready}
         title={client.id === "codex" && client.desktop ? "打开桌面端；已运行的窗口需重启加载配置" : client.id === "claude" ? "启动 Claude Code 命令行终端" : "以独立配置启动，不读取官方 OAuth"}
         onClick={() => act("accountless-launch", () => api.call(client.id === "codex" && client.desktop ? "client-open-desktop" : "client-accountless-launch", client.id), client.id === "claude" ? "已打开 Claude Code 终端" : "已启动客户端")}>
         <Terminal size={15} />{client.id === "claude" ? "启动终端" : "启动"}</button>}

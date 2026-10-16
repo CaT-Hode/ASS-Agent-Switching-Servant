@@ -1,4 +1,0 @@
-interface:
-  display_name: "ASS 深浅主题设计"
-  short_description: "灰黑双主题、太阳月亮胶囊与可选黄昏自动档，配合清晰圆形揭幕动效"
-  default_prompt: "使用 $ass-theme-design 为当前桌面界面实现完整深浅配色、太阳月亮切换胶囊与清晰圆形切换效果，保留已有布局和内容。"

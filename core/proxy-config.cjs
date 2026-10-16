@@ -152,7 +152,7 @@ class ProxyConfig {
     }
     catch (e) { error = e.message; }
     const workspaceRelayPending = id === "codex" && enabled && this.clients.codex &&
-      !this.clients.codex.accountless && !this.config.status().workspaceRelay;
+      this.config.status().legacyWorkspaceRelay;
     const pending = !!enabled && (nativePending || authPending || workspaceRelayPending ||
       !equal(desired || null, routeOnly(this.clients[id])) ||
       (id === "codex" && !this.config.status().attached));
@@ -280,6 +280,7 @@ class ProxyConfig {
     if (this.pending) throw Error("路由事务尚未完成，请先重新同步恢复");
     safePath(this.file);
     const saved = read(this.file), files = [];
+    let migrated = false;
     if (hash(saved || "") !== this.persistedHash) {
       // Recover this client from its trusted in-memory applied snapshot, but
       // never undo a concurrent edit to another client's route in the same file.
@@ -295,7 +296,8 @@ class ProxyConfig {
     if (id === "codex") {
       validateCodexPlan(this.clients.codex);
       for (const file of [this.config.file, this.config.record, this.config.catalog]) safePath(file);
-      const attachment = this.config.prepareRepair();
+      const { recordUpdate, ...attachment } = this.config.prepareRepair();
+      if (recordUpdate) { files.push(recordUpdate); migrated = true; }
       if (attachment.before !== attachment.after) files.push(attachment);
       const before = read(this.config.catalog)?.toString() ?? null, after = JSON.stringify(this.clients.codex.catalog, null, 2);
       if (before !== after) files.push({ file: this.config.catalog, before, after });
@@ -307,7 +309,7 @@ class ProxyConfig {
       files.push(...native.files);
       files.push(...(this.desktop?.plan(this.clients.claude.accountless ? this.clients.claude.localToken : null, this.manager.options?.port || 25819, this.clients.claude.providers) || []));
     }
-    return { files, routeOnly: !files.length, nativeClaude };
+    return { files, routeOnly: !files.length, nativeClaude, migrated };
   }
   repair(id) {
     const plan = this.repairPlan(id);
@@ -335,7 +337,7 @@ class ProxyConfig {
       catch { throw Error("修复未完成，已保留加密备份与事务恢复记录"); }
       throw error;
     }
-    return { backup, files: plan.files.length };
+    return { backup, files: plan.files.length, migrated: plan.migrated };
   }
   routingState(id) {
     if (!this.supports(id)) return { ...this.store.state, providers: this.manager.effectiveProviders?.(id) || this.store.state.providers }; // Diagnostics use drafts.
@@ -345,6 +347,17 @@ class ProxyConfig {
   }
   requireApplied(id) {
     if (!this.status(id, true).applied) throw Error("模型接入配置尚未同步，请先在接入控制中同步后再启动");
+  }
+  requireCodexOfficialService() {
+    const plan = this.clients.codex;
+    if (!plan?.gatewayAuth || plan.accountless) throw Error("Codex 官方服务需要 OAuth 接入");
+    this.checkFiles("codex");
+    this.config.preflightDetach();
+    const current = this.config.status();
+    if (!current.attached || current.authMode !== "oauth" || current.legacyWorkspaceRelay)
+      throw Error("Codex 官方服务接入需要先修复路由配置");
+    // Unapplied model drafts and native selector writes do not invalidate the
+    // already-applied official account/project transport.
   }
 }
 module.exports = { ProxyConfig };

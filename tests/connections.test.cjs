@@ -51,9 +51,74 @@ function connectionFixture(t, overrides = {}) {
   Object.assign(injections, overrides.injections); Object.assign(processes, overrides.processes);
   const connections = new Connections({ dataDir, router, config, injections, processes,
     nativeConfig: overrides.nativeConfig,
+    proxyConfig: overrides.proxyConfig,
     extraActive: overrides.extraActive || (() => 0), restarter: overrides.restarter, sessionHandoff: overrides.sessionHandoff });
   return { dataDir, router, config, injections, processes, connections };
 }
+
+test('refresh all syncs only enabled clients, preserves accountless state and never restarts windows', async t => {
+  const calls = [], proxy = { clients: { codex: { accountless: true } },
+    supports: id => id === 'codex' || id === 'claude', preflight() {},
+    fingerprint: () => 'proxy', sync: (...args) => calls.push(['proxy', ...args]) };
+  const f = connectionFixture(t, { proxyConfig: proxy, nativeConfig: {
+    list: () => [], isDirect: id => id === 'dsh', preflight() {}, fingerprint: () => 'native',
+    sync: id => calls.push(['native', id]) }, restarter: fakeRestarter() });
+  f.connections.enabled.codex = f.connections.enabled.dsh = true;
+  f.processes.sessions.push({ id: 'open-task', harness: 'codex', status: 'running' });
+  const before = JSON.stringify(f.connections.enabled);
+  const result = await f.connections.refreshAll({ assertIdle: async id => calls.push(['idle', id]) });
+  assert.deepEqual(result.refreshed.map(r => r.id), ['codex', 'dsh']);
+  assert.equal(result.ok, true); assert.deepEqual(result.skipped, []);
+  assert.equal(JSON.stringify(f.connections.enabled), before);
+  assert.equal(proxy.clients.codex.accountless, true);
+  assert.deepEqual(calls.filter(c => c[0] === 'proxy'), [['proxy','codex'],['proxy','dsh']]);
+  assert.equal(f.processes.stopCalls.length, 0); assert.equal(f.processes.refreshCalls, 0);
+  assert.deepEqual(f.connections.restarter.calls, []); assert.deepEqual(f.router.canceled, []);
+  assert.equal(f.connections.busy, false); assert.equal(f.connections.blocked.size, 0);
+});
+
+test('bulk refresh skips active requests, external conflicts and login activity independently', async t => {
+  const writes = [];
+  const f = connectionFixture(t, { nativeConfig: { list: () => [], isDirect: () => true,
+    fingerprint: () => 'native', preflight: ids => { if (ids.includes('dsh')) throw Error('external edit'); },
+    sync: id => writes.push(id) } });
+  for (const id of ['codex','claude','opencode','pi','dsh']) f.connections.enabled[id] = true;
+  f.router.active.codex = 1;
+  const result = await f.connections.refreshAll({ assertIdle: async id => { if (id === 'claude') throw Error('login in progress'); } });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.refreshed.map(r => r.id), ['opencode','pi']);
+  assert.deepEqual(result.skipped.map(r => r.id), ['codex','claude','dsh']);
+  assert.match(result.skipped[0].reason, /请求正在进行/);
+  assert.match(result.skipped[1].reason, /login/); assert.match(result.skipped[2].reason, /external edit/);
+  assert.deepEqual(writes, ['opencode','pi']); assert.equal(f.router.active.codex, 1);
+  assert.equal(f.config.attachCalls, 0); assert.equal(f.connections.blocked.size, 0);
+});
+
+test('bulk refresh locks concurrent transitions and rejects changes during an async guard', async t => {
+  const f = connectionFixture(t); f.connections.enabled.codex = true;
+  let release;
+  const work = f.connections.refreshAll({ assertIdle: () => new Promise(resolve => { release = resolve; }) });
+  assert.equal(f.connections.busy, true); assert.equal(f.connections.allow('codex'), false);
+  await assert.rejects(f.connections.refreshAll(), /已有接入操作/);
+  await assert.rejects(f.connections.preview('pi', true), /正在切换/);
+  await assert.rejects(f.connections.launch(() => {}), /正在切换/);
+  fs.writeFileSync(f.config.file, '# concurrent user edit\n'); release();
+  const result = await work;
+  assert.equal(result.refreshed.length, 0); assert.match(result.skipped[0].reason, /配置已变化/);
+  assert.equal(f.config.attachCalls, 0); assert.equal(f.connections.busy, false);
+});
+
+test('bulk refresh with disabled clients is a no-op; global errors and write failures remain visible', async t => {
+  const f = connectionFixture(t);
+  assert.deepEqual((await f.connections.refreshAll()).refreshed, []);
+  assert.equal(f.router.starts, 0); assert.equal(f.config.attachCalls, 0);
+  f.connections.error = 'invalid state'; await assert.rejects(f.connections.refreshAll(), /invalid state/);
+  f.connections.error = ''; f.connections.enabled.codex = true;
+  f.config.attach = () => { throw Error('write failed'); };
+  const result = await f.connections.refreshAll();
+  assert.equal(result.ok, false); assert.match(result.skipped[0].reason, /write failed/);
+  assert.equal(f.connections.enabled.codex, true); assert.equal(f.connections.busy, false);
+});
 
 test('failed Codex session handoff retains the provider definition and enabled routing',async t=>{
   let restores=0;const f=connectionFixture(t,{sessionHandoff:{status:()=>({count:2}),restore:async()=>{restores++;throw Error('client still running');}}});

@@ -19,6 +19,7 @@ native-accounts.json
 account-info.enc.json
 oauth-history.enc.json
 codex-session-handoff.enc.json
+codex-workspace-tls.enc.json
 conversation-library/
 project-conversations/
 *.ass-session

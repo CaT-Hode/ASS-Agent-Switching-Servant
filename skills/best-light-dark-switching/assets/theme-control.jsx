@@ -31,6 +31,23 @@ const themePositions = { light: 0, system: .5, dark: 1 };
 const themeNames = { light: "浅色", system: "自动", dark: "深色" };
 const modes = ["light", "system", "dark"];
 
+function ThemeSea() {
+  const gradient = "theme-sea-" + useId().replace(/:/g, "");
+  return <g className="theme-sea">
+    <defs><linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
+      <stop className="theme-sea-stop-far" offset="0" /><stop className="theme-sea-stop-near" offset="1" />
+    </linearGradient></defs>
+    <path fill={`url(#${gradient})`} d="M0 23h216v17H0Z" />
+    <path className="theme-sea-horizon" d="M0 23.3h216" />
+    <path className="theme-sea-wave theme-sea-wave-far" d="M-40 27c20-2 36 2 56 0s36-2 56 0 36 2 56 0 36-2 56 0 36 2 56 0 36-2 56 0" />
+    <path className="theme-sea-wave theme-sea-wave-mid" d="M-40 32c24 2 42-2 66 0s42 2 66 0 42-2 66 0 42 2 66 0 42-2 66 0" />
+    <path className="theme-sea-wave theme-sea-wave-near" d="M-40 38c28-2 48 2 76 0s48-2 76 0 48 2 76 0 48-2 76 0" />
+    <g className="theme-sea-reflection" strokeLinecap="round">
+      <path d="M101 25h14M95 28h26M85 31h46M76 35h64M65 39h86" />
+    </g>
+  </g>;
+}
+
 function SunMoon() {
   const mask = "theme-cut-" + useId().replace(/:/g, "");
   return <svg className="theme-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
@@ -39,11 +56,12 @@ function SunMoon() {
       <g className="theme-cut"><circle className="theme-eclipse-shadow" cx="18" cy="12" r="7.5" fill="black" stroke="none" /></g>
       <rect className="theme-dawn-cut" x="0" y="12" width="24" height="12" fill="black" stroke="none" />
     </mask></defs>
+    <circle className="theme-dawn-halo" cx="12" cy="11" r="9" strokeWidth=".7" />
     <circle className="theme-moon-rim" cx="12" cy="12" r="7" strokeWidth=".6" />
-    <g mask={`url(#${mask})`}><circle className="theme-disc" cx="12" cy="12" r="7" />
+    <g mask={`url(#${mask})`}><g className="theme-dawn-sun"><circle className="theme-disc" cx="12" cy="12" r="7" />
     <g className="theme-rays"><g className="theme-sun-idle"><path d="M12 1v2M12 21v2M1 12h2M21 12h2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" /></g></g>
     <g className="theme-craters" fill="currentColor" stroke="none"><circle cx="7.4" cy="13" r="1" /><circle cx="11" cy="17" r=".7" /></g>
-    </g>
+    </g></g>
     <g className="theme-horizon" strokeLinecap="round"><path d="M4 13h16" /><path d="M7 17h10" /><path d="M10 21h4" /></g>
   </svg>;
 }
@@ -160,6 +178,7 @@ export function ThemeControl({ value = "system", onChange }) {
         <g className="theme-stars theme-stars-early"><path d="M36 9l1.2 3.8L41 14l-3.8 1.2L36 19l-1.2-3.8L31 14l3.8-1.2Z" /><circle cx="61" cy="29" r="1.1" /><circle cx="116" cy="9" r=".8" /></g>
         <g className="theme-stars theme-stars-late"><path d="M137 22l.8 2.5 2.5.8-2.5.8-.8 2.5-.8-2.5-2.5-.8 2.5-.8Z" /><circle cx="84" cy="14" r="1.3" /><circle cx="20" cy="28" r=".8" /></g>
         <path className="theme-comet" d="M92 9l13-4" />
+        <ThemeSea />
       </svg>
       <span className="theme-orbit"><span className="theme-ripples" aria-hidden="true"><i /><i /><i /></span><SunMoon /></span>
     </button>

@@ -60,6 +60,25 @@ function temp(t) {
   return root;
 }
 
+test("saved Codex CLI does not prevent startup discovery of its Store desktop", async (t) => {
+  const root = temp(t), bin = path.join(root, "bin"), programs = path.join(root, "programs");
+  const cli = path.join(bin, "codex.cmd"), desktop = path.join(programs, "WindowsApps/OpenAI.Codex_26.1013.3656.0_x64__2p2nqsd0c76g0/app/ChatGPT.exe");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(path.join(path.dirname(desktop), "resources/app.asar"), { recursive: true });
+  fs.writeFileSync(cli, "synthetic CLI"); fs.writeFileSync(desktop, "synthetic desktop");
+  fs.writeFileSync(path.join(path.dirname(desktop), "resources/app.asar/package.json"), '{"name":"openai-codex-electron"}');
+  const options = { home: root, env: {}, launchEnv: { PATH: bin, USERPROFILE: root, ProgramFiles: programs } };
+  const manager = new HarnessManager(root, () => ({providers: []}), [], path.join(root, "codex"), options);
+  manager.setExecutable("codex", cli);
+  const loaded = new HarnessManager(root, () => ({providers: []}), [], path.join(root, "codex"), options);
+  await loaded.refreshOAuth();
+  const client = loaded.snapshot().clients.find(c => c.id === "codex");
+  assert.equal(client.desktop, desktop);
+  assert.equal(client.launcher.executable, cli);
+  assert.equal(loaded.state.executables.codex, cli);
+  assert.equal(client.detected, true);
+});
+
 test("desktop-only OpenCode is displayed as installed and never launched with CLI credentials", async (t) => {
   const root = temp(t), { desktop, launchEnv } = desktopFixture(root);
   const manager = new HarnessManager(root, () => ({providers: []}), [], path.join(root,"codex"), { home:root, env:{}, launchEnv });

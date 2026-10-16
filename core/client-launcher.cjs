@@ -114,6 +114,26 @@ function resolveLauncher(harness, selectedPath, env = process.env) {
   // Electron Desktop is not the CLI: it ignores auth/model arguments and uses
   // a shared application profile. Detect it without launching it or injecting
   // account-specific settings into the user's existing desktop instance.
+  if (harness === "codex") {
+    const candidates = info.isDirectory()
+      ? [location, path.join(location, "app")].flatMap(dir =>
+        ["ChatGPT.exe", "Codex.exe"].map(name => path.join(dir, name)))
+      : [location];
+    for (const desktop of candidates) {
+      if (!/^(?:ChatGPT|Codex)\.exe$/i.test(path.basename(desktop)) || !stat(desktop)?.isFile()) continue;
+      const root = path.dirname(desktop);
+      const manifests = ["resources/app.asar/package.json", "resources/app/package.json"]
+        .map(relative => readDesktopJson(path.join(root, relative)));
+      if (manifests.some(manifest => manifest.name === "openai-codex-electron")) {
+        // Codex.exe is an update/activation trampoline, not the Electron main.
+        // Both selections resolve to one desktop; never fall back to the helper.
+        const primary = path.join(root, "ChatGPT.exe");
+        if (!stat(primary)?.isFile()) return { ...fail("Codex 安装缺少 ChatGPT.exe；不能使用 Codex.exe 更新跳板启动，请修复安装后重新识别"), installed: true };
+        return { ...fail("已安装 Codex 桌面端；命令行账户操作需要 Codex CLI"),
+          installed: true, kind: "desktop", desktopExecutable: primary };
+      }
+    }
+  }
   if (harness === "claude") {
     const desktop = info.isDirectory() ? path.join(location, "claude.exe") : location;
     if (/^claude\.exe$/i.test(path.basename(desktop)) && stat(desktop)?.isFile() &&
@@ -258,6 +278,27 @@ function resolveLauncher(harness, selectedPath, env = process.env) {
 function searchLocations(harness, env = process.env) {
   const home = env.USERPROFILE || os.homedir();
   const locations = [findExecutable(COMMANDS[harness] || harness, env)];
+  if (harness === "codex" && env.ProgramFiles) {
+    const packageName = /^OpenAI\.Codex_[\d.]+_(?:x64|arm64|x86)__2p2nqsd0c76g0$/i;
+    const packages = [];
+    // Prefer user registration; directory enumeration is a fallback. Only run
+    // during explicit/startup discovery, never from periodic UI snapshots.
+    if (process.platform === "win32" && env.ProgramFiles === process.env.ProgramFiles) {
+      try {
+        const output = execFileSync(
+          path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
+          ["-NoProfile", "-NonInteractive", "-Command",
+            "Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | Select-Object -ExpandProperty InstallLocation"],
+          { encoding: "utf8", windowsHide: true, timeout: 5000, maxBuffer: 16384, stdio: ["ignore", "pipe", "pipe"] },
+        );
+        packages.push(...output.split(/\r?\n/).map(value => value.trim())
+          .filter(dir => path.isAbsolute(dir) && packageName.test(path.basename(dir))));
+      } catch {}
+    }
+    // Registration wins over leftover newer package folders after a rollback.
+    if (!packages.length) packages.push(...directories(path.join(env.ProgramFiles, "WindowsApps"), packageName));
+    for (const dir of packages) locations.push(path.join(dir, "app/ChatGPT.exe"), path.join(dir, "app/Codex.exe"));
+  }
   if (harness === "claude") {
     if (env.LOCALAPPDATA) {
       const squirrel = path.join(env.LOCALAPPDATA, "AnthropicClaude");

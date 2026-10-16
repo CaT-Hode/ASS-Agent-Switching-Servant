@@ -67,6 +67,13 @@ function codexBootstrapRequest(url) {
     upstreamUrl: 'https://chatgpt.com/backend-api' + backendPath + parsed.search,
   };
 }
+function codexWorkspaceRequest(url, method) {
+  if (!['GET','HEAD','POST','PUT','PATCH','DELETE'].includes(method) ||
+      typeof url !== 'string' || !url.startsWith('/backend-api/') || /[\\\r\n]/.test(url)) return null;
+  const parsed = new URL(url, 'https://chatgpt.com');
+  if (parsed.origin !== 'https://chatgpt.com' || !parsed.pathname.startsWith('/backend-api/')) return null;
+  return { upstreamUrl: parsed.origin + parsed.pathname + parsed.search };
+}
 function upstreamDiagnostics(response, secrets) {
   const headers = Object.fromEntries(Object.entries(upstreamResponseHeaders(response.headers, secrets))
     .filter(([key]) => diagnosticNames.has(key) || key.startsWith('x-ratelimit-'))
@@ -126,5 +133,5 @@ async function forwardErrorBody(response, write, secrets = []) {
 
 module.exports = {
   officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
-  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest,
+  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexWorkspaceRequest,
 };

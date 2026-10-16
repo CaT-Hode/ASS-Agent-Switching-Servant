@@ -199,6 +199,42 @@ test("running old package and current alias block install without killing anythi
   }
 });
 
+test('keep-running pins future entries without changing the current junction or any package bytes', t => {
+  const f = fixture(t), old = f.build('0.2.4'); f.link(old);
+  f.processes = [{ Id: 42, ExecutablePath: path.join(f.ctx.current, 'ASS.exe') }];
+  const before = snapshot(f.ctx.releaseRoot), options = { keepRunning: true };
+  const plan = buildPlan(f.ctx, options);
+  assert.equal(plan.activation, 'next-launch'); assert.equal(plan.running.length, 0);
+  assert.equal(plan.preservedProcesses[0].Id, 42);
+  const result = executeInstall(f.ctx, options);
+  assert.equal(result.activeRuntimeReplaced, false); assert.equal(result.currentPreserved, true);
+  assert.equal(f.shortcut.targetPath, path.join(f.target, 'ASS.exe'));
+  assert.equal(f.shortcut.workingDirectory, f.target);
+  assert.deepEqual(snapshot(f.ctx.releaseRoot), before);
+  const writes = f.writes; executeInstall(f.ctx, options); assert.equal(f.writes, writes);
+  assert.equal(fs.realpathSync(f.ctx.current), fs.realpathSync(old));
+});
+
+test('keep-running still refuses pruning, foreign shortcuts and failed process inspection', t => {
+  const f = fixture(t);
+  assert.equal(parseArgs(['install','--keep-running']).keepRunning, true);
+  assert.throws(() => executeInstall(f.ctx, { keepRunning:true, prune:true }), /cannot prune/);
+  f.shortcut = { TargetPath: path.join(f.root,'foreign','ASS.exe') };
+  assert.throws(() => executeInstall(f.ctx, { keepRunning:true }), /foreign/);
+  f.shortcut = null; f.osApi.processProbe = () => { throw Error('CIM unavailable'); };
+  assert.throws(() => executeInstall(f.ctx, { keepRunning:true }), /CIM unavailable/);
+  assert.equal(f.writes,0);
+});
+
+test('a later normal install converges a version-pinned entry after the old process exits', t => {
+  const f=fixture(t),old=f.build('0.2.4');f.link(old);
+  executeInstall(f.ctx,{keepRunning:true});executeInstall(f.ctx);
+  assert.equal(f.shortcut.targetPath,path.join(f.ctx.current,'ASS.exe'));
+  assert.equal(fs.realpathSync(f.ctx.current),fs.realpathSync(f.target));assert.ok(fs.existsSync(old));
+  const {windowsBrandSpec}=require('../scripts/local-release.cjs');
+  assert.equal(windowsBrandSpec(f.ctx,{keepRunning:true}).Executable,path.join(f.target,'ASS.exe'));
+});
+
 test("unrelated running ASS does not block and current running package is not pruned", t => {
   const f = fixture(t);
   f.link(f.target);

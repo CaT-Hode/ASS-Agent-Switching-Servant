@@ -130,8 +130,8 @@ class DesktopRestartAdapter {
 class ClientRestart {
   constructor({ adapter = new DesktopRestartAdapter(), desktop = () => null, processes, ownerPid = process.pid,
     fileInfo = (file) => { const s = fs.statSync(file); if (!s.isFile()) throw Error(); return [s.size, s.mtimeMs]; },
-    wait = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
-    Object.assign(this, { adapter, desktop, processes, ownerPid, fileInfo, wait });
+    wait = (ms) => new Promise((r) => setTimeout(r, ms)), launchDesktop } = {}) {
+    Object.assign(this, { adapter, desktop, processes, ownerPid, fileInfo, wait, launchDesktop });
     this.stoppedPlans = new WeakSet();
   }
   async capture(ids) {
@@ -225,7 +225,8 @@ class ClientRestart {
     this.stoppedPlans.delete(plan);
     await this.assertStopped(plan);
     beforeLaunch();
-    const launched = await this.adapter.launch(plan.value.apps);
+    const launched = this.launchDesktop ? await this.launchDesktop(plan.value.apps, this.adapter)
+      : await this.adapter.launch(plan.value.apps);
     if (launched?.launched !== true) throw Error("客户端启动失败，请手动打开");
     for (let i = 0; i < 30; i++) {
       await this.wait(500);

@@ -60,6 +60,9 @@ const { InjectionFiles } = require("../core/injection-files.cjs");
 const { ClientProcesses } = require("../core/client-processes.cjs");
 const { Connections } = require("../core/connections.cjs");
 const { ClientRestart } = require("../core/client-restart.cjs");
+const { CodexWorkspaceRelay } = require('../core/codex-workspace-relay.cjs');
+const { launchCodexDesktop, openCodexDesktop } = require('../core/codex-desktop-launch.cjs');
+let codexWorkspaceRelay;
 const { Preferences } = require("../core/preferences.cjs");
 const { UsageHistory } = require("../core/usage-history.cjs");
 const accountTransactions = require("../core/account-transactions.cjs");
@@ -507,7 +510,7 @@ function buildSnapshot() {
       port: router.port,
       active: router.active,
     },
-    codex: config.status(),
+    codex: { ...config.status(), officialService: codexWorkspaceRelay?.status() },
     authReady: authReady(),
     encrypted: safeStorage.isEncryptionAvailable(),
     recent,
@@ -823,6 +826,18 @@ function syncWindowTheme() {
   if (!window || window.isDestroyed()) return;
   window.setBackgroundColor(windowChrome().color);
 }
+async function codexWorkspaceLaunchOptions() {
+  if (!connections.enabled.codex || proxyConfig.clients.codex?.accountless)
+    return null;
+  proxyConfig.requireCodexOfficialService();
+  const configured = require('@iarna/toml').parse(fs.readFileSync(config.file, 'utf8')).chatgpt_base_url;
+  if (configured && configured !== 'https://chatgpt.com/backend-api/')
+    throw Error('检测到自定义官方后端地址，未改用 ASS 官方服务中转');
+  for (const name of ['CODEX_API_BASE_URL','CODEX_APP_SERVER_CHATGPT_BASE_URL'])
+    if (process.env[name] && process.env[name] !== 'https://chatgpt.com/backend-api/')
+      throw Error('存在官方服务环境覆盖，未改用 ASS 中转');
+  return codexWorkspaceRelay.start();
+}
 let windowStateSequence = 0;
 function publishWindowState() {
   if (!window || window.isDestroyed()) return;
@@ -1033,9 +1048,18 @@ else {
         onActivity: push,
         getOfficialAuth: options => codexOfficialAuth.headers(options),
       });
+      codexWorkspaceRelay = new CodexWorkspaceRelay({ dataDir, crypto: safeStorage, router });
       restarter = new ClientRestart({
         desktop: (id) => harnesses.desktop(id),
         processes,
+        launchDesktop: async (apps, adapter) => {
+          for (const target of apps) {
+            const options = target.id === 'codex' ? await codexWorkspaceLaunchOptions() : null;
+            const result = options ? await launchCodexDesktop(target.exe, options) : await adapter.launch([target]);
+            if (result?.launched !== true) throw Error('客户端启动失败');
+          }
+          return { launched: true };
+        },
         // Never discover or terminate real desktop processes from an isolated QA.
         ...(testMode ? { adapter: { inventory: async () => ({ apps: [], rows: [] }) } } : {}),
       });
@@ -1118,6 +1142,10 @@ else {
       } catch (error) {
         startupError = "端口 " + servicePort + " 无法启动：" + error.message;
       }
+      if (connections.enabled.codex && proxyConfig.clients.codex?.gatewayAuth && !proxyConfig.clients.codex.accountless) {
+        try { await codexWorkspaceLaunchOptions(); }
+        catch (error) { startupError = [startupError,'Codex 官方服务中转未恢复：'+error.message].filter(Boolean).join('；'); }
+      }
       register("snapshot", () => snapshot());
       register("window-action", (action) => {
         require('../core/window-controls.cjs').windowAction(window, action);
@@ -1169,6 +1197,7 @@ else {
         return connections.preview(scope, enabled, quit, accountless);
       });
       register("connection-repair-preview", (scope) => connections.repairPreview(scope));
+      register("connections-refresh", () => connections.refreshAll({ assertIdle: id => nativeLogin.assertIdle(id) }));
       register("connection-repair", async (input) => {
         for (const id of connections.tickets.get(input?.ticket)?.ids || [])
           await nativeLogin.assertIdle(id);
@@ -1454,6 +1483,11 @@ else {
         return { candidates, selected, snapshot: await refreshClientState() };
       });
       register("client-open-desktop", async (id) => {
+        if (id === 'codex') return openCodexDesktop({
+          desktop: () => harnesses.desktop('codex'), rediscover: () => harnesses.detect('codex'),
+          workspaceOptions: codexWorkspaceLaunchOptions, preview: () => restarter.preview(['codex']),
+          openNative: executable => shell.openPath(executable), accountless: !!proxyConfig.clients.codex?.accountless,
+        });
         if (id === "claude" && proxyConfig.clients.claude?.accountless &&
             (!proxyConfig.status("claude", true).applied ||
               !claudeDesktop.status(proxyConfig.clients.claude.localToken, servicePort).current))
@@ -1797,5 +1831,6 @@ else {
     for (const controller of probeControllers.values()) controller.abort();
     openRouterAuth?.cancel();
     router?.stop();
+    void codexWorkspaceRelay?.stop();
   });
 }

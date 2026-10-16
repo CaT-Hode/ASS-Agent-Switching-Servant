@@ -428,6 +428,51 @@ class Connections {
       this.onChange();
     }
   }
+  async refreshAll({ assertIdle = async () => {} } = {}) {
+    if (this.busy) throw Error("已有接入操作正在执行");
+    if (this.error) throw Error(this.error);
+    // Refresh is not an enable/repair/launch operation. Only rewrite owned
+    // fields for clients already connected, and never close running windows.
+    const ids = this.ids("all").filter(id => this.enabled[id]);
+    const refreshed = [], skipped = [];
+    this.busy = true;
+    try {
+      for (const id of ids) {
+        this.blocked.add(id);
+        try {
+          if (this.router.clientActive(id)) throw Error("请求正在进行，请等待任务结束后刷新");
+          const before = this.fingerprint([id], true, false, false);
+          await assertIdle(id);
+          this.preflight([id], true);
+          if (this.needsRouter(id)) await this.router.start(this.port);
+          // The server start and login guard can yield; stale configuration
+          // must not be overwritten even though the UI transition is locked.
+          if (before !== this.fingerprint([id], true, false, false))
+            throw Error("配置已变化，请重新刷新");
+          if (this.router.clientActive(id)) throw Error("请求正在进行，请等待任务结束后刷新");
+          this.preflight([id], true);
+          this.nativeConfig?.sync(id);
+          this.proxyConfig?.sync(id);
+          if (id === "codex" && !this.proxyConfig) {
+            this.writeCatalog();
+            this.config.attach();
+          }
+          this.revision++;
+          refreshed.push({ id, name: NAMES[id] });
+        } catch (error) {
+          skipped.push({ id, name: NAMES[id], reason: error.message });
+        } finally {
+          this.blocked.delete(id);
+        }
+      }
+      return { ok: skipped.length === 0, refreshed, skipped,
+        message: ids.length ? `已刷新 ${refreshed.length} 个接入${skipped.length ? `，跳过 ${skipped.length} 个` : ""}；未重启客户端。客户端需重新加载配置后生效。`
+          : "没有已开启的接入，无需刷新。" };
+    } finally {
+      this.busy = false;
+      this.onChange();
+    }
+  }
   async repairPreview(scope) {
     const [id] = this.ids(scope);
     if (scope === "all") throw Error("请逐个客户端修复接入");

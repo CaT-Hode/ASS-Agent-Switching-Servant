@@ -165,7 +165,7 @@ test('unchanged-size resize notifications cannot end a reveal, real viewport cha
 });
 
 test('portable skill reveal preserves mask lifetime, pacing and single-commit interruption', async () => {
-  const f = await fixture({ module: '../skills/ass-theme-design/assets/theme-reveal.mjs' });
+  const f = await fixture({ module: '../skills/best-light-dark-switching/assets/theme-reveal.mjs' });
   let count = 0;
   f.controller.run(() => count++, { x: 40, y: 920 });
   f.transitions[0].update(); f.transitions[0].readyNow(); await flush();

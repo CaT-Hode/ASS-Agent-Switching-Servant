@@ -3,7 +3,8 @@
 const { app, session } = require('electron');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const http = require('node:http'), zlib = require('node:zlib'), assert = require('node:assert/strict');
-const { Router } = require('../core/router.cjs');
+const load = require('node:module').createRequire(path.join(process.env.ASS_QA_RUNTIME_ROOT || path.resolve(__dirname, '..'), 'package.json'));
+const { Router } = load('./core/router.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-passthrough-qa-'));
 app.setPath('userData', root);
 app.disableHardwareAcceleration();

@@ -36,6 +36,51 @@ test("DSH source directory resolves built CLI without changing working directory
   assert.equal(fs.existsSync(path.join(source, "dsh-ass.cmd")), false);
   assert.equal(discoverLaunchers("dsh", env, [source, source]).length, 1);
 });
+
+test("Codex Store desktop and CLI are discovered separately, latest installed desktop first", (t) => {
+  const { root, write, env } = fixture(t);
+  write("runtime/codex.cmd");
+  const packages = ["26.1012.1.0", "26.1013.3656.0"].map(version =>
+    "programs/WindowsApps/OpenAI.Codex_" + version + "_x64__2p2nqsd0c76g0");
+  for (const relative of packages) {
+    write(relative + "/app/ChatGPT.exe");
+    write(relative + "/app/Codex.exe", "synthetic activation trampoline");
+    const pkg = Buffer.from('{"name":"openai-codex-electron","productName":"Codex"}');
+    write(relative + "/app/resources/app.asar", archiveBuffer({ files: { "package.json": { size: pkg.length, offset: "0" } } }, pkg));
+  }
+  const candidates = discoverLaunchers("codex", { ...env, ProgramFiles: path.join(root, "programs") });
+  assert.equal(candidates.filter(c => c.ready).length, 1);
+  const desktops = candidates.filter(c => c.kind === "desktop");
+  assert.equal(desktops.length, 2);
+  assert.equal(desktops[0].desktopExecutable, path.join(root, packages[1], "app/ChatGPT.exe"));
+  assert.equal(desktops[0].installed, true);
+  assert.equal(desktops[0].ready, false);
+  assert.equal(desktops[0].executable, "");
+  assert.equal(resolveLauncher("codex", path.join(root, packages[1]), env).kind, "desktop");
+  assert.equal(resolveLauncher("codex", path.join(root, packages[1], "app/Codex.exe"), env).desktopExecutable, desktops[0].desktopExecutable);
+  fs.unlinkSync(desktops[0].desktopExecutable);
+  assert.equal(discoverLaunchers("codex", env, [desktops[0].desktopExecutable]).length, 0);
+});
+
+test("Codex desktop discovery requires product metadata, not a renamed CLI or unrelated Electron app", (t) => {
+  const { root, write, env } = fixture(t);
+  write("cli/codex.exe");
+  assert.equal(resolveLauncher("codex", path.join(root, "cli/codex.exe"), env).kind, "executable");
+  write("other/ChatGPT.exe");
+  write("other/resources/app/package.json", '{"name":"another-electron-app","productName":"Codex"}');
+  assert.notEqual(resolveLauncher("codex", path.join(root, "other/ChatGPT.exe"), env).kind, "desktop");
+  write("desktop/ChatGPT.exe");
+  write("desktop/Codex.exe");
+  write("desktop/resources/app/package.json", '{"name":"openai-codex-electron"}');
+  assert.equal(resolveLauncher("codex", path.join(root, "desktop/Codex.exe"), env).kind, "desktop");
+  assert.equal(resolveLauncher("codex", path.join(root, "desktop"), env).kind, "desktop");
+  assert.equal(discoverLaunchers("codex",env,[path.join(root,"desktop/ChatGPT.exe"),path.join(root,"desktop/Codex.exe"),path.join(root,"desktop")]).length,1);
+  fs.unlinkSync(path.join(root,"desktop/ChatGPT.exe"));
+  const broken=resolveLauncher("codex",path.join(root,"desktop/Codex.exe"),env);
+  assert.notEqual(broken.kind,"desktop");assert.equal(broken.ready,false);
+  assert.match(broken.message,/缺少 ChatGPT.exe/);
+  assert.equal(discoverLaunchers("codex",env,[path.join(root,"desktop/Codex.exe")]).length,0);
+});
 test("source recognition reports missing dependencies and Node without executing package scripts", (t) => {
   const { root, write, env } = fixture(t);
   write(

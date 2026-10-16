@@ -400,7 +400,7 @@ class HarnessManager {
   }
   async refreshOAuth({ rediscover = false } = {}) {
     for (const { id } of ACTIVE_SPECS) {
-      if (rediscover || !this.state.executables[id] || id === "opencode") this.detect(id);
+      if (rediscover || !this.state.executables[id] || ["codex", "opencode"].includes(id)) this.detect(id);
     }
     const pi = this.launcher("pi");
     const [piProviders] = await Promise.all([piOAuthProviders(pi.ready ? pi.entryPoint : "")]);

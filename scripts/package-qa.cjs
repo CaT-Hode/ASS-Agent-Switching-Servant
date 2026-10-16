@@ -54,6 +54,10 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     assert.equal(state.service.running, false);
     assert.equal(state.startupError, '');
     assert.equal(state.codex.attached, false);
+    const refresh = await page.evaluate(() => window.ass.call('connections-refresh'));
+    assert.equal(refresh.ok, true);
+    assert.deepEqual(refresh.refreshed, []);
+    assert.deepEqual(refresh.skipped, []);
     await page.getByRole("button", { name: "关于 ASS", exact: true }).click();
     await page.locator(".ass-wordmark").waitFor();
     assert.equal(await page.locator(".ass-brand-hero p").textContent(), "Agent-Switching-Servant");
@@ -66,6 +70,13 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     await page
       .getByRole("button", { name: "客户端与账户", exact: true })
       .click();
+    if (!(await page.getByRole("button", { name: "Codex", exact: true }).isVisible()))
+      await page.locator(".more-clients > summary").click();
+    await page.getByRole("button", { name: "Codex", exact: true }).click();
+    const codexLaunch = page.getByRole("button", { name: "通过 ASS 启动 Codex", exact: true });
+    await codexLaunch.waitFor(); assert.ok(await codexLaunch.isEnabled());
+    const codexDesktopDetected = !!state.harnesses.clients.find(c => c.id === 'codex')?.desktop;
+    await page.locator('.codex-desktop-launch').screenshot({ path: path.join(output, "codex-desktop-launch.png"), animations: "disabled" });
     if (!(await page.getByRole("button", { name: "pi", exact: true }).isVisible()))
       await page.locator(".more-clients > summary").click();
     await page
@@ -102,6 +113,8 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
         oauthUI: true,
         fullName: "Agent-Switching-Servant",
         pageErrors: 0,
+        codexLaunchVisible: true,
+        codexDesktopDetected,
       }),
     );
   } finally {

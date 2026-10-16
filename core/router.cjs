@@ -7,11 +7,11 @@ const { forwardHarness, authorized } = require("./harness-route.cjs");
 const { providerSessionHeaders, protocolEndpoint } = require("./provider-transport.cjs");
 const crypto = require("node:crypto");
 const { toolBridge } = require("./tool-bridge.cjs");
-const { readJSON } = require("./request-body.cjs");
+const { readJSON, readBytes } = require("./request-body.cjs");
 const { officialCodexHistory } = require("./response-history.cjs");
 const { withOutputLimit } = require('./output-tokens.cjs');
 const { officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
-  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest } = require('./http-passthrough.cjs');
+  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexWorkspaceRequest } = require('./http-passthrough.cjs');
 async function write(res, data) {
   if (res.destroyed) throw Error("客户端已断开");
   if (!res.write(data)) await new Promise((resolve, reject) => {
@@ -171,12 +171,14 @@ class Router {
     const requestId = crypto.randomUUID();
     const secrets = [req.headers.authorization?.replace(/^Bearer\s+/i, '')].filter(Boolean);
     try {
-      const expected = `127.0.0.1:${this.port}`;
+      const workspaceRelay = req.assWorkspaceRelay === true && req.socket.encrypted === true;
+      const localPort = workspaceRelay ? req.socket.localPort : this.port;
+      const expected = `127.0.0.1:${localPort}`;
       if (
         req.headers.origin ||
         req.headers["sec-fetch-site"] === "cross-site" ||
         (req.headers.host !== expected &&
-          req.headers.host !== `localhost:${this.port}`)
+          req.headers.host !== `localhost:${localPort}`)
       )
         throw Object.assign(new Error("仅允许本机应用请求"), { status: 403 });
       if (req.url !== "/health") {
@@ -214,15 +216,20 @@ class Router {
         await forwardHarness(this, req, res);
         return;
       }
-      const bootstrap = client === "codex" && req.method === "GET"
-        ? codexBootstrapRequest(req.url)
-        : null;
+      const bootstrap = client !== "codex" ? null : workspaceRelay
+        ? codexWorkspaceRequest(req.url, req.method)
+        : req.method === "GET" ? codexBootstrapRequest(req.url) : null;
       if (bootstrap) {
         const state = this.getState(client) || {};
         const credential = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-        if (state.accountless && authorized(credential, state.localToken))
+        if (workspaceRelay && !/^Bearer\s+\S+$/i.test(req.headers.authorization || ''))
+          throw Object.assign(Error('官方服务需要当前 OAuth 登录'), { status: 401 });
+        if (state.accountless && (workspaceRelay || authorized(credential, state.localToken)))
           throw Object.assign(Error("无账号模式不转发官方账户请求"), { status: 401 });
         const headers = officialRequestHeaders(req.headers);
+        // This service request uses ASS's real Chromium transport identity.
+        // Model Responses routes still preserve the original Codex User-Agent.
+        if (workspaceRelay) delete headers['user-agent'];
         if (state.gatewayAuth && authorized(credential, state.localToken)) {
           if (!this.getOfficialAuth)
             throw Object.assign(Error("官方 OAuth 不可用，请在 Codex 账户中登录"), { status: 401 });
@@ -239,8 +246,9 @@ class Router {
         res.on("close", () => {
           if (!res.writableFinished) controller.abort();
         });
+        const body = workspaceRelay && !['GET','HEAD'].includes(req.method) ? await readBytes(req) : undefined;
         const response = await this.fetch(bootstrap.upstreamUrl, {
-          method: "GET", headers, signal: controller.signal,
+          method: workspaceRelay ? req.method : "GET", headers, ...(body ? { body } : {}), signal: controller.signal,
           redirect: "error", credentials: "omit",
         }, "system");
         httpStatus = response.status;
@@ -252,7 +260,10 @@ class Router {
           "x-ass-request-id": requestId,
         });
         forwardingError = true;
-        const sample = await forwardErrorBody(response, chunk => write(res, chunk), secrets);
+        let sample = '';
+        if (/json|text\/|event-stream/i.test(response.headers.get('content-type') || ''))
+          sample = await forwardErrorBody(response, chunk => write(res, chunk), secrets);
+        else if (response.body) for await (const chunk of response.body) await write(res, chunk);
         if (!response.ok) {
           const summary = summarizeUpstreamError(sample, response.status, response.headers.get("content-type"), secrets);
           upstream.errorKind = summary.kind;
@@ -260,7 +271,7 @@ class Router {
         }
         res.end();
         this.log({
-          time: new Date().toISOString(), source: "OpenAI 官方账户设置", model: "",
+          time: new Date().toISOString(), source: workspaceRelay ? "OpenAI 官方服务" : "OpenAI 官方账户设置", model: "",
           status: response.status, ms: Date.now() - began, ok: response.ok,
           httpStatus, httpOk: response.ok, taskOk: response.ok, requestId, upstream,
         });

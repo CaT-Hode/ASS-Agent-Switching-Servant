@@ -1,0 +1,4 @@
+interface:
+  display_name: "Best Light Dark Switching"
+  short_description: "从实际项目提炼的深浅配色、太阳月亮与落日海景胶囊及圆形切换动效"
+  default_prompt: "使用 $best-light-dark-switching，基于当前项目实际实现复用或优化深浅主题、太阳月亮与可选落日海景胶囊及清晰圆形切换，保留已有内容和设置逻辑。"

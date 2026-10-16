@@ -35,6 +35,86 @@ function fixture(t) {
   const connections = new Connections({ dataDir: data, config, proxyConfig: proxy, injections: new InjectionFiles(data), router, processes });
   return { root, data, codex, original, store, manager, config, proxy, connections, router };
 }
+
+function legacyWorkspaceRelay(f, baseline = null) {
+  const text = fs.readFileSync(f.config.file, "utf8").replace(/^chatgpt_base_url\s*=.*\n/m, "")
+    .replace('# >>> ass managed start\n', '# >>> ass managed start\n' +
+      `chatgpt_base_url = ${JSON.stringify(f.config.legacyChatgptBaseUrl)}\n`);
+  const record = JSON.parse(fs.readFileSync(f.config.record, "utf8"));
+  record.replaced.chatgpt_base_url = baseline;
+  record.blocks = text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g);
+  atomic(f.config.file, text); atomic(f.config.record, JSON.stringify(record));
+}
+
+for (const action of ["sync", "repair"]) {
+  for (const baseline of [null, "https://chatgpt.com/backend-api/", "https://workspace.example/backend-api/"]) {
+    test(`Codex ${action} retires v0.3.28 account relay with baseline ${baseline || "native default"}`, t => {
+      const f = fixture(t);
+      if (baseline) atomic(f.config.file, `chatgpt_base_url = ${JSON.stringify(baseline)}\n` + f.original);
+      f.proxy.sync("codex");
+      const clients = structuredClone(f.proxy.clients);
+      const auth = fs.readFileSync(path.join(f.codex, "auth.json"));
+      legacyWorkspaceRelay(f, baseline);
+      const before = [f.config.file, f.config.record].map(file => fs.readFileSync(file));
+      const restarted = new ProxyConfig(f.data, crypt, f.manager, f.store, f.config);
+      assert.equal(restarted.status("codex", true).pending, true);
+      assert.equal(restarted.status("codex", true).error, "");
+      for (const [i, file] of [f.config.file, f.config.record].entries()) assert.deepEqual(fs.readFileSync(file), before[i]);
+      if (action === "repair") assert.equal(f.proxy.repair("codex").migrated, true);
+      else f.proxy.sync("codex");
+      assert.equal(TOML.parse(fs.readFileSync(f.config.file, "utf8")).chatgpt_base_url, baseline ?? undefined);
+      const record = JSON.parse(fs.readFileSync(f.config.record, "utf8"));
+      assert.equal(Object.hasOwn(record.replaced, "chatgpt_base_url"), false);
+      assert.ok(record.blocks.every(block => !block.includes("chatgpt_base_url")));
+      assert.deepEqual(f.proxy.clients, clients);
+      assert.equal(f.proxy.status("codex", true).applied, true);
+      assert.equal(f.config.status().legacyWorkspaceRelay, false);
+      assert.equal(new ProxyConfig(f.data, crypt, f.manager, f.store, f.config).status("codex", true).applied, true);
+      assert.deepEqual(fs.readFileSync(path.join(f.codex, "auth.json")), auth);
+      f.config.detach(); f.proxy.restore(["codex"]);
+      assert.deepEqual(TOML.parse(fs.readFileSync(f.config.file, "utf8")), {
+        ...TOML.parse(f.original), ...(baseline ? { chatgpt_base_url: baseline } : {}),
+      });
+    });
+  }
+
+  test(`Codex ${action} rollback keeps both old relay and ownership record recoverable`, t => {
+    const f = fixture(t); f.proxy.sync("codex"); legacyWorkspaceRelay(f, "https://chatgpt.com/backend-api/");
+    const files = [f.config.file, f.config.record, f.config.catalog, path.join(f.codex, "auth.json")];
+    const before = files.map(file => fs.readFileSync(file));
+    const persist = f.proxy.persist.bind(f.proxy); let calls = 0;
+    f.proxy.persist = (...args) => { if (++calls === 2) throw Error("synthetic relay migration failure"); return persist(...args); };
+    assert.throws(() => f.proxy[action]("codex"), /relay migration failure/);
+    assert.deepEqual(files.map(file => fs.readFileSync(file)), before);
+    assert.equal(f.proxy.pending, null);
+    f.proxy.persist = persist;
+    f.proxy[action]("codex");
+    assert.equal(f.proxy.status("codex", true).applied, true);
+  });
+}
+
+test("Codex legacy relay repair preserves applied routes and later account backend edits", t => {
+  const f = fixture(t); f.proxy.sync("codex"); legacyWorkspaceRelay(f);
+  const clients = structuredClone(f.proxy.clients);
+  f.store.updateProvider({ ...f.store.state.providers[0], baseUrl: "https://pending.example/v1", apiKey: "pending-key" });
+  f.proxy.repair("codex");
+  assert.deepEqual(f.proxy.clients, clients);
+  assert.equal(f.proxy.status("codex", true).pending, true);
+  atomic(f.config.file, 'chatgpt_base_url = "https://user.example/backend-api/"\n' + fs.readFileSync(f.config.file, "utf8"));
+  f.config.detach();
+  assert.equal(TOML.parse(fs.readFileSync(f.config.file, "utf8")).chatgpt_base_url, "https://user.example/backend-api/");
+});
+
+test("Codex legacy relay without an account backend baseline cannot be migrated or removed", t => {
+  const f = fixture(t); f.proxy.sync("codex"); legacyWorkspaceRelay(f);
+  const record = JSON.parse(fs.readFileSync(f.config.record, "utf8")); delete record.replaced.chatgpt_base_url;
+  atomic(f.config.record, JSON.stringify(record));
+  const files = [f.config.file, f.config.record, f.config.catalog], before = files.map(file => fs.readFileSync(file));
+  assert.throws(() => f.proxy.sync("codex"), /不匹配/);
+  assert.throws(() => f.proxy.repair("codex"), /不匹配/);
+  assert.throws(() => f.config.detach(), /不匹配/);
+  assert.deepEqual(files.map(file => fs.readFileSync(file)), before);
+});
 test("proxy drafts never change attached catalog or routing; provider sync writes the selected ASS default and restart", (t) => {
   const f = fixture(t);
   f.manager.setInjection("codex", { excludedProviders: [], defaultModel: modelRef("relay", "two") });
@@ -127,6 +207,25 @@ test("current repair restores applied config and catalog without changing rollba
   assert.equal(restored.model, "gpt-original");
   assert.equal(restored.model_reasoning_effort, "high");
   assert.equal(restored.features.keep, false);
+});
+
+test("native selection writes stay applied and pending model drafts do not block official project transport", t=>{
+  const f=fixture(t);f.proxy.sync('codex');
+  const before=fs.readFileSync(path.join(f.codex,'auth.json'),'utf8');
+  const text=fs.readFileSync(f.config.file,'utf8');
+  const parsed=TOML.parse(text);
+  atomic(f.config.file,text.replace('model = '+JSON.stringify(parsed.model),'model = "gpt-6-astra"')
+    .replace('model_reasoning_effort = '+JSON.stringify(parsed.model_reasoning_effort),'model_reasoning_effort = "xhigh"'));
+  assert.equal(f.proxy.status('codex',true).applied,true);
+  assert.doesNotThrow(()=>f.proxy.requireCodexOfficialService());
+  f.proxy.repair('codex');
+  assert.equal(TOML.parse(fs.readFileSync(f.config.file,'utf8')).model,'gpt-6-astra');
+  f.store.updateProvider({...f.store.state.providers[0],baseUrl:'https://pending.invalid/v1'});
+  assert.equal(f.proxy.status('codex',true).pending,true);
+  assert.doesNotThrow(()=>f.proxy.requireCodexOfficialService());
+  assert.equal(fs.readFileSync(path.join(f.codex,'auth.json'),'utf8'),before);
+  atomic(f.config.file,fs.readFileSync(f.config.file,'utf8').replace('base_url = '+JSON.stringify(f.config.baseUrl),'base_url = "https://foreign.invalid/v1"'));
+  assert.throws(()=>f.proxy.requireCodexOfficialService(),/外部修改/);
 });
 
 test("leaving accountless mode keeps the shared ASS model until the connection is disabled", t => {

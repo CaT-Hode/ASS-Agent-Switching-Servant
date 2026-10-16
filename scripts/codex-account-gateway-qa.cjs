@@ -8,12 +8,14 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { createInterface } = require('node:readline');
 const assert = require('node:assert/strict');
+const { prepareConfig, atomic } = require('../core/config.cjs');
+const { makeCatalog, normalizeProvider, codexModelId } = require('../core/models.cjs');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-account-gateway-'));
 const codex = path.join(root, 'codex');
 fs.mkdirSync(codex);
 const binaryRoot = path.join(process.env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin');
-const binary = fs.readdirSync(binaryRoot)
+const binary = process.argv[2] || fs.readdirSync(binaryRoot)
   .map(entry => path.join(binaryRoot, entry, 'codex.exe'))
   .find(fs.existsSync);
 if (!binary) throw Error('Codex binary not found');
@@ -61,7 +63,13 @@ server = http.createServer(async (req, res) => {
 });
 
 function writeConfig(port) {
-  fs.writeFileSync(path.join(codex, 'config.toml'), `model_provider = "ASS"\nmodel = "mimo"\nopenai_base_url = "http://127.0.0.1:${port}/v1"\nchatgpt_base_url = "http://127.0.0.1:${port}/backend-api/"\n[model_providers.ASS]\nname = "ASS"\nbase_url = "http://127.0.0.1:${port}/v1"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\n`);
+  const providers = [normalizeProvider({ id: 'fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic',
+    models: [{ model: 'mimo', wireApi: 'openai-responses' }] })];
+  const catalog = path.join(root, 'catalog.json');
+  atomic(catalog, JSON.stringify(makeCatalog([{ slug: 'gpt-6.1-sol' }], providers)));
+  atomic(path.join(codex, 'config.toml'), prepareConfig('', catalog,
+    `http://127.0.0.1:${port}/clients/ASS/v1`,
+    { model: codexModelId('fixture', 'mimo'), effort: 'medium' }, 'a'.repeat(64), true).text);
 }
 
 function launch() {
@@ -112,9 +120,10 @@ function launch() {
     const thread = await client.rpc('thread/start', { cwd: root, approvalPolicy: 'never', sandbox: 'read-only' });
     const quotaTurn = await client.rpc('turn/start', { threadId: thread.thread.id, model: 'gpt-6.1-sol', input: [{ type: 'text', text: 'quota fixture' }] });
     await client.completed(quotaTurn.turn.id, 'failed');
-    const thirdPartyTurn = await client.rpc('turn/start', { threadId: thread.thread.id, model: 'mimo', input: [{ type: 'text', text: 'third party fixture' }] });
+    const thirdPartyTurn = await client.rpc('turn/start', { threadId: thread.thread.id, model: codexModelId('fixture', 'mimo'), input: [{ type: 'text', text: 'third party fixture' }] });
     await client.completed(thirdPartyTurn.turn.id, 'completed');
-    assert.deepEqual(calls.filter(call => call.model).map(call => call.model), ['gpt-6.1-sol', 'mimo']);
-    console.log(JSON.stringify({ passed: true, accountVisible: true, officialQuotaFailed: true, thirdPartyAfterQuota: true, calls, realCloudCalls: 0 }));
+    assert.deepEqual(calls.filter(call => call.model).map(call => call.model), ['gpt-6.1-sol', codexModelId('fixture', 'mimo')]);
+    console.log(JSON.stringify({ passed: true, fullGeneratedConfig: true, accountVisible: true,
+      selectedWorkspace: false, officialQuotaFailed: true, thirdPartyAfterQuota: true, calls, realCloudInferenceCalls: 0 }));
   } finally { cleanup(); }
 })().catch(error => { console.error(JSON.stringify({ error: error.message, discovery })); process.exitCode = 1; });

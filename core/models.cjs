@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { DEFAULT_OUTPUT_TOKENS } = require('./output-tokens.cjs');
 const { CONFIG_LIMITS, checkSize, validateProviders } = require('./config-limits.cjs');
 const { tail, inferProtocol, contextDefault } = require("./presets.cjs");
 const { normalizeBalance } = require("./balance.cjs");
@@ -88,7 +89,7 @@ function normalizeModel(raw, provider, officialModels = []) {
     enabled: raw.enabled !== false,
     maxOutputTokens: Math.min(
       contextWindow,
-      Math.max(1024, Number(raw.maxOutputTokens) || 16384),
+      Math.max(1024, Number(raw.maxOutputTokens) || DEFAULT_OUTPUT_TOKENS),
     ),
   };
 }

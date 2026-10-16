@@ -79,6 +79,29 @@ function checkPolicy(manager, t) {
     if (data.forceLoginMethod || data.forceLoginOrgUUID) throw Error("CC 配置要求官方登录，请先确认其登录策略；ASS 不覆盖此限制");
   }
 }
+const routedModel = value => typeof value === 'string' && (/^claude-ass-/.test(value) || value.includes('::'));
+function clearRoutedSelections(data) {
+  const before = JSON.stringify(data), result = structuredClone(data);
+  const base = result.env?.ANTHROPIC_BASE_URL;
+  // A previous, independently configured gateway still owns its model names.
+  if (base && !/^https:\/\/api\.anthropic\.com\/?$/.test(base)) return data;
+  for (const key of ['model', 'lastModel', 'lastSessionModel']) if (routedModel(result[key])) delete result[key];
+  for (const project of Object.values(result.projects || {})) {
+    const projectBase = project.env?.ANTHROPIC_BASE_URL;
+    if (projectBase && !/^https:\/\/api\.anthropic\.com\/?$/.test(projectBase)) continue;
+    for (const key of ['model', 'lastModel', 'lastSessionModel']) if (routedModel(project[key])) delete project[key];
+  }
+  for (const key of MODEL_ENV) if (routedModel(result.env?.[key])) delete result.env[key];
+  if (Array.isArray(result.availableModels)) {
+    result.availableModels = result.availableModels.filter(model => !routedModel(typeof model === 'string' ? model : model?.value));
+    if (!result.availableModels.length) { delete result.availableModels; delete result.enforceAvailableModels; }
+  }
+  if (Array.isArray(result.modelPicker)) {
+    result.modelPicker = result.modelPicker.filter(model => !routedModel(model?.value || model?.model));
+    if (!result.modelPicker.length) delete result.modelPicker;
+  }
+  return JSON.stringify(result) === before ? data : result;
+}
 function plan(manager, route, previous, { repair = false } = {}) {
   validate(previous);
   const desired = specs(manager, route), t = targets(manager);
@@ -110,6 +133,10 @@ function plan(manager, route, previous, { repair = false } = {}) {
     const file = get(previous.targets.settings), data = document(file.after, "json").data;
     if (data.env && !Object.keys(data.env).length) file.after = edit(file.after, "json", ["env"], { exists: false });
   }
+  if (!desired.length) for (const file of [t.settings, t.profile]) {
+    const record = get(file), data = document(record.after, 'json').data, cleared = clearRoutedSelections(data);
+    if (!equal(data, cleared)) record.after = JSON.stringify(cleared, null, 2) + '\n';
+  }
   return { record: desired.length ? { version: 1, targets: t, createdEnv, fields } : undefined,
     files: [...files.values()].filter(f => f.after !== f.before) };
 }
@@ -126,4 +153,4 @@ function fingerprint(manager, record) {
   const files = new Set([...Object.values(targets(manager)), ...Object.values(record?.targets || {})]);
   return [...files].map(file => [file, read(file)]);
 }
-module.exports = { targets, validate, plan, check, fingerprint };
+module.exports = { targets, validate, plan, check, fingerprint, clearRoutedSelections };

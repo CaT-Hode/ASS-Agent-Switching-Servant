@@ -468,14 +468,14 @@ export function Clients({
                 )}
                 <button
                   className="icon-button"
-                  aria-label="刷新状态"
-                  title="刷新账户、额度和模型；已接入时同步配置"
+                  aria-label={state.connections.clients[client.id]?.enabled ? "同步接入配置" : "刷新状态"}
+                  title={state.connections.clients[client.id]?.enabled ? "同步接入配置" : "刷新账户、额度和模型"}
                   disabled={!!busy}
-                  onClick={() => act("client-refresh", async () => {
-                    await api.call("client-refresh", client.id);
+                  onClick={() => {
                     if (state.connections.clients[client.id]?.enabled)
                       onManage({ scope: client.id, enabled: true, sync: true, name: client.name });
-                  })}
+                    else act("client-refresh", () => api.call("client-refresh", client.id));
+                  }}
                 >
                   <RefreshCw size={14} />
                 </button>

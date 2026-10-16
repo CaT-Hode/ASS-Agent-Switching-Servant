@@ -20,7 +20,7 @@ function withoutOwn(text) {
     "",
   );
 }
-function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/ASS/v1", defaultModel = null, localToken = "") {
+function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/ASS/v1", defaultModel = null, localToken = "", gatewayAuth = false) {
   if (text.includes("aimami-relay codex-router top start"))
     throw new Error(
       "检测到其他路由工具仍接管 Codex。请先关闭旧路由，再点击接入。",
@@ -43,18 +43,32 @@ function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/
   if (first < 0) first = clean.length;
   let top = clean.slice(0, first),
     rest = clean.slice(first);
-  for (const key of ["model_provider", "model_catalog_json", "openai_base_url", ...(defaultModel ? ["model", "model_reasoning_effort"] : [])]) {
+  const managedTopKeys = ["model_provider", "model_catalog_json", "openai_base_url",
+    ...(gatewayAuth ? ["chatgpt_base_url"] : []),
+    ...(defaultModel ? ["model", "model_reasoning_effort"] : [])];
+  for (const key of managedTopKeys) {
     replaced[key] = parsed[key] ?? null;
     top = top.replace(new RegExp("^" + key + "\\s*=.*(?:\\r?\\n|$)", "m"), "");
   }
-  if (defaultModel && !/^ASS_[a-f0-9]{24}::.+$/.test(defaultModel.model))
+  if (defaultModel && !(/^ASS_[a-f0-9]{24}::.+$/.test(defaultModel.model) ||
+    (!localToken || gatewayAuth) && /^gpt-[\w.-]+$/.test(defaultModel.model)))
     throw Error("Codex 默认模型不是当前 ASS 模型标识，未接入");
   const model = defaultModel ? `model = ${JSON.stringify(defaultModel.model)}\nmodel_reasoning_effort = ${JSON.stringify(defaultModel.effort)}\n` : "";
   // Resumed threads may retain their provider, independently of the global
   // default. Redirect built-in OpenAI via its supported setting, NOT an
   // ignored [model_providers.openai] override. Never edit session history.
-  const block = `${START}\nmodel_provider = "ASS"\nmodel_catalog_json = ${JSON.stringify(catalog)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n${model}${END}\n`;
-  const auth = localToken ? `requires_openai_auth = false\nexperimental_bearer_token = ${JSON.stringify(localToken)}\n` : "requires_openai_auth = true\n";
+  const chatgptBaseUrl = gatewayAuth
+    ? baseUrl.replace(/\/clients\/ASS\/v1\/?$/, "/clients/ASS/backend-api/")
+    : "";
+  const chatgpt = gatewayAuth ? `chatgpt_base_url = ${JSON.stringify(chatgptBaseUrl)}\n` : "";
+  const block = `${START}\nmodel_provider = "ASS"\nmodel_catalog_json = ${JSON.stringify(catalog)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n${chatgpt}${model}${END}\n`;
+  // Keep the native ChatGPT account visible for ordinary gateway routing.
+  // The local bearer is only written for the explicit accountless mode.
+  const auth = gatewayAuth
+    ? "requires_openai_auth = true\n"
+    : localToken
+      ? `requires_openai_auth = false\nexperimental_bearer_token = ${JSON.stringify(localToken)}\n`
+      : "requires_openai_auth = true\n";
   const definition = `name = "ASS"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\n${auth}supports_websockets = false\n`;
   const providers = `\n${START}\n[model_providers.ASS]\n${definition}${END}\n`;
   const result = block + top + rest + providers;
@@ -68,19 +82,28 @@ class ConfigManager {
     this.catalog = path.join(dataDir, "catalog.json");
     this.record = path.join(dataDir, "codex-attachment.json");
     this.baseUrl = `http://127.0.0.1:${port}/clients/ASS/v1`;
+    this.chatgptBaseUrl = `http://127.0.0.1:${port}/clients/ASS/backend-api/`;
   }
   status() {
     try {
       const text = fs.readFileSync(this.file, "utf8"), c = TOML.parse(text);
+      const provider = c.model_providers?.ASS;
+      const authMode = provider?.requires_openai_auth === true && provider?.experimental_bearer_token === undefined
+        ? "oauth"
+        : provider?.requires_openai_auth === false && typeof provider?.experimental_bearer_token === "string" && provider.experimental_bearer_token.length > 0
+          ? "accountless"
+          : "unknown";
       return {
         attached:
           c.model_provider === "ASS" &&
-          c.model_providers?.ASS?.base_url === this.baseUrl &&
-          c.model_providers?.ASS?.supports_websockets === false &&
+          provider?.base_url === this.baseUrl &&
+          provider?.supports_websockets === false &&
           c.openai_base_url === this.baseUrl &&
           !c.model_providers?.aimai1 && !c.model_providers?.ass_router &&
           c.model_catalog_json === this.catalog &&
-          c.model_providers?.ASS?.wire_api === "responses",
+          provider?.wire_api === "responses",
+        workspaceRelay: c.chatgpt_base_url === this.chatgptBaseUrl,
+        authMode,
         managed: text.includes(START),
         provider: c.model_provider || "openai",
       };
@@ -88,14 +111,14 @@ class ConfigManager {
       return { attached: false, provider: "unknown" };
     }
   }
-  prepareAttach(defaultModel = null, localToken = "") {
+  prepareAttach(defaultModel = null, localToken = "", gatewayAuth = false) {
     const old = fs.existsSync(this.file) ? fs.readFileSync(this.file, "utf8") : "";
     // Validate ownership, restore the baseline in memory, then apply the new
     // desired default. Never strip an externally edited managed block.
     const baseline = old.includes(START) ? this.preflightDetach().next : old;
     const attached = old.includes(START) ? TOML.parse(JSON.parse(fs.readFileSync(this.record, "utf8")).blocks[0]) : null;
     const selection = !defaultModel && attached?.model && attached.model_reasoning_effort === undefined ? attached.model : null;
-    const prepared = prepareConfig(baseline, this.catalog, this.baseUrl, defaultModel, localToken);
+    const prepared = prepareConfig(baseline, this.catalog, this.baseUrl, defaultModel, localToken, gatewayAuth);
     if (selection) {
       // Keep an already-owned selection, including its original rollback value.
       // Accountless defaults own effort too and must restore their baseline.
@@ -140,11 +163,13 @@ class ConfigManager {
     try { owned = expected.map(s => TOML.parse(s)); }
     catch { throw Error("Codex 管理区段记录无效，未覆盖"); }
     const top = owned[0], provider = owned[1].model_providers?.ASS;
-    const topKeys = ["model_provider", "model_catalog_json", "openai_base_url", "model", "model_reasoning_effort"];
+    const topKeys = ["model_provider", "model_catalog_json", "openai_base_url", "chatgpt_base_url", "model", "model_reasoning_effort"];
     const providerKeys = ["name", "base_url", "wire_api", "requires_openai_auth", "supports_websockets", "experimental_bearer_token"];
     if (Object.keys(top).some(k => !topKeys.includes(k)) || top.model_provider !== "ASS" ||
         top.model_catalog_json !== this.catalog || top.openai_base_url !== this.baseUrl ||
-        (top.model !== undefined && !/^ASS_[a-f0-9]{24}::.+$/.test(top.model)) ||
+        (top.chatgpt_base_url !== undefined && top.chatgpt_base_url !== this.chatgptBaseUrl) ||
+        (top.model !== undefined && !(/^ASS_[a-f0-9]{24}::.+$/.test(top.model) ||
+          /^gpt-[\w.-]+$/.test(top.model))) ||
         (top.model_reasoning_effort !== undefined && typeof top.model_reasoning_effort !== "string") ||
         !equal(Object.keys(owned[1]), ["model_providers"]) ||
         !equal(Object.keys(owned[1].model_providers || {}), ["ASS"]) ||

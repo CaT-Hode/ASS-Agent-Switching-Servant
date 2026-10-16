@@ -6,7 +6,7 @@
 
 ASS（Agent-Switching-Servant）是你的 Windows 桌面 AI 路由与账户助手。把模型、API 凭据与官方授权放到一个独立窗口，切换客户端时不必反复搬配置。关闭窗口后继续在托盘运行。
 
-v0.3.23 将关于页彩蛋改为绿色短裤、紫色花纹与橙色双瓣的独立 SVG；logo 从中间线条交汇处旋转长出，缩放和转动时保持位置对齐。保留同步收拢、淡出、字母互动与主题切换。详见 [v0.3.23 发布说明](docs/release-v0.3.23.md)，可复用主题见 [ass-theme-design skill](skills/ass-theme-design/SKILL.md)。
+v0.3.26 修复 Codex 订阅额度耗尽时连带禁止第三方模型发送新消息，采用本机网关认证并保留原有 OAuth。详见 [v0.3.26 发布说明](docs/release-v0.3.26.md)。客户端同步与续聊恢复见 [v0.3.25](docs/release-v0.3.25.md)，统一 128K 默认输出见 [v0.3.24](docs/release-v0.3.24.md)，关于页 SVG 动画见 [v0.3.23](docs/release-v0.3.23.md)，可复用主题见 [ass-theme-design skill](skills/ass-theme-design/SKILL.md)。
 
 v0.3.5 的 Codex 跨供应商历史思考项及运行中归档删除修复继续保留。删除仅二级确认，不再新增恢复备份。详见 [v0.3.5 发布说明](docs/release-v0.3.5.md)。
 
@@ -85,6 +85,8 @@ Claude 桌面版会按模型 ID 中出现的供应商名称过滤非 Anthropic �
 原生 Claude 配置上下文达到 1,000,000 token 时，桌面模型条目写入 `supports1m: true` 和 `prefer1m: true`，供 Claude 展示并选择 1M 变体；低于该值时不写。此值是部署配置声明，不代表 ASS 已发送百万 token 请求验证上游容量。Claude 会保留用户已有的 200K 选择：更新 ASS、确认同步接入并重开 Claude 后，已有会话需手动选一次 1M 变体。路由移除桌面追加的 `[1m]` 标记，仍调用原模型，并保留请求携带的 Anthropic beta 头。不为非 Claude 模型添加原生 1M 标记，也不改写历史会话。参见 [Claude 桌面模型配置](https://claude.com/docs/third-party/claude-desktop/models)。
 
 ### 接入开关与安全关闭
+
+Codex 常规接入使用本机网关认证，避免桌面端在 ChatGPT 额度耗尽时连带禁止第三方模型发送消息。官方 OAuth 文件原样保留；普通接入仍可请求官方模型，由 ASS 按请求读取当前官方授权并如实返回额度限制。桌面端会显示自定义 API 模式，订阅和余额在 ASS 的账户卡片查看；依赖桌面 ChatGPT 登录的云端功能在关闭接入后恢复。旧版升级后重新同步 Codex 接入，并完整退出、重新打开 Codex；ASS 不自动关闭客户端。
 
 Claude 桌面 Gateway 默认写入 `coworkEgressAllowedHosts: ["*"]`，恢复 Cowork / 桌面 Code 的工具联网，避免第三方模式默认仅放行本机推理端点而导致 Git、网页读取及安装依赖返回 403。此选项会放开工具出网沙箱限制，但不改变 ASS 的本机监听与推理鉴权；网页读取仍受 Claude 的私网限制。显式保存的域名白名单（或空列表）在后续模型同步中保留。旧版 ASS 本地配置只在新版中确认同步接入时升级，不在后台改写。退出恢复仍只撤回 ASS 自己的配置项，不覆盖其他配置或组织策略。修改生效需要完全退出并重新打开 Claude，再开始新会话，无需重启 ASS。详见 [Claude 官方出网配置](https://claude.com/docs/third-party/claude-desktop/configuration#coworkegressallowedhosts)。
 

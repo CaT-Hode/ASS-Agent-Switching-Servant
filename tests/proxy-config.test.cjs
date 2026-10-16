@@ -145,6 +145,47 @@ test("leaving accountless mode keeps the shared ASS model until the connection i
   assert.deepEqual(TOML.parse(fs.readFileSync(f.config.file, "utf8")), TOML.parse(f.original));
 });
 
+test('legacy OAuth-coupled injection becomes pending without writes and upgrades only on explicit sync', t => {
+  const f = fixture(t); f.proxy.sync('codex');
+  const legacy = { ...f.proxy.clients.codex }; delete legacy.gatewayAuth; delete legacy.localToken;
+  const old = f.config.prepareAttach(legacy.defaultModel);
+  atomic(f.config.record, JSON.stringify({ replaced: old.replaced, blocks: old.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g) }));
+  atomic(f.config.file, old.text); f.proxy.persist({ codex: legacy });
+  const before = fs.readFileSync(f.config.file), auth = fs.readFileSync(path.join(f.codex, 'auth.json'));
+  const restarted = new ProxyConfig(f.data, crypt, f.manager, f.store, f.config);
+  assert.equal(restarted.error, ''); assert.equal(restarted.status('codex', true).pending, true);
+  assert.deepEqual(fs.readFileSync(f.config.file), before);
+  restarted.sync('codex');
+  assert.equal(restarted.status('codex', true).applied, true);
+  assert.equal(restarted.clients.codex.gatewayAuth, true);
+  assert.equal(TOML.parse(fs.readFileSync(f.config.file, 'utf8')).model_providers.ASS.requires_openai_auth, true);
+  assert.deepEqual(fs.readFileSync(path.join(f.codex, 'auth.json')), auth);
+  const token = restarted.clients.codex.localToken;
+  const again = new ProxyConfig(f.data, crypt, f.manager, f.store, f.config);
+  assert.equal(again.clients.codex.localToken, token); assert.equal(again.status('codex', true).pending, false);
+});
+test('legacy Codex bearer mode is pending for ordinary OAuth routing and sync removes only the old ASS auth fields', t => {
+  const f = fixture(t); f.proxy.sync('codex');
+  const token = f.proxy.clients.codex.localToken;
+  const current = fs.readFileSync(f.config.file, 'utf8');
+  const legacyProvider = current.replace(
+    'requires_openai_auth = true\n',
+    `requires_openai_auth = false\nexperimental_bearer_token = "${token}"\n`,
+  );
+  const record = JSON.parse(fs.readFileSync(f.config.record, 'utf8'));
+  record.blocks[1] = record.blocks[1].replace(
+    'requires_openai_auth = true\n',
+    `requires_openai_auth = false\nexperimental_bearer_token = "${token}"\n`,
+  );
+  atomic(f.config.file, legacyProvider); atomic(f.config.record, JSON.stringify(record));
+  assert.equal(f.config.status().authMode, 'accountless');
+  assert.equal(f.proxy.status('codex', true).pending, true);
+  f.proxy.sync('codex');
+  const repaired = TOML.parse(fs.readFileSync(f.config.file, 'utf8'));
+  assert.equal(repaired.model_providers.ASS.requires_openai_auth, true);
+  assert.equal(repaired.model_providers.ASS.experimental_bearer_token, undefined);
+  assert.equal(f.proxy.status('codex', true).applied, true);
+});
 test("failed current repair rolls back config, catalog and ownership record", t => {
   const f = fixture(t); f.proxy.sync("codex");
   atomic(f.config.catalog, "{}");
@@ -221,16 +262,17 @@ test("Codex isolated OAuth launches receive the applied catalog without changing
   const config = TOML.parse(plan.files.find(([name]) => name === "config.toml")[1]);
   assert.equal(config.model_catalog_json, f.config.catalog);
   assert.equal(config.openai_base_url, f.config.baseUrl);
-  assert.equal(config.openai_base_url, config.model_providers.ass_official.base_url);
+  const routedProvider = config.model_providers.ASS || config.model_providers.ass_official;
+  assert.equal(config.openai_base_url, routedProvider.base_url);
   assert.equal(config.model_providers.openai, undefined);
-  assert.equal(config.model_providers.ass_official.requires_openai_auth, true);
+  assert.equal(routedProvider.requires_openai_auth, true);
   assert.equal(plan.files.some(([name]) => name === "auth.json"), false);
   f.manager.setInjection("codex", { excludedProviders: ["relay"] });
   assert.equal(f.manager.plan("codex", account).files[0][1], plan.files[0][1]);
   f.manager.options.port = 32123;
   const relocated = TOML.parse(f.manager.plan("codex", account).files.find(([name]) => name === "config.toml")[1]);
   assert.equal(relocated.openai_base_url, "http://127.0.0.1:32123/clients/ASS/v1");
-  assert.equal(relocated.model_providers.ass_official.base_url, relocated.openai_base_url);
+  assert.equal((relocated.model_providers.ASS || relocated.model_providers.ass_official).base_url, relocated.openai_base_url);
 });
 
 test("proxy write-ahead recovery survives restart and refuses intervening external edits", (t) => {

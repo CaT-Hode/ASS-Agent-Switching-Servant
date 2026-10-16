@@ -28,6 +28,7 @@ class Connections {
     onChange = () => {},
     extraActive = () => 0,
     restarter,
+    sessionHandoff,
   }) {
     Object.assign(this, {
       router,
@@ -41,6 +42,7 @@ class Connections {
       onChange,
       extraActive,
       restarter,
+      sessionHandoff,
     });
     this.file = path.join(dataDir, "connections.json");
     this.enabled = Object.fromEntries(
@@ -140,6 +142,7 @@ class Connections {
               applied: native.applied,
               runtimeStatus: native.runtimeStatus,
               accountless: this.proxyConfig?.clients[id]?.accountless === true,
+              ...(id === 'codex' && this.sessionHandoff ? { resumeRecovery: this.sessionHandoff.status() } : {}),
               accountlessAvailable: ["codex", "claude"].includes(id) && this.enabled[id] && native.applied === true && native.modelCount > 0,
               configAttached:
                 id === "codex" ? this.config.status().attached : undefined,
@@ -228,6 +231,7 @@ class Connections {
     });
     return {
       ticket,
+      ...(!enabled && ids.includes('codex') && this.sessionHandoff ? { restoreSessions: this.sessionHandoff.status().count } : {}),
       accountless,
       restart: this.restarter?.public(restart),
       scope,
@@ -281,6 +285,7 @@ class Connections {
     const restartFirst = (restart && ["codex", "claude"].includes(plan.scope)) || close;
     const stopName = plan.scope === "codex" ? "Codex" : NAMES[plan.scope];
     let desktopStopped = false;
+    let restoredSessions = 0;
     try {
       await this.processes.refresh();
       if (
@@ -369,7 +374,10 @@ class Connections {
         }
         // Recheck after asynchronous process operations. Never overwrite concurrent user edits.
         this.preflight(plan.ids, false, plan.quit);
-        if (plan.ids.includes("codex")) this.config.detach();
+        if (plan.ids.includes("codex")) {
+          restoredSessions = (await this.sessionHandoff?.restore())?.count || 0;
+          this.config.detach();
+        }
         if (!plan.quit) this.nativeConfig?.restore(plan.ids);
         this.injections.restore(plan.ids);
         this.proxyConfig?.restore(plan.ids);
@@ -394,7 +402,8 @@ class Connections {
         message: restarted.ok ? "接入配置已更新，所选桌面客户端已重启。"
           : "接入配置已更新，但客户端重启未完成；请检查窗口并从开始菜单手动重启。",
       };
-      if (close) return { ok: true, quit: false, closed: true, message: `接入配置已更新，${stopName} 已关闭；未重新启动。` };
+      if (close) return { ok: true, quit: false, closed: true, restoredSessions,
+        message: `${restoredSessions ? `已恢复 ${restoredSessions} 个对话的官方模型绑定。` : ''}接入配置已更新，${stopName} 已关闭；未重新启动。` };
       return {
         ok: true,
         quit: plan.quit,

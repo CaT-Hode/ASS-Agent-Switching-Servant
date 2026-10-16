@@ -10,6 +10,7 @@ const { target: kimiTarget } = require("./kimi-config.cjs");
 const zcode = require("./zcode-config.cjs");
 const dsh = require("./dsh-config.cjs");
 const { sameApi } = require("./native-api-identity.cjs");
+const { OUTPUT_DEFAULTS_VERSION, upgradeNativeOutput } = require('./output-tokens.cjs');
 const DIRECT = ["opencode", "pi", "dsh", "kimi", "zcode"];
 const APIS = {
   "openai-responses": "openai-responses",
@@ -321,6 +322,20 @@ class NativeConfig {
     this.manager = manager;
     this.errors = {};
     this.activated = new Set(this.fields.entries.map((e) => e.harness));
+    this.migrateOutputDefaults();
+  }
+  migrateOutputDefaults() {
+    if (this.fields.error || this.fields.state.pending || this.fields.state.outputTokenDefaultsVersion === OUTPUT_DEFAULTS_VERSION) return;
+    const equal = require('node:util').isDeepStrictEqual;
+    let failed = false;
+    for (const id of new Set(this.fields.entries.map(e => e.harness))) {
+      const entries = this.fields.entries.filter(e => e.harness === id);
+      const fields = entries.map(e => ({ ...e, value: upgradeNativeOutput(e) }));
+      if (fields.every((f, i) => equal(f.value, entries[i].after.value))) continue;
+      try { this.fields.apply(id, fields); }
+      catch (error) { failed = true; this.errors[id] = '默认输出上限迁移未完成：' + error.message; }
+    }
+    if (!failed) this.fields.save({ ...this.fields.state, outputTokenDefaultsVersion: OUTPUT_DEFAULTS_VERSION });
   }
   isDirect(id) {
     return DIRECT.includes(id);

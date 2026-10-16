@@ -168,7 +168,7 @@ class NativeFields {
   constructor(dataDir, crypto) {
     this.file = path.join(dataDir, "native-injections.enc.json");
     this.crypto = crypto;
-    this.state = { entries: [], pending: null };
+    this.state = { entries: [], pending: null, outputTokenDefaultsVersion: 1 };
     this.error = "";
     try {
       const text = read(this.file);
@@ -205,6 +205,7 @@ class NativeFields {
     return this.state.entries;
   }
   save(state) {
+    if (this.state.outputTokenDefaultsVersion === 1) state = { ...state, outputTokenDefaultsVersion: 1 };
     if (!this.crypto.isEncryptionAvailable())
       throw Error("系统凭据加密不可用，未写入原生配置");
     this.checkJournal();

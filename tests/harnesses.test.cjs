@@ -143,11 +143,11 @@ test("five harness config generators never embed upstream keys", () => {
     });
     assert.ok(!JSON.stringify(plan).includes(p.apiKey));
     if (id === "codex")
-      assert.equal(
-        TOML.parse(plan.files.find(([f]) => f === "config.toml")[1])
-          .model_providers.ASS.env_key,
-        "ASS_LOCAL_TOKEN",
-      );
+      {
+        const config = TOML.parse(plan.files.find(([f]) => f === "config.toml")[1]);
+        assert.equal(config.model_providers.ASS.env_key, "ASS_LOCAL_TOKEN");
+        assert.equal(config.model_providers.ASS.requires_openai_auth, false);
+      }
     if (id === "dsh")
       assert.equal(
         JSON.parse(plan.files[0][1])["llm-pi-ai"].providers["ass-api"]

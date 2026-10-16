@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { DEFAULT_OUTPUT_TOKENS } = require('./output-tokens.cjs');
 function textOf(content) {
   return typeof content === "string"
     ? content
@@ -150,7 +151,7 @@ function convertRequest(body, model, protocol) {
   for (const key of ["temperature", "top_p"]) if (body[key] !== undefined) request[key] = body[key];
   if (protocol === "anthropic") {
     request.max_tokens =
-      body.max_output_tokens || model.maxOutputTokens || 16384;
+      body.max_output_tokens || model.maxOutputTokens || DEFAULT_OUTPUT_TOKENS;
     // Effort is forwarded, never silently downshifted. Compatibility is determined by the upstream.
     if (body.reasoning?.effort)
       request.output_config = { effort: body.reasoning.effort };

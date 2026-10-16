@@ -1024,12 +1024,14 @@ else {
         ? { directory: path.join(dataDir, "claude-desktop"), policyReader: () => ({}) } : {});
       proxyConfig = new ProxyConfig(dataDir, safeStorage, harnesses, store, config, claudeDesktop);
       harnesses.options.proxyConfig = proxyConfig;
+      const codexOfficialAuth = new (require('../core/codex-official-auth.cjs').CodexOfficialAuth)(codexDir);
       router = new Router({
         getState: (id) => proxyConfig.routingState(id),
         fetchUpstream: upstream,
         log,
         allowClient: (id) => connections.allow(id),
         onActivity: push,
+        getOfficialAuth: options => codexOfficialAuth.headers(options),
       });
       restarter = new ClientRestart({
         desktop: (id) => harnesses.desktop(id),
@@ -1049,6 +1051,13 @@ else {
         onChange: push,
         extraActive: () => probeControllers.size,
         restarter,
+        sessionHandoff: new (require('../core/codex-session-handoff.cjs').CodexSessionHandoff)({
+          codexDir, dataDir, crypto: safeStorage, config, officialModels: () => store.officialModels,
+          assertIdle: testMode ? async () => {} : async () => {
+            try { await require('../core/conversation-delete-guard.cjs').assertDeletionIdle([{ harness: 'codex' }]); }
+            catch (error) { throw Error('请先关闭 Codex，或选择强制关闭 / 重启，再恢复官方续聊。', { cause: error }); }
+          },
+        }),
       });
       oauthHistory = new OAuthHistory({
         dataDir, crypto: safeStorage,

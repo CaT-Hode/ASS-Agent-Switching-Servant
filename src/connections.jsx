@@ -172,7 +172,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
   const locked = busy || locating || checking;
   const restartPlan = hasIssue ? repair?.restart : plan?.restart;
   const restart = processMode === "restart", close = processMode === "close";
-  const title = request.accountless !== undefined ? `${request.accountless ? "开启" : "关闭"} ${target} 无账号启动？` : hasIssue ? `${target} 接入异常` : request.scope === "all"
+  const title = request.restoreSessions ? `恢复 ${target} 官方续聊？` : request.accountless !== undefined ? `${request.accountless ? "开启" : "关闭"} ${target} 无账号启动？` : hasIssue ? `${target} 接入异常` : request.scope === "all"
       ? "停止全部接入？"
       : request.enabled
         ? `${request.sync ? "同步" : "开启"} ${target} 接入？`
@@ -256,6 +256,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
         {repair ? repair.migration ? "将备份并迁移到 DSH 当前 profile，不重启客户端。" : `将备份并恢复上次接入配置${repair.files ? `（${repair.files} 个文件）` : ""}。${restart || close ? "" : "不关闭客户端，请先结束任务。"}` : repairReason || "正在检查可修复内容…"}
       </p>}
       <ClientProcessChoice plan={restartPlan} value={processMode} onChange={setProcessMode} disabled={busy} />
+      {plan?.restoreSessions > 0 && <p className="connection-repair-note">将恢复 {plan.restoreSessions} 个对话的官方模型绑定。请先关闭 Codex，或选择强制关闭 / 重启。</p>}
       <footer>
         <button
           className="button"

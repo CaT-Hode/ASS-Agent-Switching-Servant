@@ -8,6 +8,8 @@ const { safePath } = require("./native-fields.cjs");
 const { randomUUID } = require("node:crypto");
 const { isDeepStrictEqual: equal } = require("node:util");
 const claudeNative = require("./claude-native.cjs");
+const { OUTPUT_DEFAULTS_VERSION, upgradeModelOutput } = require('./output-tokens.cjs');
+const { officialDefaultModels } = require('./codex-default-models.cjs');
 const routeOnly = (plan) => { if (!plan) return null; const { nativeClaude, ...route } = plan; return route; };
 const IDS = ["codex", "claude"];
 const read = (file) => fs.existsSync(file) ? fs.readFileSync(file) : null;
@@ -16,7 +18,8 @@ function validateCodexPlan(plan) {
   const names = new Set(plan.providers.flatMap(p => p.models.map(m => codexModelId(p.id, m.model))));
   if (!Array.isArray(plan.catalog?.models) || plan.catalog.models.some(m =>
       typeof m.slug !== "string" || (m.slug.includes("::") && !names.has(m.slug))) ||
-      (plan.defaultModel && !names.has(plan.defaultModel.model)))
+      (plan.defaultModel && !names.has(plan.defaultModel.model) && (plan.accountless ||
+        !plan.catalog.models.some(m => m.slug === plan.defaultModel.model && !m.slug.includes('::')))))
     throw Error("Codex 已应用模型记录包含旧版或不明标识，未覆盖");
 }
 
@@ -30,6 +33,7 @@ class ProxyConfig {
     this.modeTokens = {};
     this.pending = null;
     this.error = "";
+    this.outputTokenDefaultsVersion = OUTPUT_DEFAULTS_VERSION;
     try {
       const saved = read(this.file);
       if (saved) {
@@ -37,10 +41,13 @@ class ProxyConfig {
         const record = JSON.parse(saved);
         if (record.version !== 1 || typeof record.encrypted !== "string") throw Error();
         const payload = JSON.parse(crypto.decryptString(Buffer.from(record.encrypted, "base64")));
+        this.outputTokenDefaultsVersion = payload.outputTokenDefaultsVersion || 0;
         const clients = payload.clients;
         if (!clients || typeof clients !== "object" || Array.isArray(clients) ||
             Object.entries(clients).some(([id, plan]) => !IDS.includes(id) || !Array.isArray(plan.providers) ||
               (plan.accountless !== undefined && typeof plan.accountless !== "boolean") ||
+              (plan.gatewayAuth !== undefined && (id !== 'codex' || plan.gatewayAuth !== true ||
+                !/^[a-f0-9]{64}$/.test(plan.localToken || ''))) ||
               (plan.accountless && (!/^[a-f0-9]{64}$/.test(plan.localToken || "") || !plan.providers.some((p) => p.models?.length))))) throw Error();
         validateCodexPlan(clients.codex);
         this.clients = clients;
@@ -57,6 +64,12 @@ class ProxyConfig {
       this.persistedHash = hash(saved || "");
     } catch {
       this.error = "已应用路由配置无法读取；没有覆盖，请检查数据目录";
+    }
+    if (!this.error && !this.pending && this.outputTokenDefaultsVersion !== OUTPUT_DEFAULTS_VERSION) {
+      try {
+        this.persist(Object.fromEntries(Object.entries(this.clients).map(([id, plan]) => [id, { ...plan,
+          providers: plan.providers.map(p => ({ ...p, models: p.models.map(upgradeModelOutput) })) }])));
+      } catch (error) { this.error = '默认输出上限迁移未完成：' + error.message; }
     }
   }
   supports(id) { return IDS.includes(id); }
@@ -75,26 +88,35 @@ class ProxyConfig {
     const catalog = id === "codex" ? makeCatalog(this.store.officialModels, providers, this.store.state.officialOverrides) : null;
     if (accountless && catalog) catalog.models = catalog.models.filter((m) => m.slug.includes("::"));
     const available = providers.flatMap((p) => p.models.filter((m) => m.enabled !== false).map((m) => ({ provider: p, model: m })));
+    const official = id === 'codex' ? officialDefaultModels(this.manager, accountless) : [];
     let requested = null;
     if (injection.defaultModel) {
       try {
         const [providerId, model] = JSON.parse(injection.defaultModel);
-        requested = available.find((row) => row.provider.id === providerId && row.model.model === model);
-      } catch {}
+        requested = providerId === 'official' && !accountless
+          ? official.filter(m => m.model === model).map(m => ({ official: true, model: m }))[0]
+          : available.find((row) => row.provider.id === providerId && row.model.model === model);
+        if (providerId === 'official' && !accountless && !requested) throw Error('官方默认模型不可用，请确认 Codex OAuth 登录并重新选择模型');
+      } catch (error) { if (error.message.startsWith('官方默认模型')) throw error; }
     }
     const fallback = id === "codex" ? available.find((row) => row.model.model === "gpt-6-sol") : null;
     const selected = requested || fallback || available[0];
     if (id === "codex" && !selected && providers.length) throw Error("没有已纳入的 Codex 模型");
     const effort = selected?.model.model === "gpt-6-sol" ? "xhigh" : selected?.model.defaultEffort;
     const defaultModel = id === "codex" && selected
-      ? { model: codexModelId(selected.provider.id, selected.model.model), effort }
+      ? { model: selected.official ? selected.model.model : codexModelId(selected.provider.id, selected.model.model), effort }
       : accountless && selected
         ? { model: selected.provider.id + "::" + selected.model.model, effort }
         : null;
     return {
       providers,
       defaultModel,
-      ...(accountless ? { accountless: true, localToken: this.clients[id]?.localToken || (this.modeTokens[id] ||= require("node:crypto").randomBytes(32).toString("hex")) } : {}),
+      // Desktop's account-wide quota gate ignores the selected provider. Use
+      // native custom-provider auth; preserve auth.json for official requests.
+      ...(id === 'codex' || accountless ? {
+        ...(accountless ? { accountless: true } : { gatewayAuth: true }),
+        localToken: this.clients[id]?.localToken || (this.modeTokens[id] ||= require("node:crypto").randomBytes(32).toString("hex")),
+      } : {}),
       ...(catalog ? { catalog } : {}),
     };
   }
@@ -112,9 +134,12 @@ class ProxyConfig {
     if (!this.supports(id)) return {};
     let desired, error = "";
     let nativePending = false;
+    let authPending = false;
     try {
       this.checkFiles(id); desired = this.desired(id);
       if (id === "codex" && enabled) this.config.preflightDetach();
+      if (id === "codex" && enabled && this.clients.codex && !this.clients.codex.accountless)
+        authPending = this.config.status().authMode !== "oauth";
       if (id === "claude" && enabled && desired.accountless) {
         const native = claudeNative.plan(this.manager, desired, this.clients.claude?.nativeClaude);
         nativePending = !this.clients.claude?.nativeClaude || native.files.length > 0;
@@ -126,7 +151,10 @@ class ProxyConfig {
       }
     }
     catch (e) { error = e.message; }
-    const pending = !!enabled && (nativePending || !equal(desired || null, routeOnly(this.clients[id])) ||
+    const workspaceRelayPending = id === "codex" && enabled && this.clients.codex &&
+      !this.clients.codex.accountless && !this.config.status().workspaceRelay;
+    const pending = !!enabled && (nativePending || authPending || workspaceRelayPending ||
+      !equal(desired || null, routeOnly(this.clients[id])) ||
       (id === "codex" && !this.config.status().attached));
     const count = (desired?.providers || []).reduce((n, p) => n + p.models.length, 0);
     const files = id === "codex" && this.config.status().managed ? [this.config.file, this.config.catalog].filter(fs.existsSync)
@@ -155,7 +183,7 @@ class ProxyConfig {
       this.checkFiles(id);
       const plan = this.desired(id, accountless);
       if (!plan.providers.length && !this.clients[id]) throw Error("没有可接入的兼容模型，请先配置供应商与模型");
-      if (id === "codex") this.config.prepareAttach(plan.defaultModel, plan.localToken);
+      if (id === "codex") this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth);
       if (id === "claude") {
         claudeNative.plan(this.manager, plan, this.clients.claude?.nativeClaude);
         this.desktop?.plan(plan.accountless ? plan.localToken : null, this.manager.options?.port || 25819, plan.providers);
@@ -165,12 +193,14 @@ class ProxyConfig {
   persist(clients, pending = null) {
     if (!this.crypto.isEncryptionAvailable()) throw Error("Windows 凭据加密不可用，未应用路由配置");
     safePath(this.file);
-    const value = JSON.stringify({ version: 1, encrypted: this.crypto.encryptString(JSON.stringify({ clients, pending })).toString("base64") });
+    const value = JSON.stringify({ version: 1, encrypted: this.crypto.encryptString(JSON.stringify({ clients, pending,
+      outputTokenDefaultsVersion: OUTPUT_DEFAULTS_VERSION })).toString("base64") });
     if (Buffer.byteLength(value) > 8 * 1024 * 1024) throw Error("路由恢复记录超过 8 MiB，未写入");
     atomic(this.file, value);
     this.persistedHash = hash(value);
     this.clients = structuredClone(clients);
     this.pending = structuredClone(pending);
+    this.outputTokenDefaultsVersion = OUTPUT_DEFAULTS_VERSION;
   }
   recoveryCheck() {
     if (this.error) throw Error(this.error);
@@ -205,7 +235,7 @@ class ProxyConfig {
       files.push(...(this.desktop?.plan(plan.accountless ? plan.localToken : null, this.manager.options?.port || 25819, plan.providers) || []));
     }
     if (id === "codex") {
-      const attachment = this.config.prepareAttach(plan.defaultModel, plan.localToken);
+      const attachment = this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth);
       const backup = path.join(this.config.dataDir, "backups", "config-" + Date.now() + "-proxy.toml");
       safePath(backup); atomic(backup, attachment.old);
       const values = [
@@ -310,7 +340,8 @@ class ProxyConfig {
   routingState(id) {
     if (!this.supports(id)) return { ...this.store.state, providers: this.manager.effectiveProviders?.(id) || this.store.state.providers }; // Diagnostics use drafts.
     const plan = this.clients[id];
-    return { providers: this.error ? [] : (plan?.providers || []), accountless: plan?.accountless === true, localToken: this.error ? undefined : plan?.localToken };
+    return { providers: this.error ? [] : (plan?.providers || []), accountless: plan?.accountless === true,
+      gatewayAuth: plan?.gatewayAuth === true, localToken: this.error ? undefined : plan?.localToken };
   }
   requireApplied(id) {
     if (!this.status(id, true).applied) throw Error("模型接入配置尚未同步，请先在接入控制中同步后再启动");

@@ -51,9 +51,18 @@ function connectionFixture(t, overrides = {}) {
   Object.assign(injections, overrides.injections); Object.assign(processes, overrides.processes);
   const connections = new Connections({ dataDir, router, config, injections, processes,
     nativeConfig: overrides.nativeConfig,
-    extraActive: overrides.extraActive || (() => 0), restarter: overrides.restarter });
+    extraActive: overrides.extraActive || (() => 0), restarter: overrides.restarter, sessionHandoff: overrides.sessionHandoff });
   return { dataDir, router, config, injections, processes, connections };
 }
+
+test('failed Codex session handoff retains the provider definition and enabled routing',async t=>{
+  let restores=0;const f=connectionFixture(t,{sessionHandoff:{status:()=>({count:2}),restore:async()=>{restores++;throw Error('client still running');}}});
+  f.connections.enabled.codex=true;f.config.attached=f.config.managed=true;
+  const p=await f.connections.preview('codex',false);assert.equal(p.restoreSessions,2);
+  await assert.rejects(f.connections.apply({ticket:p.ticket,mode:'safe',acknowledged:true}),/client still running/);
+  assert.equal(restores,1);assert.equal(f.config.detachCalls,0);assert.equal(f.router.stops,0);
+  assert.equal(f.connections.enabled.codex,true);assert.equal(f.config.attached,true);
+});
 
 test("initial all-false connection state is persisted and restart stays closed without starting router", async (t) => {
   const f = connectionFixture(t);

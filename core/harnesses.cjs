@@ -312,7 +312,7 @@ function routeConfig(harness, p, m, dir, token, catalog, port = 25819) {
     files.push(["catalog.json", JSON.stringify(catalog)]);
     files.push([
       "config.toml",
-      `model = ${JSON.stringify(name)}\nmodel_provider = "ASS"\nmodel_reasoning_effort = ${JSON.stringify(m.defaultEffort)}\nmodel_catalog_json = ${JSON.stringify(path.join(dir, "catalog.json"))}\n[model_providers.ASS]\nname = "ASS API"\nbase_url = ${JSON.stringify(clientBase + "/v1")}\nwire_api = "responses"\nenv_key = "ASS_LOCAL_TOKEN"\nsupports_websockets = false\n`,
+      `model = ${JSON.stringify(name)}\nmodel_provider = "ASS"\nmodel_reasoning_effort = ${JSON.stringify(m.defaultEffort)}\nmodel_catalog_json = ${JSON.stringify(path.join(dir, "catalog.json"))}\n[model_providers.ASS]\nname = "ASS API"\nbase_url = ${JSON.stringify(clientBase + "/v1")}\nwire_api = "responses"\nrequires_openai_auth = false\nenv_key = "ASS_LOCAL_TOKEN"\nsupports_websockets = false\n`,
     ]);
   }
   return { env, files, args };
@@ -891,7 +891,8 @@ class HarnessManager {
         ? { ...row, included: false, native: true, issue: "此 API 已在客户端当前配置中，无需重复接入" }
         : row;
     });
-    return { ...settings, models };
+    return { ...settings, models,
+      ...(harness === 'codex' ? { officialModels: require('./codex-default-models.cjs').officialDefaultModels(this) } : {}) };
   }
   nativeApis(harness) { return this.nativeApiProfilesByHarness[harness] || []; }
   effectiveProviders(harness) {
@@ -1074,10 +1075,13 @@ class HarnessManager {
           const baseUrl = `http://127.0.0.1:${this.options.port || 25819}/clients/ASS/v1`;
           const catalog = applied ? `model_catalog_json = ${JSON.stringify(this.options.proxyConfig.config.catalog)}\n` : "";
           const defaultModel = applied?.defaultModel ? `model = ${JSON.stringify(applied.defaultModel.model)}\nmodel_reasoning_effort = ${JSON.stringify(applied.defaultModel.effort)}\n` : "";
-          // Resumed threads can retain built-in OpenAI independently of this provider.
+          // Keep native OAuth visible in account launches. The local gateway
+          // still dispatches a later switch to an injected model.
+          const providerId = applied?.gatewayAuth ? "ASS" : "ass_official";
+          const auth = "requires_openai_auth = true\n";
           files.push([
             "config.toml",
-            `cli_auth_credentials_store = "file"\n${catalog}${defaultModel}model_provider = "ass_official"\nopenai_base_url = ${JSON.stringify(baseUrl)}\n[model_providers.ass_official]\nname = "ASS Official"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\n`,
+            `cli_auth_credentials_store = "file"\n${catalog}${defaultModel}model_provider = ${JSON.stringify(providerId)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n[model_providers.${providerId}]\nname = "ASS"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\n${auth}supports_websockets = false\n`,
           ]);
         } else if (!fs.existsSync(path.join(dir, "config.toml"))) {
           files.push(["config.toml", 'cli_auth_credentials_store = "file"\n']);

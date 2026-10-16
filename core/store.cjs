@@ -4,6 +4,7 @@ const { isDeepStrictEqual } = require("node:util");
 const { atomic } = require("./config.cjs");
 const { validateProviders } = require('./config-limits.cjs');
 const { apiIdentity } = require('./native-api-identity.cjs');
+const { OUTPUT_DEFAULTS_VERSION, upgradeModelOutput } = require('./output-tokens.cjs');
 const {
   parseImport,
   normalizeProvider,
@@ -16,7 +17,7 @@ class Store {
     this.codexDir = codexDir;
     this.crypto = crypto;
     this.file = path.join(dataDir, "settings.json");
-    this.state = { providers: [], officialOverrides: {}, autoStart: false };
+    this.state = { providers: [], officialOverrides: {}, autoStart: false, outputTokenDefaultsVersion: OUTPUT_DEFAULTS_VERSION };
     this.officialModels = [];
     this.readCatalog();
     this.persisted = null;
@@ -32,8 +33,17 @@ class Store {
     const state = { ...this.state, ...persisted, providers: persisted.providers.map(p => ({
       ...p, ...JSON.parse(this.crypto.decryptString(Buffer.from(p.secrets, "base64"))), secrets: undefined,
     })) };
+    const previous = this.state, previousText = this.persisted;
+    const migrate = persisted.outputTokenDefaultsVersion !== OUTPUT_DEFAULTS_VERSION;
+    if (migrate) {
+      state.providers = state.providers.map(p => ({ ...p, models: (p.models || []).map(upgradeModelOutput) }));
+      state.officialOverrides = Object.fromEntries(Object.entries(state.officialOverrides || {}).map(([id, model]) => [id, upgradeModelOutput(model)]));
+      state.outputTokenDefaultsVersion = OUTPUT_DEFAULTS_VERSION;
+    }
     this.state = state;
     this.persisted = text;
+    if (migrate) try { this.save(); }
+    catch (error) { this.state = previous; this.persisted = previousText; throw error; }
     return true;
   }
   readCatalog() {

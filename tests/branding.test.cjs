@@ -10,7 +10,8 @@ test("project full name is Agent-Switching-Servant with ASS product and matching
   assert.ok(pkg.description.includes("Agent-Switching-Servant"));
   assert.equal(lock.name, pkg.name); assert.equal(lock.packages[""].name, pkg.name);
   assert.equal(lock.version, pkg.version); assert.equal(lock.packages[""].version, pkg.version);
-  for (const file of ["README.md", "LICENSE", "src/updates.jsx", "core/openrouter-auth.cjs", "scripts/package.mjs"])
+  assert.ok(read('src/updates.jsx').includes('<AboutBrand'));
+  for (const file of ["README.md", "LICENSE", "src/about-brand.jsx", "core/openrouter-auth.cjs", "scripts/package.mjs"])
     assert.ok(read(file).includes("Agent-Switching-Servant"), file);
 });
 test("brand rename retains persisted data location, app identity and update compatibility", () => {

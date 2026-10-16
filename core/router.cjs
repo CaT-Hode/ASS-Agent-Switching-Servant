@@ -9,20 +9,9 @@ const crypto = require("node:crypto");
 const { toolBridge } = require("./tool-bridge.cjs");
 const { readJSON } = require("./request-body.cjs");
 const { officialCodexHistory } = require("./response-history.cjs");
-const forwarded = [
-  "authorization",
-  "chatgpt-account-id",
-  "openai-beta",
-  "session_id",
-  "conversation_id",
-  "originator",
-  "x-codex-turn-metadata",
-  "x-codex-turn-state",
-  "x-openai-subagent",
-  "x-openai-parent-request-id",
-];
-const pickHeaders = (h) =>
-  Object.fromEntries(forwarded.filter((k) => h[k]).map((k) => [k, h[k]]));
+const { withOutputLimit } = require('./output-tokens.cjs');
+const { officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
+  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest } = require('./http-passthrough.cjs');
 async function write(res, data) {
   if (res.destroyed) throw Error("客户端已断开");
   if (!res.write(data)) await new Promise((resolve, reject) => {
@@ -65,7 +54,7 @@ function routeFor(body, state, suffix = "") {
       new Error("该协议不支持服务端 compact，请使用完整历史或客户端压缩"),
       { status: 400 },
     );
-  const updated = { ...body, model: m.model };
+  const updated = { ...(suffix ? body : withOutputLimit(body, m, 'openai-responses')), model: m.model };
   if (updated.reasoning?.effort)
     updated.reasoning = {
       ...updated.reasoning,
@@ -94,12 +83,14 @@ class Router {
     log = () => {},
     allowClient = () => true,
     onActivity = () => {},
+    getOfficialAuth,
   }) {
     this.getState = getState;
     this.fetch = fetchUpstream;
     this.log = log;
     this.allowClient = allowClient;
     this.onActivity = onActivity;
+    this.getOfficialAuth = getOfficialAuth;
     this.requests = new Map();
     this.server = null;
     this.controllers = new Set();
@@ -171,9 +162,14 @@ class Router {
   async handle(req, res) {
     const began = Date.now();
     let route;
+    let client;
     const controller = new AbortController();
     let timer;
     let httpStatus = null;
+    let upstream;
+    let forwardingError = false;
+    const requestId = crypto.randomUUID();
+    const secrets = [req.headers.authorization?.replace(/^Bearer\s+/i, '')].filter(Boolean);
     try {
       const expected = `127.0.0.1:${this.port}`;
       if (
@@ -189,7 +185,7 @@ class Router {
         const scoped = /^\/clients\/(ASS|claude|opencode|pi|dsh)(\/.*)$/.exec(
           req.url,
         );
-        let client =
+        client =
           scoped?.[1] || (req.url.startsWith("/harness/") ? "legacy" : "codex");
         if (client === "ASS") client = "codex"; // Public route name; same auth, isolation and lifecycle.
         if (scoped) req.url = scoped[2];
@@ -218,6 +214,58 @@ class Router {
         await forwardHarness(this, req, res);
         return;
       }
+      const bootstrap = client === "codex" && req.method === "GET"
+        ? codexBootstrapRequest(req.url)
+        : null;
+      if (bootstrap) {
+        const state = this.getState(client) || {};
+        const credential = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+        if (state.accountless && authorized(credential, state.localToken))
+          throw Object.assign(Error("无账号模式不转发官方账户请求"), { status: 401 });
+        const headers = officialRequestHeaders(req.headers);
+        if (state.gatewayAuth && authorized(credential, state.localToken)) {
+          if (!this.getOfficialAuth)
+            throw Object.assign(Error("官方 OAuth 不可用，请在 Codex 账户中登录"), { status: 401 });
+          const auth = await this.getOfficialAuth({ signal: controller.signal });
+          if (!/^Bearer\s+\S+$/i.test(auth?.authorization || ""))
+            throw Object.assign(Error("官方 OAuth 不可用，请重新登录"), { status: 401 });
+          delete headers["chatgpt-account-id"];
+          Object.assign(headers, auth);
+        }
+        secrets.push(headers.authorization?.replace(/^Bearer\s+/i, ""));
+        this.active++;
+        this.controllers.add(controller);
+        timer = setTimeout(() => controller.abort(), 300000);
+        res.on("close", () => {
+          if (!res.writableFinished) controller.abort();
+        });
+        const response = await this.fetch(bootstrap.upstreamUrl, {
+          method: "GET", headers, signal: controller.signal,
+          redirect: "error", credentials: "omit",
+        }, "system");
+        httpStatus = response.status;
+        upstream = upstreamDiagnostics(response, secrets);
+        res.writeHead(response.status, {
+          ...upstreamResponseHeaders(response.headers, secrets),
+          "content-type": response.headers.get("content-type") || "application/octet-stream",
+          "x-ass-provider": "official",
+          "x-ass-request-id": requestId,
+        });
+        forwardingError = true;
+        const sample = await forwardErrorBody(response, chunk => write(res, chunk), secrets);
+        if (!response.ok) {
+          const summary = summarizeUpstreamError(sample, response.status, response.headers.get("content-type"), secrets);
+          upstream.errorKind = summary.kind;
+          if (summary.title) upstream.title = summary.title;
+        }
+        res.end();
+        this.log({
+          time: new Date().toISOString(), source: "OpenAI 官方账户设置", model: "",
+          status: response.status, ms: Date.now() - began, ok: response.ok,
+          httpStatus, httpOk: response.ok, taskOk: response.ok, requestId, upstream,
+        });
+        return;
+      }
       if (req.url === "/health" && req.method === "GET") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
@@ -235,6 +283,13 @@ class Router {
         throw Object.assign(new Error("需要 Codex 登录凭据"), { status: 401 });
       const body = await readJSON(req);
       const state = this.getState(this.requests.get(req)?.client);
+      const credential = req.headers.authorization.replace(/^Bearer\s+/i, "");
+      const gatewayAuthenticated = state.gatewayAuth && authorized(credential, state.localToken);
+      // Old OpenAI-bound threads still send native OAuth after the global
+      // provider changes. Keep those requests working; never forward our local
+      // bearer to an official or third-party service.
+      if (state.gatewayAuth && !gatewayAuthenticated && credential !== this.clientToken && /^[a-f0-9]{64}$/.test(credential))
+        throw Object.assign(Error('本机接入凭据已变化，请重新打开 Codex'), { status: 401 });
       if (state.accountless) {
         if (!authorized(req.headers.authorization.replace(/^Bearer\s+/i, ""), state.localToken))
           throw Object.assign(Error("无账号模式已启用，请重新启动客户端加载本机接入凭据"), { status: 401 });
@@ -245,16 +300,27 @@ class Router {
       if (route.official && req.headers.authorization.replace(/^Bearer\s+/i, "") === this.clientToken)
         throw Object.assign(new Error("此窗口使用模型 API 凭据，不能请求 ChatGPT 订阅模型；请从官方账户卡片启动"), { status: 403 });
       const headers = route.official
-        ? pickHeaders(req.headers)
+        ? officialRequestHeaders(req.headers)
         : { ...route.provider.extraHeaders, ...providerSessionHeaders(route.provider, req.headers) };
+      if (route.official && gatewayAuthenticated) {
+        if (!this.getOfficialAuth) throw Object.assign(Error("官方 OAuth 不可用，请在 Codex 账户中登录"), { status: 401 });
+        const auth = await this.getOfficialAuth({ signal: controller.signal });
+        if (!/^Bearer\s+\S+$/i.test(auth?.authorization || '') || auth.authorization === req.headers.authorization)
+          throw Object.assign(Error("官方 OAuth 不可用，请重新登录"), { status: 401 });
+        delete headers['chatgpt-account-id'];
+        Object.assign(headers, auth);
+      }
       headers["content-type"] = "application/json";
-      headers.accept = "text/event-stream";
+      headers.accept = route.official
+        ? headers.accept || (body.stream === false || match[1] ? 'application/json' : 'text/event-stream')
+        : "text/event-stream";
       if (!route.official) {
         if (route.protocol === "anthropic") {
           headers["x-api-key"] = route.provider.apiKey;
           headers["anthropic-version"] = "2023-06-01";
         } else headers.authorization = "Bearer " + route.provider.apiKey;
       }
+      secrets.push(route.provider?.apiKey, headers.authorization?.replace(/^Bearer\s+/i, ''), headers['x-api-key']);
       const bridge = route.protocol !== "openai-responses" ? toolBridge(route.body) : null;
       const request =
         route.protocol === "openai-responses"
@@ -279,7 +345,22 @@ class Router {
         route.network,
       );
       httpStatus = response.status;
+      upstream = upstreamDiagnostics(response, secrets);
       if (!response.ok) {
+        if (route.official) {
+          forwardingError = true;
+          res.writeHead(response.status, {
+            ...upstreamResponseHeaders(response.headers, secrets),
+            'content-type': response.headers.get('content-type') || 'application/octet-stream',
+            'x-ass-provider': 'official', 'x-ass-request-id': requestId,
+          });
+          const sample = await forwardErrorBody(response, chunk => write(res, chunk), secrets);
+          const summary = summarizeUpstreamError(sample, response.status, response.headers.get('content-type'), secrets);
+          upstream.errorKind = summary.kind;
+          if (summary.title) upstream.title = summary.title;
+          res.end();
+          throw Object.assign(Error(summary.message), { status: response.status, code: 'upstream_http_error' });
+        }
         const raw = (await response.text()).slice(0, 4000);
         let message = "上游返回 HTTP " + response.status;
         try {
@@ -293,6 +374,7 @@ class Router {
         for (const key of [
           route.provider?.apiKey,
           req.headers.authorization?.replace(/^Bearer /i, ""),
+          headers.authorization?.replace(/^Bearer /i, ""),
         ].filter(Boolean))
           message = message.split(key).join("[REDACTED]");
         throw Object.assign(new Error(message), { status: response.status });
@@ -302,11 +384,34 @@ class Router {
         const streaming = body.stream !== false && !match[1];
         if (!streaming) {
           const { text } = await readTaskJSON(response);
-          res.writeHead(response.status, { 'content-type': 'application/json', 'x-ass-provider': route.official ? 'official' : route.provider.id });
+          res.writeHead(response.status, { ...(route.official ? upstreamResponseHeaders(response.headers, secrets) : {}),
+            'content-type': response.headers.get('content-type') || 'application/json',
+            'x-ass-provider': route.official ? 'official' : route.provider.id, 'x-ass-request-id': requestId });
           await write(res, text);
         } else {
         const reader = response.body.getReader();
         const monitor = streaming ? new SseMonitor() : null;
+        let streamError;
+        let observedCR = false;
+        const emit = async (chunk, done = false) => {
+          if (route.official) {
+            // Observe task completion without reserializing frames or dropping
+            // heartbeat comments, IDs, retry fields or native failure events.
+            // A terminal CR can be the first byte of CRLF. Delay observing that
+            // byte until the next chunk, or cancelling here loses the final LF.
+            const bytes = chunk ? Buffer.from(chunk) : Buffer.alloc(0);
+            const observed = observedCR ? Buffer.concat([Buffer.from('\r'), bytes]) : bytes;
+            observedCR = !done && observed.at(-1) === 13;
+            const complete = observedCR ? observed.subarray(0, -1) : observed;
+            try {
+              if (complete.length) monitor?.feed(complete);
+              if (done) monitor?.feed(null, true);
+            } catch (error) { streamError = error; }
+            if (chunk) await write(res, chunk);
+          } else if (monitor) {
+            for (const frame of monitor.feed(chunk, done)) await write(res, frame);
+          } else if (chunk) await write(res, chunk);
+        };
         try {
           let first;
           if (
@@ -334,28 +439,27 @@ class Router {
             contentType = "text/event-stream";
           }
           res.writeHead(response.status, {
+            ...(route.official ? upstreamResponseHeaders(response.headers, secrets) : {}),
             "content-type": contentType || "application/json",
             "cache-control": "no-cache",
             "x-ass-provider": route.official ? "official" : route.provider.id,
+            'x-ass-request-id': requestId,
           });
           res.flushHeaders();
-          if (first) {
-            if (monitor) { for (const frame of monitor.feed(first)) await write(res, frame); }
-            else await write(res, first);
-          }
-          while (!monitor?.ended) {
+          if (first) await emit(first);
+          while (!monitor?.ended && !streamError) {
             const { value, done } = await reader.read();
             if (done) {
-              if (monitor) { for (const frame of monitor.feed(null, true)) await write(res, frame); }
+              await emit(null, true);
               break;
             }
-            if (monitor) { for (const frame of monitor.feed(value)) await write(res, frame); }
-            else await write(res, Buffer.from(value));
+            await emit(value);
           }
         } finally {
           await reader.cancel().catch(() => {});
           reader.releaseLock();
         }
+        if (streamError) { res.end(); throw streamError; }
         }
       } else if (body.stream === false) {
         let final;
@@ -396,6 +500,7 @@ class Router {
         ms: Date.now() - began,
         ok: true,
         httpStatus, httpOk: httpStatus >= 200 && httpStatus < 300, taskOk: true,
+        requestId, upstream,
       });
     } catch (error) {
       let message = controller.signal.aborted
@@ -403,13 +508,13 @@ class Router {
         : error instanceof SyntaxError
           ? "请求或上游流中的 JSON 数据无效"
           : error.message;
-      for (const secret of [
-        route?.provider?.apiKey,
-        req.headers.authorization?.replace(/^Bearer /i, ""),
-      ].filter(Boolean))
-        message = message.split(secret).join("[REDACTED]");
-      if (res.headersSent) {
-        if (!res.destroyed) {
+      message = redact(message, secrets);
+      if (forwardingError) {
+        // The original HTTP error was already forwarded. Never append an SSE
+        // error or replace HTML/JSON with a second ASS-generated response.
+        if (!res.writableEnded && !res.destroyed) res.destroy();
+      } else if (res.headersSent) {
+        if (!res.destroyed && !res.writableEnded) {
           res.write(
             `event: error\ndata: ${JSON.stringify({ type: "error", error: { code: "stream_failed", message: "上游流中断，请重试" } })}\n\n`,
           );
@@ -434,6 +539,7 @@ class Router {
         ok: false,
         httpStatus, httpOk: httpStatus !== null && httpStatus >= 200 && httpStatus < 300, taskOk: false,
         error: message.slice(0, 500),
+        requestId, upstream,
       });
     } finally {
       this.requests.delete(req);

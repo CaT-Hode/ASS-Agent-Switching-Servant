@@ -77,6 +77,8 @@ test("desktop mode preserves OAuth bytes and shares the selected default with ac
   assert.equal(normal.model_reasoning_effort, "medium");
   assert.equal(normal.model_providers.ASS.requires_openai_auth, true);
   assert.equal(normal.model_providers.ASS.experimental_bearer_token, undefined);
+  assert.equal(f.proxy.clients.codex.gatewayAuth, true);
+  assert.equal(f.proxy.clients.codex.accountless, undefined);
   assert.deepEqual(fs.readFileSync(path.join(f.codex, "auth.json")), auth);
 });
 test("Claude has a credential-isolated home, only injected model choices, no account selection and no permission bypass", async t => {

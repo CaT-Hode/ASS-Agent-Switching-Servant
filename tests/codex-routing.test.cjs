@@ -71,6 +71,29 @@ test("ASS writes only its own provider and restores the exact original endpoint,
   assert.equal(fs.readFileSync(auth, "utf8"), '{"tokens":"synthetic-unchanged"}');
 });
 
+test("normal Codex gateway injection adds the local ChatGPT bootstrap relay and accountless mode does not", t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ass-codex-bootstrap-config-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const codex = path.join(dir, "codex"), data = path.join(dir, "data");
+  fs.mkdirSync(codex);
+  const baseline = 'chatgpt_base_url = "https://chatgpt.com/backend-api/"\n[features]\nkeep=true\n';
+  atomic(path.join(codex, "config.toml"), baseline);
+  const manager = new ConfigManager(codex, data, 32123);
+  const normal = manager.prepareAttach(null, "a".repeat(64), true);
+  const normalParsed = TOML.parse(normal.text);
+  assert.equal(normalParsed.chatgpt_base_url, manager.chatgptBaseUrl);
+  assert.equal(normal.replaced.chatgpt_base_url, "https://chatgpt.com/backend-api/");
+  atomic(manager.record, JSON.stringify({ replaced: normal.replaced,
+    blocks: normal.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g) }));
+  atomic(manager.file, normal.text);
+  assert.deepEqual(TOML.parse(manager.preflightDetach().next), TOML.parse(baseline));
+
+  const accountless = prepareConfig(baseline, manager.catalog, manager.baseUrl, null, "b".repeat(64), false);
+  const accountlessParsed = TOML.parse(accountless.text);
+  assert.equal(accountlessParsed.chatgpt_base_url, "https://chatgpt.com/backend-api/");
+  assert.equal(Object.hasOwn(accountless.replaced, "chatgpt_base_url"), false);
+});
+
 test("old provider records are rejected by repair, resync and withdrawal without writes", t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ass-reject-old-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

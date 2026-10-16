@@ -85,7 +85,7 @@ async function request(model, localToken = false, client = "codex") {
     await stop(); await start(); await choose("Codex");
     assert.equal((await call("snapshot")).connections.clients.codex.pending, true);
     assert.deepEqual(fs.readFileSync(path.join(data, "catalog.json")), catalog);
-    await confirm(page.getByRole("button", { name: "同步 Codex 接入配置", exact: true }));
+    await confirm(page.getByRole("button", { name: "同步接入配置", exact: true }));
     assert.equal((await call("snapshot")).connections.clients.codex.modelCount, 0);
     assert.equal(await request(codexModelId(id, "alpha")), 404);
     assert.equal(await request(codexModelId(id, "beta")), 404);

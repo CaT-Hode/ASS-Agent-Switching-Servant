@@ -1,5 +1,6 @@
 const { randomUUID } = require("node:crypto");
 const { convertRequest, translateStream, sseMessages } = require("./adapters.cjs");
+const { withOutputLimit } = require('./output-tokens.cjs');
 const unsupported = (type) => Object.assign(Error("此跨协议模型不支持 " + type + "，请选择 Messages 模型"), { status: 400 });
 function normalizeMessages(body) {
   if (!body.messages?.some(m => ["system", "developer"].includes(m.role))) return body;
@@ -43,7 +44,7 @@ function messagesRequest(body, model, protocol) {
   });
   const choice = body.tool_choice;
   const request = { model: model.model, input, instructions: system.filter(Boolean).join("\n\n"), stream: true, store: false,
-    ...(body.max_tokens ? { max_output_tokens: Math.max(16, body.max_tokens) } : {}),
+    max_output_tokens: Math.max(16, withOutputLimit(body, model, 'anthropic').max_tokens),
     ...(tools.length ? { tools } : {}),
     ...(choice ? { tool_choice: choice.type === "tool" ? { type: "function", name: choice.name }
       : choice.type === "any" ? "required" : choice.type } : {}),

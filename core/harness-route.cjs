@@ -6,6 +6,7 @@ const { write: writeResponse } = require("./stream-write.cjs");
 const { messagesTransport, providerSessionHeaders } = require("./provider-transport.cjs");
 const { messagesRequest, messagesEvents, messagesJSON, normalizeMessages } = require("./messages-adapter.cjs");
 const { claudeModels, resolveClaudeModel } = require("./claude-models.cjs");
+const { withOutputLimit } = require('./output-tokens.cjs');
 function authorized(value, token) {
   const a = Buffer.from(value || ""),
     b = Buffer.from(token || "");
@@ -58,6 +59,7 @@ function harnessRoute(url, body, state) {
   const transport = protocol === "anthropic" ? messagesTransport(p, m) : null;
   if (transport?.adapted && suffix)
     throw Object.assign(Error("此跨协议模型没有精确 token 计数接口"), { status: 501 });
+  if (!suffix) Object.assign(body, withOutputLimit(body, m, protocol));
   return {
     p,
     m,

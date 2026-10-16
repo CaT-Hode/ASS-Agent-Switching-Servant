@@ -256,7 +256,7 @@ export function ModelEditor({
           contextSource: "输入模型名称后自动匹配",
           efforts: efforts.slice(0, 5),
           defaultEffort: "medium",
-          maxOutputTokens: 16384,
+          maxOutputTokens: 131072,
           enabled: true,
         },
   );
@@ -364,7 +364,7 @@ export function ModelEditor({
                 ))}
               </select>
             </Field>
-            <Field label="最大输出 tokens">
+            <Field label="最大输出 tokens（默认 128K）">
               <input
                 type="number"
                 min="1024"
@@ -401,6 +401,7 @@ export function ModelEditor({
                   setDraft((d) => ({
                     ...d,
                     contextWindow: Number(e.target.value),
+                    maxOutputTokens: Math.min(d.maxOutputTokens, Number(e.target.value) || d.maxOutputTokens),
                     contextSource: "手动配置",
                   }));
                 }}

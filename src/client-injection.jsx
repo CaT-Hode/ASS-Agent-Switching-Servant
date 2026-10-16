@@ -14,6 +14,8 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
   const excluded = new Set(injection.excludedProviders || []);
   const enabled = [...groups].filter(([id, models]) => !excluded.has(id) && models.some((m) => !m.issue)).length;
   const codexModels = client.id === "codex" ? injection.models.filter((m) => m.included && !m.issue) : [];
+  const officialModels = connection?.accountless ? [] : injection.officialModels || [];
+  const selectedDefault = [...officialModels, ...codexModels].some(m => m.ref === injection.defaultModel) ? injection.defaultModel : '';
   return <section className="client-injection" aria-label={client.name + " 模型接入"}>
     <header><h3>供应商接入 {!client.injectionUnsupported && <span className="injection-count" title="已纳入 / 已配置供应商" aria-label={`已纳入 ${enabled} 个供应商，共 ${groups.size} 个`}>{enabled} / {groups.size}</span>}</h3>
     </header>
@@ -44,14 +46,19 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
         <small>与无账号开关联动，使用时 ASS 需保持运行。</small>
       </div>
     </details>}
-    {client.id === "codex" && codexModels.length > 0 && <label className="codex-default-model">
+    {client.id === 'codex' && !connection?.enabled && (connection?.resumeRecovery?.count > 0 || connection?.resumeRecovery?.pending) && <button
+      className="button" disabled={!!busy || state.connections.busy}
+      title="恢复 ASS 对话的官方供应商和模型绑定；需先关闭 Codex"
+      onClick={() => onManage({ scope: client.id, enabled: false, restoreSessions: true, name: client.name })}>恢复官方续聊</button>}
+    {client.id === "codex" && (codexModels.length > 0 || officialModels.length > 0) && <label className="codex-default-model">
       <span>默认模型</span>
-      <select aria-label="Codex 默认模型" value={injection.defaultModel || ""} disabled={!!busy || state.connections.busy}
+      <select aria-label="Codex 默认模型" value={selectedDefault} disabled={!!busy || state.connections.busy}
         onChange={(e) => act("client-injection-default", () => api.call("client-injection", client.id, {
           excludedProviders: [...excluded], defaultModel: e.target.value || null,
         }))}>
         <option value="">自动选择首个已纳入模型</option>
-        {codexModels.map((m) => <option key={m.ref} value={m.ref}>{m.providerName} / {m.name || m.model}</option>)}
+        {officialModels.length > 0 && <optgroup label="OpenAI 官方订阅">{officialModels.map(m => <option key={m.ref} value={m.ref}>{m.name || m.model}</option>)}</optgroup>}
+        {codexModels.length > 0 && <optgroup label="已注入模型">{codexModels.map((m) => <option key={m.ref} value={m.ref}>{m.providerName} / {m.name || m.model}</option>)}</optgroup>}
       </select>
     </label>}
     {client.injectionUnsupported ? <p className="client-support-note">{client.injectionUnsupported}</p> :

@@ -18,6 +18,7 @@ clients.before-provider-injection.json
 native-accounts.json
 account-info.enc.json
 oauth-history.enc.json
+codex-session-handoff.enc.json
 conversation-library/
 project-conversations/
 *.ass-session

@@ -1,5 +1,5 @@
 const fs = require('node:fs'), path = require('node:path');
-const { normalizeModel } = require('./models.cjs');
+const { officialModel } = require('./models.cjs');
 const { modelRef } = require('./client-policy.cjs');
 function hasCodexOAuth(manager) {
   try {
@@ -14,7 +14,7 @@ function officialDefaultModels(manager, accountless = manager.options?.proxyConf
   if (accountless || !hasCodexOAuth(manager)) return [];
   const state = manager.getState(), overrides = state.officialOverrides || {};
   return (manager.officialModels || []).filter(m => /^gpt-[\w.-]+$/.test(m.slug) && !overrides[m.slug]?.removed && overrides[m.slug]?.enabled !== false).map(m => {
-    const model = normalizeModel(overrides[m.slug] || { model: m.slug, displayName: m.display_name }, { id: 'official' }, manager.officialModels);
+    const model = officialModel(m, overrides[m.slug], manager.officialModels);
     return { ...model, name: model.displayName, providerId: 'official', providerName: 'OpenAI 官方',
       official: true, ref: modelRef('official', model.model), included: true };
   });

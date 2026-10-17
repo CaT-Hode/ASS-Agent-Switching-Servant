@@ -11,6 +11,7 @@ const additional = require("./additional-harnesses.cjs");
 const additionalOAuth = require("./additional-oauth.cjs");
 const kimiConfig = require("./kimi-config.cjs");
 const dshConfig = require('./dsh-config.cjs');
+const { TOOL_MODES, validToolRef, validToolModes } = require('./deepseek-compat.cjs');
 const { officialAccountPlan } = require("./official-account-plan.cjs");
 const { assertClaudeAccount } = require("./claude-launch-policy.cjs");
 const { configureClaudeModels, assertClaudePicker, prepareClaudeOnboarding } = require("./accountless.cjs");
@@ -96,8 +97,10 @@ const json = (file) => {
     if (Object.entries(value.nativeVariants || {}).some(([id, v]) => id !== "kimi" || !["auto", "current", "legacy"].includes(v))) throw Error();
     for (const key of ["accountBindings", "accountExclusions", "apiBindings", "apiExclusions", "nativeProfileTargets"])
       if (Object.values(value[key] || {}).some((v) => !strings(v))) throw Error();
-    for (const config of Object.values(value.injections || {}))
+    for (const [harness, config] of Object.entries(value.injections || {}))
       if (!object(config) || !strings(config.excludedProviders || config.excluded || []) ||
+          (config.predictionCompatibility !== undefined && (harness !== 'codex' || typeof config.predictionCompatibility !== 'boolean')) ||
+          (config.codexToolModes !== undefined && (harness !== 'codex' || !validToolModes(config.codexToolModes))) ||
           (config.defaultModel !== undefined && config.defaultModel !== null && typeof config.defaultModel !== "string")) throw Error();
     if (value.profiles !== undefined && (!Array.isArray(value.profiles) || value.profiles.some((p) => !p || !/^[a-f0-9]{24}$/.test(p.id) || !SPECS.some((s) => s.id === p.harness)))) throw Error();
     return value;
@@ -349,6 +352,7 @@ class HarnessManager {
       ...json(this.file),
     };
     require('./oauth-import-transaction.cjs').recover(this);
+    this.persisted = fs.existsSync(this.file) ? fs.readFileSync(this.file, 'utf8') : null;
     this.nativeHome = options.home || os.homedir();
     this.nativeEnv = options.env || process.env;
     this.launchEnv = options.launchEnv || process.env;
@@ -622,7 +626,13 @@ class HarnessManager {
     return require('./oauth-import-transaction.cjs').importProfile(this, label || source.label, provider, record, source.label);
   }
   save() {
-    atomic(this.file, JSON.stringify(this.state, null, 2));
+    if ((fs.existsSync(this.file) ? fs.readFileSync(this.file, 'utf8') : null) !== this.persisted)
+      throw Error('客户端配置已在外部更新，请重启后重试；未用旧内存覆盖');
+    const text = JSON.stringify(this.state, null, 2);
+    if (this.persisted !== null)
+      atomic(path.join(this.dataDir, 'backups', 'clients.previous.json'), this.persisted);
+    atomic(this.file, text);
+    this.persisted = text;
   }
   spec(id) {
     const spec = ACTIVE_SPECS.find((s) => s.id === id);
@@ -900,14 +910,30 @@ class HarnessManager {
   }
   setInjection(harness, changes) {
     if (this.spec(harness).injectionUnsupported) throw Error("此客户端尚未支持供应商接入");
-    if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).some((k) => !["excludedProviders", "defaultModel"].includes(k)))
+    if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).some((k) => !["excludedProviders", "defaultModel", 'predictionCompatibility', 'codexToolMode'].includes(k)))
       throw Error("接入范围请按供应商设置");
+    if (Object.hasOwn(changes, 'predictionCompatibility') && (harness !== 'codex' || typeof changes.predictionCompatibility !== 'boolean'))
+      throw Error('提示词预测兼容设置无效');
     if (Object.hasOwn(changes, "defaultModel") && harness !== "codex")
       throw Error("接入范围请按供应商设置");
     if (Object.hasOwn(changes, "defaultModel") && changes.defaultModel !== null &&
         (typeof changes.defaultModel !== "string" || changes.defaultModel.length > 500))
       throw Error("默认模型引用无效");
-    const next = { ...this.state.injections[harness], ...changes };
+    const { codexToolMode, ...settings } = changes;
+    const next = { ...this.state.injections[harness], ...settings };
+    if (Object.hasOwn(changes, 'codexToolMode')) {
+      if (harness !== 'codex' || !codexToolMode || typeof codexToolMode !== 'object' || Array.isArray(codexToolMode) ||
+          Object.keys(codexToolMode).some(k => !['ref', 'mode'].includes(k)) ||
+          !validToolRef(codexToolMode.ref) || !TOOL_MODES.includes(codexToolMode.mode) ||
+          !this.effectiveProviders(harness).some(p => p.models.some(m => modelRef(p.id, m.model) === codexToolMode.ref)))
+        throw Error('Codex 工具兼容设置无效，请重新选择模型');
+      const modes = { ...next.codexToolModes };
+      if (codexToolMode.mode === 'auto') delete modes[codexToolMode.ref];
+      else modes[codexToolMode.ref] = codexToolMode.mode;
+      if (!validToolModes(modes)) throw Error('Codex 工具兼容设置超过上限或包含无效值');
+      if (Object.keys(modes).length) next.codexToolModes = modes;
+      else delete next.codexToolModes;
+    }
     if (!Array.isArray(next.excludedProviders) || next.excludedProviders.length > 5000 ||
         next.excludedProviders.some((r) => typeof r !== "string" || !r || r.length > 250 || /[\x00-\x1f]/.test(r)))
       throw Error("无效供应商排除列表");
@@ -958,6 +984,12 @@ class HarnessManager {
     for (const settings of Object.values(this.state.injections)) {
       if (settings.defaultModel === previousRef) settings.defaultModel = nextRef;
       if (settings.excluded) settings.excluded = settings.excluded.flatMap((ref) => ref !== previousRef ? [ref] : nextRef ? [nextRef] : []);
+      if (settings.codexToolModes && Object.hasOwn(settings.codexToolModes, previousRef)) {
+        const mode = settings.codexToolModes[previousRef];
+        delete settings.codexToolModes[previousRef];
+        if (nextRef) settings.codexToolModes[nextRef] = mode;
+        if (!Object.keys(settings.codexToolModes).length) delete settings.codexToolModes;
+      }
     }
     try {
       this.save();
@@ -1078,10 +1110,11 @@ class HarnessManager {
           // Keep native OAuth visible in account launches. The local gateway
           // still dispatches a later switch to an injected model.
           const providerId = applied?.gatewayAuth ? "ASS" : "ass_official";
+          const selectedProvider = applied?.predictionCompatibility ? 'openai' : providerId;
           const auth = "requires_openai_auth = true\n";
           files.push([
             "config.toml",
-            `cli_auth_credentials_store = "file"\n${catalog}${defaultModel}model_provider = ${JSON.stringify(providerId)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n[model_providers.${providerId}]\nname = "ASS"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\n${auth}supports_websockets = false\n`,
+            `cli_auth_credentials_store = "file"\n${catalog}${defaultModel}model_provider = ${JSON.stringify(selectedProvider)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n[model_providers.${providerId}]\nname = "ASS"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\n${auth}supports_websockets = false\n`,
           ]);
         } else if (!fs.existsSync(path.join(dir, "config.toml"))) {
           files.push(["config.toml", 'cli_auth_credentials_store = "file"\n']);

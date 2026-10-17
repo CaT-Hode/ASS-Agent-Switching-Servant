@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Power, Loader2, Wrench } from "./icons.jsx";
 import { Modal } from "./editors.jsx";
 import { ClientLocationRecovery } from "./client-location.jsx";
@@ -7,28 +7,33 @@ import "./connections.css";
 const api = window.ass;
 export function ConnectionPill({ client, state, onManage, busy }) {
   const connection = state.connections.clients[client.id], enabled = connection.enabled;
+  const disabled = !!busy || state.connections.busy;
+  const actionable = !!connection.syncError || enabled && connection.pending;
+  const label = enabled ? connection.syncError ? "接入异常" : connection.pending ? "待同步" : "接入已开启" : "未接入";
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={enabled}
-      aria-label={client.name + " ASS 接入"}
-      title={
-        connection.syncError ? "查看并修复 " + client.name + " 接入" : enabled
-          ? "断开 " + client.name + " 接入"
-          : "开启 " + client.name + " 接入"
-      }
+    <div
       className="connection-switch"
+      data-enabled={enabled ? "true" : undefined}
       data-error={connection.syncError ? "true" : undefined}
-      disabled={!!busy || state.connections.busy}
-      onClick={() => onManage({ scope: client.id, enabled: !enabled, issue: connection.syncError, name: client.name })}
+      data-disabled={disabled ? "true" : undefined}
     >
-      <span>{enabled ? (state.connections.clients[client.id].syncError ? "接入异常" : state.connections.clients[client.id].pending ? "待同步" : "接入已开启") : "未接入"}</span>
-      <span className="connection-pill-track" aria-hidden="true">
-        <i />
-      </span>
-    </button>
+      {actionable ? <button className="connection-state-text" type="button" disabled={disabled}
+        aria-label={client.name + (connection.syncError ? " 修复接入" : " 同步接入")}
+        onClick={() => onManage({ scope: client.id, enabled: true, sync: true, name: client.name,
+          ...(connection.syncError ? { issue: connection.syncError } : {}) })}>{label}</button> : <span>{label}</span>}
+      <button className="connection-toggle" type="button" role="switch" aria-checked={enabled}
+        aria-label={client.name + " ASS 接入"} disabled={disabled}
+        title={(enabled ? "断开 " : "开启 ") + client.name + " 接入"}
+        onClick={() => onManage({ scope: client.id, enabled: !enabled, issue: connection.syncError, name: client.name })}>
+        <span className="connection-pill-track" aria-hidden="true"><i /></span>
+      </button>
+    </div>
   );
+}
+export function ClientActivity({ client, state }) {
+  const active = state.connections.clients[client.id]?.active || 0;
+  return <span className="client-request-count" data-idle={active ? undefined : "true"}
+    aria-hidden={!active || undefined} aria-live="polite">{active} 个请求</span>;
 }
 export function ConnectionStatus({ client, state, busy, onManage }) {
   const connection = state.connections.clients[client.id];
@@ -37,16 +42,19 @@ export function ConnectionStatus({ client, state, busy, onManage }) {
   );
   if (!connection || client.injectionUnsupported) return null;
   const note = connection.syncError ? connection.syncError : connection.pending ? "模型变更待同步" : "";
-  if (!note && !sessions.length && !connection.active) return null;
+  if (!note && !sessions.length) return null;
   return (
     <section
       className="connection-status"
       aria-label={client.name + " 接入控制"}
     >
       <div className="connection-overview">
-        <small role={connection.syncError ? "alert" : "status"}>{note}</small>
-        {(sessions.length > 0 || connection.active > 0) && <div className="connection-metrics">
-          {connection.active > 0 && <span>{connection.active} 个请求</span>}
+        {note && <button className="connection-note-action" type="button" disabled={!!busy || state.connections.busy}
+          onClick={() => onManage({ scope: client.id, enabled: true, sync: true, name: client.name,
+            ...(connection.syncError ? { issue: connection.syncError } : {}) })}>
+          <small role={connection.syncError ? "alert" : "status"}>{note}</small>
+        </button>}
+        {sessions.length > 0 && <div className="connection-metrics">
           {sessions.length > 0 && <span>{sessions.length} 个窗口</span>}
         </div>}
       </div>
@@ -131,45 +139,62 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
     [busy, setBusy] = useState(false),
     [locating, setLocating] = useState(false),
     [checking, setChecking] = useState(true),
+    [repairChecking, setRepairChecking] = useState(false),
     [revision, setRevision] = useState(0);
   const client = state?.harnesses.clients.find(c => c.id === request.scope);
-  const issue = state?.connections.clients[request.scope]?.syncError ?? request.issue;
+  const connection = state?.connections.clients[request.scope];
+  const issue = connection?.syncError ?? request.issue;
+  const canInspectRepair = request.accountless === undefined && request.scope !== "all" && !!issue;
+  const inspection = useRef(0), operation = useRef(null), currentRequest = useRef(request), mounted = useRef(false);
+  currentRequest.current = request;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; inspection.current++; }; }, []);
   useEffect(() => {
-    let active = true;
+    if (operation.current?.request === request) return;
+    operation.current = null;
+    const generation = ++inspection.current;
+    const active = () => mounted.current && generation === inspection.current;
     setPlan(null);
     setRepair(null);
     setRepairReason("");
     setError("");
     setProcessMode("none");
+    setBusy(false);
     setChecking(true);
+    setRepairChecking(canInspectRepair);
+    async function inspectRepair() {
+      try {
+        const value = await api.call("connection-repair-preview", request.scope);
+        if (active()) setRepair(value);
+      } catch (e) {
+        if (active()) setRepairReason(cleanError(e));
+      } finally { if (active()) setRepairChecking(false); }
+    }
+    // Process discovery for a normal toggle must not hold config recovery hostage.
+    // A missing executable only limits the optional close/restart actions.
+    if (canInspectRepair) void inspectRepair();
     async function preview() {
-      let failed = false;
       try {
         const value = await api.call("connection-preview", request.scope, request.enabled, false, request.accountless);
-        if (active) setPlan(value);
+        if (active()) setPlan(value);
       } catch (e) {
-        failed = true;
-        if (active) setError(cleanError(e));
-      }
-      if (active && request.accountless === undefined && (failed || issue) && request.scope !== "all" && !client?.launcher?.ambiguous) {
-        try {
-          const value = await api.call("connection-repair-preview", request.scope);
-          if (active) setRepair(value);
-        } catch (e) {
-          if (active) setRepairReason(cleanError(e));
+        if (active()) {
+          setError(cleanError(e));
+          if (!canInspectRepair && request.accountless === undefined && request.scope !== "all") {
+            setRepairChecking(true);
+            void inspectRepair();
+          }
         }
-      }
-      if (active) setChecking(false);
+      } finally { if (active()) setChecking(false); }
     }
-    preview();
-    return () => {
-      active = false;
-    };
-  }, [request.scope, request.enabled, issue, request.accountless, client?.launcher?.location, client?.launcher?.ambiguous, revision]);
+    void preview();
+    return () => { if (generation === inspection.current) inspection.current++; };
+  }, [request, issue, canInspectRepair, client?.launcher?.location, revision]);
   const target = plan?.names.join("、") || repair?.names.join("、") || request.name || client?.name || "客户端";
   const hasIssue = request.accountless === undefined && request.scope !== "all" && (!!issue || !!error);
+  const showRepair = hasIssue;
   const showLocation = request.scope !== "all" && (!!error || !!issue || client?.launcher?.ambiguous);
-  const locked = busy || locating || checking;
+  const locked = busy || locating || checking || state?.connections.busy;
+  const repairLocked = busy || locating || state?.connections.busy;
   const restartPlan = hasIssue ? repair?.restart : plan?.restart;
   const restart = processMode === "restart", close = processMode === "close";
   const title = request.restoreSessions ? `恢复 ${target} 官方续聊？` : request.accountless !== undefined ? `${request.accountless ? "开启" : "关闭"} ${target} 无账号启动？` : hasIssue ? `${target} 接入异常` : request.scope === "all"
@@ -201,6 +226,8 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
   }
   async function commit() {
     if (!plan || locked) return;
+    const run = { request }; operation.current = run; inspection.current++;
+    const active = () => mounted.current && currentRequest.current === request && operation.current === run;
     setBusy(true);
     setError("");
     try {
@@ -211,30 +238,42 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
         restart,
         close,
       });
-      onComplete(result.message, result.restart?.ok === false);
-      onClose();
+      if (active()) { onComplete(result.message, result.restart?.ok === false); onClose(); }
     } catch (e) {
-      setError(
-        e.message.replace(/^Error invoking remote method '[^']+': Error: /, ""),
-      );
-      setPlan(null);
+      if (active()) { setError(cleanError(e)); setPlan(null); }
     } finally {
-      setBusy(false);
+      if (active()) { operation.current = null; setBusy(false); setChecking(false); setRepairChecking(false); }
     }
   }
   async function repairConnection() {
-    if (!repair || locked) return;
+    if (repairLocked || operation.current?.request === request) return;
+    const run = { request }; operation.current = run; inspection.current++;
+    const active = () => mounted.current && currentRequest.current === request && operation.current === run;
     setBusy(true);
+    setChecking(false);
+    setError("");
+    setRepairReason("");
     try {
-      const result = await api.call("connection-repair", { ticket: repair.ticket, acknowledged: true, restart, close });
-      onComplete(result.message, result.restart?.ok === false);
-      onClose();
+      // No cached ticket after a failure: inspect again on this click rather
+      // than disabling the only recovery action until the dialog is reopened.
+      const selected = repair || await api.call("connection-repair-preview", request.scope);
+      if (!active()) return;
+      setRepair(selected);
+      const forced = restart || close;
+      if (forced && (!repair || (restart ? !selected.restart?.available : !selected.restart?.closeAvailable))) {
+        setProcessMode("none");
+        throw Error("关闭或重启目标需要重新确认；已恢复为仅修复配置，请重试。");
+      }
+      const result = await api.call("connection-repair", { ticket: selected.ticket, acknowledged: true, restart, close });
+      if (active()) { onComplete(result.message, result.restart?.ok === false); onClose(); }
     } catch (e) {
-      setError(cleanError(e));
-      setRepair(null);
-      setRepairReason("请重新打开弹窗，检查最新配置后再修复。");
-      setPlan(null);
-    } finally { setBusy(false); }
+      if (active()) {
+        setError(cleanError(e));
+        setRepair(null);
+        setRepairReason("可以直接重试；将重新检查最新配置。登录和会话保持不变。");
+        setPlan(null);
+      }
+    } finally { if (active()) { operation.current = null; setBusy(false); setRepairChecking(false); } }
   }
   return (
     <Modal
@@ -248,15 +287,15 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
         className="connection-confirm-message"
         role={error ? "alert" : "status"}
       >
-        {checking ? "正在更新接入状态…" : error || issue || warning}
+        {error || issue || (checking ? "正在更新接入状态…" : warning)}
       </p>
       {showLocation && <ClientLocationRecovery key={request.scope} clientId={request.scope}
         disabled={busy || checking} onBusy={setLocating} onUpdated={() => setRevision(v => v + 1)} />}
-      {hasIssue && !client?.launcher?.ambiguous && <p className="connection-repair-note">
-        {repair ? repair.migration ? "将备份并迁移到 DSH 当前 profile，不重启客户端。" : `将备份并恢复上次接入配置${repair.files ? `（${repair.files} 个文件）` : ""}。${restart || close ? "" : "不关闭客户端，请先结束任务。"}` : repairReason || "正在检查可修复内容…"}
+      {showRepair && <p className="connection-repair-note" role="status">
+        {repairChecking ? "正在检查可修复内容…" : repair ? repair.migration ? "将备份并迁移到 DSH 当前 profile，不重启客户端。" : `将检查并恢复上次接入配置${repair.files ? `（${repair.files} 个文件）` : "及路由服务"}，保留未同步的模型编辑。${restart || close ? "" : "不关闭客户端，请先结束任务。"}` : repairReason || "点击修复将重新检查并恢复接入。"}
       </p>}
       <ClientProcessChoice plan={restartPlan} value={processMode} onChange={setProcessMode} disabled={busy} />
-      {plan?.restoreSessions > 0 && <p className="connection-repair-note">将恢复 {plan.restoreSessions} 个对话的官方模型绑定。请先关闭 Codex，或选择强制关闭 / 重启。</p>}
+      {plan?.restoreSessions > 0 && <p className="connection-repair-note">断开接入时将恢复 {plan.restoreSessions} 个对话的官方模型绑定。请先关闭 Codex，或选择强制关闭 / 重启。</p>}
       <footer>
         <button
           className="button"
@@ -272,11 +311,11 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
           onClick={commit}
         >
           {busy && <Loader2 size={14} className="spin" />}
-          {hasIssue ? request.enabled ? "同步" : "断开接入" : "确定"}
+          {request.accountless !== undefined ? "确定" : request.enabled ? request.sync || hasIssue ? "同步接入" : "开启接入" : request.scope === "all" ? "停止全部接入" : "断开接入"}
         </button>}
-        {hasIssue && !client?.launcher?.ambiguous && <button className="button primary connection-repair" disabled={!repair || locked} onClick={repairConnection}>
+        {showRepair && <button className="button primary connection-repair" disabled={repairLocked} onClick={repairConnection}>
           {busy ? <Loader2 size={14} className="spin" /> : <Wrench size={15} />}
-          {busy ? "修复中…" : "一键修复"}
+          {busy ? "修复中…" : repairReason ? "重试修复" : "一键修复"}
         </button>}
       </footer>
     </Modal>

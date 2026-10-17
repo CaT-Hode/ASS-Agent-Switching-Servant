@@ -10,7 +10,9 @@ const { isDeepStrictEqual: equal } = require("node:util");
 const claudeNative = require("./claude-native.cjs");
 const { OUTPUT_DEFAULTS_VERSION, upgradeModelOutput } = require('./output-tokens.cjs');
 const { officialDefaultModels } = require('./codex-default-models.cjs');
-const routeOnly = (plan) => { if (!plan) return null; const { nativeClaude, ...route } = plan; return route; };
+const { CodexRecovery } = require('./codex-recovery.cjs');
+const { codexApiMetadata } = require('./deepseek-compat.cjs');
+const routeOnly = (plan) => { if (!plan) return null; const { nativeClaude, attachment, ...route } = plan; return route; };
 const IDS = ["codex", "claude"];
 const read = (file) => fs.existsSync(file) ? fs.readFileSync(file) : null;
 function validateCodexPlan(plan) {
@@ -34,6 +36,7 @@ class ProxyConfig {
     this.pending = null;
     this.error = "";
     this.outputTokenDefaultsVersion = OUTPUT_DEFAULTS_VERSION;
+    this.codexRecovery = new CodexRecovery(dataDir, crypto, config);
     try {
       const saved = read(this.file);
       if (saved) {
@@ -48,6 +51,7 @@ class ProxyConfig {
               (plan.accountless !== undefined && typeof plan.accountless !== "boolean") ||
               (plan.gatewayAuth !== undefined && (id !== 'codex' || plan.gatewayAuth !== true ||
                 !/^[a-f0-9]{64}$/.test(plan.localToken || ''))) ||
+              (plan.predictionCompatibility !== undefined && (id !== 'codex' || plan.predictionCompatibility !== true || !plan.gatewayAuth || plan.accountless)) ||
               (plan.accountless && (!/^[a-f0-9]{64}$/.test(plan.localToken || "") || !plan.providers.some((p) => p.models?.length))))) throw Error();
         validateCodexPlan(clients.codex);
         this.clients = clients;
@@ -71,17 +75,74 @@ class ProxyConfig {
           providers: plan.providers.map(p => ({ ...p, models: p.models.map(upgradeModelOutput) })) }])));
       } catch (error) { this.error = '默认输出上限迁移未完成：' + error.message; }
     }
+    config.recoverAttachment = () => {
+      if (!this.error && !this.pending && this.persistedHash === hash(read(this.file) || '')) {
+        validateCodexPlan(this.clients.codex);
+        if (this.clients.codex?.attachment) return this.clients.codex.attachment;
+      }
+      const plan = this.clients.codex;
+      for (const record of this.codexRecovery.candidates()) {
+        const provider = this.config.validateRecord(record)[1].model_providers.ASS;
+        if (plan && (plan.accountless
+          ? provider.experimental_bearer_token !== plan.localToken
+          : provider.requires_openai_auth !== true)) continue;
+        return record;
+      }
+    };
+    try { this.autoRecoverCodex(); }
+    catch (error) { this.recoveryError = error.message; }
+  }
+  autoRecoverCodex() {
+    if (this.error || this.pending || !this.clients.codex || typeof this.config.ownedCurrent !== 'function') return false;
+    this.checkFiles('codex');
+    const current = read(this.config.file)?.toString();
+    if (!current) return false;
+    const { record, text, recovered } = this.config.readAttachment({ recoverCorrupt: true });
+    if (!recovered && this.clients.codex.attachment && !equal(this.clients.codex.attachment, record)) return false;
+    // Prove every transport field independently of comments. Native TOML
+    // writers can remove/reorder markers without changing any owned value.
+    this.config.ownedCurrent(record, current, false);
+    try { this.config.ownedCurrent(record, current); }
+    catch {
+      this.repair('codex');
+      if (!equal(this.clients.codex.attachment, record))
+        this.persist({ ...this.clients, codex: { ...this.clients.codex, attachment: record } });
+      return true;
+    }
+    const clients = { ...this.clients, codex: { ...this.clients.codex, attachment: record } };
+    if (recovered) {
+      const backup = path.join(this.config.dataDir, 'backups', `codex-record-recovery-${Date.now()}-${randomUUID()}.enc.json`);
+      const value = JSON.stringify({ version: 1, encrypted: this.crypto.encryptString(JSON.stringify({
+        kind: 'codex-record-recovery', file: this.config.record, before: text,
+      })).toString('base64') });
+      safePath(backup); atomic(backup, value);
+      if (read(this.config.file)?.toString() !== current) throw Error('恢复前 Codex 配置已变化，未覆盖');
+      this.commit(clients, [{ file: this.config.record, before: text, after: JSON.stringify(record) }]);
+      return true;
+    }
+    if (!equal(this.clients.codex.attachment, record)) {
+      this.persist(clients);
+      return true;
+    }
+    this.codexRecovery.save(record);
+    return false;
   }
   supports(id) { return IDS.includes(id); }
   desired(id, accountless = this.clients[id]?.accountless === true) {
     if (!this.supports(id)) return null;
+    if (id === 'codex') this.store.readCatalog?.();
     const injection = this.manager.injection(id);
     const refs = new Set(injection.models.filter((m) => m.included).map((m) => m.ref));
     const providers = (this.manager.effectiveProviders?.(id) || this.store.state.providers).flatMap((p) => {
-      const models = p.models.filter((m) => refs.has(modelRef(p.id, m.model)));
+      const models = p.models.filter((m) => refs.has(modelRef(p.id, m.model))).map(m => {
+        const mode = id === 'codex' && injection.codexToolModes?.[modelRef(p.id, m.model)];
+        return mode && mode !== 'auto' ? { ...m, codexToolMode: mode } : m;
+      });
       if (!models.length) return [];
-      // Balance configuration is not a routing change.
-      const { balance, ...provider } = p;
+      // Storage-only fields are not routing changes. Reload adds an undefined
+      // secrets placeholder; JSON persistence omits it, so comparing it would
+      // make an otherwise identical applied route look dirty after restart.
+      const { balance, secrets, ...provider } = p;
       return [{ ...provider, models }];
     });
     if (accountless && !providers.length) throw Error("无账号启动需要至少一个已接入的模型");
@@ -111,6 +172,7 @@ class ProxyConfig {
     return {
       providers,
       defaultModel,
+      ...(id === 'codex' && !accountless && injection.predictionCompatibility ? { predictionCompatibility: true } : {}),
       // Desktop's account-wide quota gate ignores the selected provider. Use
       // native custom-provider auth; preserve auth.json for official requests.
       ...(id === 'codex' || accountless ? {
@@ -129,6 +191,29 @@ class ProxyConfig {
         hash(read(this.config.catalog) || "") !== hash(JSON.stringify(this.clients.codex.catalog, null, 2)))
       throw Error("Codex 已应用模型目录被外部修改；未覆盖");
     if (id === "claude") claudeNative.check(this.clients.claude?.nativeClaude);
+  }
+  refreshOfficialCatalog() {
+    if (!this.clients.codex) return false;
+    const plan = this.clients.codex;
+    if (!plan.accountless) this.store.readCatalog?.();
+    const native = !plan.accountless && this.store.catalogStamp ? structuredClone(this.store.officialModels)
+      : plan.catalog.models.filter(m => !m.slug.includes('::'));
+    const catalog = { ...this.clients.codex.catalog, models: [
+      ...native,
+      ...plan.catalog.models.filter(m => m.slug.includes('::')).map(entry => {
+        for (const provider of plan.providers) {
+          const model = provider.models.find(m => codexModelId(provider.id, m.model) === entry.slug);
+          if (model) return codexApiMetadata(entry, provider, model);
+        }
+        return entry;
+      }),
+    ] };
+    if (equal(catalog, this.clients.codex.catalog)) return false;
+    this.checkFiles('codex'); this.config.preflightDetach();
+    const after = JSON.stringify(catalog, null, 2), before = read(this.config.catalog)?.toString() ?? null;
+    this.commit({ ...this.clients, codex: { ...this.clients.codex, catalog } },
+      [{file:this.config.catalog,before,after}]);
+    return true;
   }
   status(id, enabled) {
     if (!this.supports(id)) return {};
@@ -183,19 +268,24 @@ class ProxyConfig {
       this.checkFiles(id);
       const plan = this.desired(id, accountless);
       if (!plan.providers.length && !this.clients[id]) throw Error("没有可接入的兼容模型，请先配置供应商与模型");
-      if (id === "codex") this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth);
+      if (id === "codex") this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth, plan.predictionCompatibility);
       if (id === "claude") {
         claudeNative.plan(this.manager, plan, this.clients.claude?.nativeClaude);
         this.desktop?.plan(plan.accountless ? plan.localToken : null, this.manager.options?.port || 25819, plan.providers);
       }
     }
   }
-  persist(clients, pending = null) {
+  persist(clients, pending = null, { expectedHash = this.persistedHash } = {}) {
     if (!this.crypto.isEncryptionAvailable()) throw Error("Windows 凭据加密不可用，未应用路由配置");
     safePath(this.file);
+    if (expectedHash !== undefined && hash(read(this.file) || '') !== expectedHash)
+      throw Error('已应用路由记录被外部修改，未覆盖，请重新加载');
     const value = JSON.stringify({ version: 1, encrypted: this.crypto.encryptString(JSON.stringify({ clients, pending,
       outputTokenDefaultsVersion: OUTPUT_DEFAULTS_VERSION })).toString("base64") });
     if (Buffer.byteLength(value) > 8 * 1024 * 1024) throw Error("路由恢复记录超过 8 MiB，未写入");
+    if (!pending && clients.codex?.attachment) this.codexRecovery.save(clients.codex.attachment);
+    if (expectedHash !== undefined && hash(read(this.file) || '') !== expectedHash)
+      throw Error('保存恢复检查点期间路由记录已变化，未覆盖');
     atomic(this.file, value);
     this.persistedHash = hash(value);
     this.clients = structuredClone(clients);
@@ -235,12 +325,17 @@ class ProxyConfig {
       files.push(...(this.desktop?.plan(plan.accountless ? plan.localToken : null, this.manager.options?.port || 25819, plan.providers) || []));
     }
     if (id === "codex") {
-      const attachment = this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth);
+      const attachment = this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth, plan.predictionCompatibility);
       const backup = path.join(this.config.dataDir, "backups", "config-" + Date.now() + "-proxy.toml");
       safePath(backup); atomic(backup, attachment.old);
+      plan.attachment = { backup, replaced: attachment.replaced,
+        blocks: attachment.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g) };
+      const previous = this.clients.codex?.attachment;
+      if (previous && equal(previous.replaced, plan.attachment.replaced) && equal(previous.blocks, plan.attachment.blocks))
+        plan.attachment = structuredClone(previous);
       const values = [
         [this.config.catalog, JSON.stringify(plan.catalog, null, 2)],
-        [this.config.record, JSON.stringify({ backup, replaced: attachment.replaced, blocks: attachment.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g) })],
+        [this.config.record, JSON.stringify(plan.attachment)],
         [this.config.file, attachment.text],
       ];
       for (const [file, after] of values) { safePath(file); files.push({ file, before: read(file)?.toString() ?? null, after }); }
@@ -277,10 +372,20 @@ class ProxyConfig {
   repairPlan(id) {
     if (!this.supports(id) || !this.clients[id]) throw Error("没有可信的已应用路由配置可供修复");
     if (this.error) throw Error(this.error);
-    if (this.pending) throw Error("路由事务尚未完成，请先重新同步恢复");
     safePath(this.file);
     const saved = read(this.file), files = [];
-    let migrated = false;
+    if (this.pending) {
+      if (hash(saved || '') !== this.persistedHash) throw Error('待恢复路由记录已变化，未覆盖');
+      const allowed = id === 'codex' ? [this.config.file, this.config.record, this.config.catalog]
+        : [...Object.values(claudeNative.targets(this.manager)), ...Object.values(this.clients.claude?.nativeClaude?.targets || {})];
+      if (this.pending.files.some(f => !allowed.includes(f.file) && !(id === 'claude' && this.desktop?.allowsFile(f.file))))
+        throw Error('未完成事务还涉及其他客户端，请先检查该事务；没有扩大修复范围');
+      this.recoveryCheck();
+      return { recoverTransaction: true, routeOnly: true, files: this.pending.files.map(f => ({
+        file: f.file, before: read(f.file)?.toString() ?? null, after: f.before,
+      })).filter(f => f.before !== f.after) };
+    }
+    let migrated = false, recoveredAttachment;
     if (hash(saved || "") !== this.persistedHash) {
       // Recover this client from its trusted in-memory applied snapshot, but
       // never undo a concurrent edit to another client's route in the same file.
@@ -297,7 +402,12 @@ class ProxyConfig {
       validateCodexPlan(this.clients.codex);
       for (const file of [this.config.file, this.config.record, this.config.catalog]) safePath(file);
       const { recordUpdate, ...attachment } = this.config.prepareRepair();
-      if (recordUpdate) { files.push(recordUpdate); migrated = true; }
+      if (recordUpdate) { files.push(recordUpdate); migrated = true; recoveredAttachment = JSON.parse(recordUpdate.after); }
+      // Old applied snapshots did not embed the validated rollback record.
+      // Explicit repair also upgrades this recovery evidence when no file
+      // rewrite is needed, without importing provider or model drafts.
+      if (!this.clients.codex.attachment && !recoveredAttachment)
+        recoveredAttachment = this.config.readAttachment({ recoverCorrupt: true }).record;
       if (attachment.before !== attachment.after) files.push(attachment);
       const before = read(this.config.catalog)?.toString() ?? null, after = JSON.stringify(this.clients.codex.catalog, null, 2);
       if (before !== after) files.push({ file: this.config.catalog, before, after });
@@ -309,7 +419,7 @@ class ProxyConfig {
       files.push(...native.files);
       files.push(...(this.desktop?.plan(this.clients.claude.accountless ? this.clients.claude.localToken : null, this.manager.options?.port || 25819, this.clients.claude.providers) || []));
     }
-    return { files, routeOnly: !files.length, nativeClaude, migrated };
+    return { files, routeOnly: !files.length, nativeClaude, migrated, recoveredAttachment };
   }
   repair(id) {
     const plan = this.repairPlan(id);
@@ -323,15 +433,24 @@ class ProxyConfig {
     safePath(backup); atomic(backup, encoded);
     for (const f of plan.files) if ((read(f.file)?.toString() ?? null) !== f.before) throw Error("修复前配置已变化，未覆盖");
     if ((read(this.file)?.toString() ?? null) !== saved) throw Error("修复前路由记录已变化，未覆盖");
+    if (plan.recoverTransaction) {
+      // Keep the original write-ahead journal until its rollback succeeds.
+      // A full disk leaves it retryable instead of losing the pending state.
+      this.recover();
+      return { ...this.repair(id), recoveredTransaction: true };
+    }
     const files = plan.files.filter((f) => f.file !== this.file);
     try {
-      this.persist(this.clients, { files });
+      this.persist(this.clients, { files }, { expectedHash: hash(saved || '') });
       for (const f of files) {
         if ((read(f.file)?.toString() ?? null) !== f.before) throw Error("修复期间配置已变化，已停止");
         if (f.after === null) fs.unlinkSync(f.file);
         else atomic(f.file, f.after);
       }
-      this.persist(plan.nativeClaude ? { ...this.clients, claude: { ...this.clients.claude, nativeClaude: plan.nativeClaude } } : this.clients);
+      const clients = { ...this.clients };
+      if (plan.nativeClaude) clients.claude = { ...clients.claude, nativeClaude: plan.nativeClaude };
+      if (plan.recoveredAttachment) clients.codex = { ...clients.codex, attachment: plan.recoveredAttachment };
+      this.persist(clients);
     } catch (error) {
       try { this.recover(); }
       catch { throw Error("修复未完成，已保留加密备份与事务恢复记录"); }
@@ -349,6 +468,8 @@ class ProxyConfig {
     if (!this.status(id, true).applied) throw Error("模型接入配置尚未同步，请先在接入控制中同步后再启动");
   }
   requireCodexOfficialService() {
+    try { this.autoRecoverCodex(); }
+    catch (error) { this.recoveryError = error.message; }
     const plan = this.clients.codex;
     if (!plan?.gatewayAuth || plan.accountless) throw Error("Codex 官方服务需要 OAuth 接入");
     this.checkFiles("codex");

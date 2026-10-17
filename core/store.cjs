@@ -9,6 +9,7 @@ const {
   parseImport,
   normalizeProvider,
   normalizeModel,
+  officialModel,
   makeCatalog,
 } = require("./models.cjs");
 class Store {
@@ -47,21 +48,28 @@ class Store {
     return true;
   }
   readCatalog() {
+    const file = path.join(this.codexDir, 'models_cache.json');
     try {
-      const c = JSON.parse(
-        fs.readFileSync(path.join(this.codexDir, "models_cache.json"), "utf8"),
-      );
-      this.officialModels = c.models.filter(
+      const stat = fs.statSync(file), stamp = `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
+      if (stamp === this.catalogStamp) return;
+      if (stat.size > 8 * 1024 * 1024) throw Error('catalog size');
+      const c = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const models = c.models.filter(
         (m) => m.slug && !m.slug.includes("::"),
       );
+      if (!models.length) throw Error('empty native catalog');
+      // HarnessManager shares this array. Keep its official defaults current
+      // when Codex replaces its cache during an app update.
+      this.officialModels.splice(0, this.officialModels.length, ...models);
+      this.catalogStamp = stamp;
     } catch {
-      this.officialModels = [
+      if (!this.officialModels.length) this.officialModels.push(
         {
           slug: "gpt-6-astra",
           display_name: "GPT-6-Astra",
           context_window: 272000,
         },
-      ];
+      );
     }
   }
   save() {
@@ -84,6 +92,8 @@ class Store {
       this.writeCatalog();
       // Settings are authoritative on restart; commit them only after the derived catalog.
       const text = JSON.stringify({ ...this.state, providers }, null, 2);
+      if (this.persisted !== null)
+        atomic(path.join(this.dataDir, 'backups', 'settings.previous.json'), this.persisted);
       atomic(this.file, text);
       this.persisted = text;
     } catch (error) {
@@ -106,6 +116,7 @@ class Store {
     );
   }
   public() {
+    this.readCatalog();
     return {
       ...this.state,
       providers: this.state.providers.map(({ apiKey, extraHeaders, ...p }) => ({
@@ -116,18 +127,7 @@ class Store {
       officialModels: this.officialModels
         .filter((m) => !this.state.officialOverrides[m.slug]?.removed)
         .map((m) => ({
-          ...normalizeModel(
-            this.state.officialOverrides[m.slug] || {
-              model: m.slug,
-              displayName: m.display_name,
-            },
-            {
-              id: "official",
-              name: "OpenAI 官方",
-              wireApi: "openai-responses",
-            },
-            this.officialModels,
-          ),
+          ...officialModel(m, this.state.officialOverrides[m.slug], this.officialModels),
           official: true,
           sourceModel: m.slug,
         })),

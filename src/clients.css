@@ -284,7 +284,9 @@
 .clients-refresh-result p { margin: 0; }
 .clients-refresh-result ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
 .client-heading > .actions { flex-wrap: nowrap; gap: 8px; }
-.client-heading > h2 { flex: none; }
+.client-heading-title { display: flex; align-items: center; gap: 10px; flex: none; min-width: 0; }
+.client-request-count { display: inline-flex; align-items: center; flex: none; width: 6.5em; color: var(--muted); font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.client-request-count[data-idle="true"] { visibility: hidden; }
 .codex-desktop-launch { position: relative; display: inline-flex; flex: none; }
 .codex-launch-tooltip { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(390px, calc(100vw - 64px)); padding: 16px; border-radius: 11px; background: var(--raised); color: var(--ink); box-shadow: 0 8px 28px #0003; text-align: left; }
 .codex-launch-tooltip::before { content: ""; position: absolute; bottom: 100%; left: 0; right: 0; height: 9px; }
@@ -833,6 +835,15 @@
 .client-provider-models span { min-width: 0; overflow-wrap: anywhere; }
 .client-provider-models small { display: block; font-size: 11px; line-height: 1.5; color: light-dark(#7e7e7e, #b4b4b4); }
 .client-provider-models .unavailable { opacity: .65; }
+.codex-tool-mode-hint { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.client-provider-models > .has-tool-mode { grid-template-columns: minmax(0, 1fr) minmax(72px, .4fr) minmax(145px, .6fr); align-items: center; }
+.codex-tool-mode { display: grid; gap: 5px; min-width: 0; }
+.codex-tool-mode > span { font-size: 11px; color: var(--muted); }
+.codex-tool-mode select { min-width: 0; width: 100%; font-size: 12px; }
+@media (max-width: 740px) {
+  .client-provider-models > .has-tool-mode { grid-template-columns: minmax(0, 1fr) minmax(72px, .4fr); gap: 10px; }
+  .codex-tool-mode { grid-column: 1 / -1; grid-template-columns: auto minmax(145px, 1fr); align-items: center; gap: 12px; }
+}
 .provider-injection-switch { position: absolute; right: 3px; top: 15px; width: 38px; height: 24px; border: 0; border-radius: 99px; background: light-dark(#c5c5c5, #363837); padding: 3px; cursor: pointer; }
 .provider-injection-switch::before { content: ""; position: absolute; inset: -5px; }
 .provider-injection-switch i { display: block; width: 18px; height: 18px; border-radius: 50%; background: light-dark(#fff, #edf0ee); box-shadow: 0 1px 3px light-dark(#35383626, #00000026); transform: translateX(0); transition: transform 180ms cubic-bezier(.23,1,.32,1); }

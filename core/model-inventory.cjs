@@ -293,7 +293,7 @@ function applyZCodeEntitlement(client, rows) {
 function modelSources(
   store,
   harnesses,
-  { home, env = {}, directories = {}, nativeApiModels = [] } = {},
+  { home, env = {}, directories = {}, nativeApiModels = [], ownsModel = () => false } = {},
 ) {
   const officialClient = harnesses.clients.find((c) => c.id === "codex");
   const sources = [
@@ -302,6 +302,7 @@ function modelSources(
       name: "OpenAI 官方",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       kind: "subscription",
+      readOnly: true,
       enabled: true,
       models: store.officialModels,
       accountCount:
@@ -330,6 +331,10 @@ function modelSources(
         catch {cached = undefined;}
       }
       for (const m of cached?.models || nativeModels(client, a, home || "", env)) {
+        // Runtime pickers may combine the native and ASS-injected catalogs
+        // under one account. Exclude only still-owned entries, not every
+        // provider whose name happens to start with ASS.
+        if (ownsModel(client, a, m)) continue;
         const sameModelInSupplier = a.authType === "api" && a.supplierId &&
           store.providers.some((p) => p.id === a.supplierId && p.models.some((item) => item.model === m.model));
         // The model directory may call this account "deepseek" while the API

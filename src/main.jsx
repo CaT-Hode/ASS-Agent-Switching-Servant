@@ -482,6 +482,7 @@ function App() {
         {state.startupError && (
           <div className="error-box">{state.startupError}</div>
         )}
+        {state.nativeScanError && <div role="status" className="error-box">{state.nativeScanError}</div>}
         {view !== "updates" && (
           <UpdateBanner
             updates={state.updates}

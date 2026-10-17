@@ -77,12 +77,12 @@
     background 120ms ease-out,
     border-color 120ms ease-out;
 }
-.connection-switch > span:first-child {
+.connection-switch > span:first-child, .connection-state-text {
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }
-.connection-switch[aria-checked="true"] {
+.connection-switch[data-enabled="true"] {
   background: light-dark(#f2f5f3, #363837);
   border-color: var(--border);
   color: var(--accent);
@@ -110,26 +110,30 @@
   box-shadow: 0 1px 3px light-dark(#0002, #00000022);
   transition: transform 120ms ease-out;
 }
-.connection-switch[aria-checked="true"] .connection-pill-track {
+.connection-switch[data-enabled="true"] .connection-pill-track {
   background: var(--primary);
 }
-.connection-switch[aria-checked="true"] .connection-pill-track i {
+.connection-switch[data-enabled="true"] .connection-pill-track i {
   transform: translateX(10px);
 }
-.connection-switch:hover:not(:disabled) {
+.connection-switch:hover:not([data-disabled="true"]) {
   border-color: var(--border);
 }
-.connection-switch:active:not(:disabled) {
+.connection-switch:active:not([data-disabled="true"]) {
   filter: brightness(0.97);
 }
-.connection-switch:focus-visible {
+.connection-toggle:focus-visible, .connection-state-text:focus-visible {
   outline: 3px solid light-dark(#b8c7bd, #b8c7bd);
   outline-offset: 3px;
 }
-.connection-switch:disabled {
+.connection-switch[data-disabled="true"] {
   opacity: 0.5;
   cursor: wait;
 }
+.connection-state-text, .connection-toggle, .connection-note-action { border: 0; background: transparent; color: inherit; padding: 0; font: inherit; }
+.connection-state-text { font-size: 11px; font-weight: 600; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
+.connection-toggle { display: inline-flex; align-items: center; justify-content: center; align-self: stretch; min-height: 22px; border-radius: 10px; }
+.connection-note-action { text-align: left; text-decoration: underline; text-underline-offset: 3px; }
 .connection-metrics {
   display: flex;
   gap: 20px;

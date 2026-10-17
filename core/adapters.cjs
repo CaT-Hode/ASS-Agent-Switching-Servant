@@ -174,6 +174,24 @@ function convertRequest(body, model, protocol) {
           ? body.tool_choice
           : { type: "function", function: { name: body.tool_choice.name } };
   }
+  const format = body.text?.format;
+  if (format?.type === 'json_schema') {
+    if (!format.schema || typeof format.schema !== 'object' || Array.isArray(format.schema))
+      throw Object.assign(Error('结构化输出缺少有效 JSON schema'), { status: 400 });
+    if (protocol === 'anthropic') request.output_config = { ...request.output_config,
+      format: { type: 'json_schema', schema: format.schema } };
+    else request.response_format = { type: 'json_schema', json_schema: {
+      name: format.name || 'codex_output', schema: format.schema,
+      ...(format.description !== undefined ? {description:format.description} : {}),
+      ...(format.strict !== undefined ? {strict:format.strict} : {}),
+    } };
+  } else if (format?.type === 'json_object') {
+    if (protocol === 'anthropic')
+      throw Object.assign(Error('此协议需要 JSON schema，无法转换 json_object 输出格式'), {status:400});
+    request.response_format = {type:'json_object'};
+  } else if (format?.type && format.type !== 'text') {
+    throw Object.assign(Error('此协议无法转换输出格式 ' + format.type), {status:400});
+  }
   return request;
 }
 async function* sseMessages(stream, signal) {
@@ -404,4 +422,17 @@ async function* translateStream(stream, protocol, model) {
   yield* out.finish(limited);
 }
 const anthropicLimited = reason => ['max_tokens', 'model_context_window_exceeded'].includes(reason);
-module.exports = { convertRequest, translateStream, sseMessages, anthropicLimited };
+// Native Responses already has semantic tool/reasoning events; only restore
+// tool identities. Keep task-failure validation and require a terminal frame.
+async function* nativeResponsesEvents(stream, signal) {
+  let ended = false;
+  for await (const event of sseMessages(stream, signal)) {
+    yield event;
+    if (['response.completed', 'response.incomplete'].includes(event.type)) {
+      ended = true;
+      break;
+    }
+  }
+  if (!ended) throw Error('上游流提前断开，未收到结束事件');
+}
+module.exports = { convertRequest, translateStream, sseMessages, anthropicLimited, nativeResponsesEvents };

@@ -21,7 +21,7 @@ before(async () => {
       const state={officialServices:[],nativeAccounts:[],providers:[],connections:{clients:{codex:connection,claude:{enabled:false}},processes:{sessions:[]}},harnesses:{clients:[client('codex','Codex'),client('claude','Claude Code')]}};
       const act=async(key,fn)=>{setBusy(key);setError('');try{return await fn();}catch(e){setError(e.message);}finally{setBusy('');}};
       return <main style={{maxWidth:1180,margin:'30px auto',padding:'0 24px'}}>
-        <h1>客户端与账户</h1><Clients state={state} busy={busy} act={act} onManage={()=>{}}/>
+        <h1>客户端与账户</h1><Clients state={state} busy={busy} act={act} onManage={request=>window.managed.push(request)}/>
         {error&&<p role="alert">{error}</p>}
       </main>;
     }
@@ -30,7 +30,7 @@ before(async () => {
   fs.mkdirSync(path.join(output, 'providers'));
   for (const brand of ['openai','anthropic']) fs.copyFileSync(path.resolve(__dirname, '../public/providers', brand + '.svg'), path.join(output, 'providers', brand + '.svg'));
   // Test artifacts stay in the OS temp directory, not in the application package.
-  const html = '<html><head><title>ASS Codex launch UI</title><link rel="stylesheet" href="renderer.css"></head><body><div id="root"></div><script src="renderer.js"></script></body></html>';
+  const html = `<html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'"><title>ASS Codex launch UI</title><link rel="stylesheet" href="renderer.css"></head><body><div id="root"></div><script src="renderer.js"></script></body></html>`;
   await fs.promises.writeFile(path.join(output, 'index.html'), html);
   await fs.promises.writeFile(path.join(output, 'main.cjs'), `const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(path.join(output,'profile'))});app.whenReady().then(()=>{new BrowserWindow({show:false,width:1440,height:900,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}}).loadURL('about:blank')});`);
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -40,7 +40,7 @@ before(async () => {
   page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
   await page.context().route(/^https?:/, route => route.abort());
   await page.addInitScript(() => {
-    window.calls = [];
+    window.calls = []; window.managed = [];
     window.ass = { call: async (name, ...args) => {
       window.calls.push([name, ...args]);
       if (name === 'client-open-desktop') return new Promise((resolve,reject) => { window.launchPending={resolve,reject}; });
@@ -57,6 +57,37 @@ beforeEach(async () => {
 });
 afterEach(() => assert.deepEqual(errors, [], 'no renderer or console errors'));
 const launch = () => page.getByRole('button', { name: '通过 ASS 启动 Codex', exact: true });
+
+test('status text opens sync/repair while the separate switch still controls injection',async()=>{
+  for(const syncError of ['', 'Synthetic connection conflict', '']){
+    await page.evaluate(syncError=>window.setConnection({enabled:true,applied:false,pending:true,syncError}),syncError);
+    const label=page.getByRole('button',{name:'Codex '+(syncError?'修复接入':'同步接入'),exact:true});
+    const toggle=page.getByRole('switch',{name:'Codex ASS 接入',exact:true});
+    await label.click();assert.equal(await toggle.getAttribute('aria-checked'),'true');
+    await page.locator('.connection-note-action').click();
+    const expected={scope:'codex',enabled:true,sync:true,name:'Codex',...(syncError?{issue:syncError}:{})};
+    assert.deepEqual(await page.evaluate(()=>window.managed.slice(-2)),[expected,expected]);
+    await toggle.click();assert.equal((await page.evaluate(()=>window.managed.at(-1))).enabled,false,'only the switch requests disconnection');
+  }
+});
+
+test('active request count stays next to client name without shifting the body as requests start and finish',async()=>{
+  const locations=[];
+  for(const active of [0,1,12,0]){
+    await page.evaluate(active=>window.setConnection({enabled:true,applied:true,active}),active);
+    const count=page.locator('.client-heading-title .client-request-count');
+    assert.equal(await count.textContent(),active+' 个请求');assert.equal(await count.isVisible(),active>0);
+    assert.equal(await page.locator('.connection-status').count(),0,'request activity adds no body row');
+    locations.push(await page.locator('.client-injection').evaluate(el=>el.getBoundingClientRect().top));
+  }
+  assert.ok(locations.every(y=>Math.abs(y-locations[0])<0.5),'body remains at the same vertical offset');
+  await page.evaluate(()=>window.setConnection({enabled:true,applied:false,pending:true,active:3}));
+  for(const width of [1100,1440]){
+    await page.setViewportSize({width,height:900});await page.mouse.move(0,0);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.screenshot({path:path.join(output,'status-requests-'+width+'.png'),animations:'disabled',timeout:15000});
+  }
+});
 test('Codex launch: missing desktop detection no longer hides the control', async () => {
   await page.evaluate(() => window.setCodexDesktop(null));
   assert.ok(await launch().isVisible()); assert.ok(await launch().isEnabled());
@@ -135,6 +166,17 @@ test('Codex launch: disconnected/accountless modes do not promise official repai
   await page.getByRole('button', { name: 'Claude Code', exact: true }).click();
   assert.equal(await page.locator('.codex-desktop-launch').count(), 0);
   assert.ok(await page.getByRole('button', { name: '打开 Claude Code 桌面端', exact: true }).isVisible());
+});
+
+test('Codex launch: native OAuth fallback stays visible and retryable when optional connection repair fails', async () => {
+  await page.evaluate(() => window.setConnection({enabled:true,applied:false,syncError:'synthetic missing attachment',accountlessAvailable:true}));
+  for(let i=0;i<2;i++) {
+    assert.ok(await launch().isEnabled()); await launch().click();
+    await page.evaluate(() => window.launchPending.resolve({ok:true,degraded:true,message:'已按当前本机配置打开 Codex；ASS 官方服务通道未就绪，请在接入管理中检查自动恢复结果。'}));
+    await page.locator('.codex-launch-result').getByText(/官方服务通道未就绪/).waitFor();
+    assert.ok(await launch().isEnabled()); assert.equal(await page.getByRole('dialog').count(),0);
+  }
+  assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c[0] === 'client-open-desktop')), [['client-open-desktop','codex'],['client-open-desktop','codex']]);
 });
 
 test('bulk injection refresh: one call, disabled while pending, partial failures visible and zero client launch calls', async () => {

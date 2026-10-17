@@ -27,7 +27,7 @@ import {
 } from "./account-dialogs.jsx";
 import { ActionMenu } from "./menus.jsx";
 import { AccountProfile, AccountPlan } from "./account-profile.jsx";
-import { ConnectionStatus, ConnectionPill, ConnectionService } from "./connections.jsx";
+import { ConnectionStatus, ConnectionPill, ConnectionService, ClientActivity } from "./connections.jsx";
 import { ClientInjection } from "./client-injection.jsx";
 import { ClientProcessChoice } from "./client-process-choice.jsx";
 import { CodexDesktopLaunch } from "./codex-desktop-launch.jsx";
@@ -470,9 +470,9 @@ export function Clients({
             aria-label={client.name + " 账户管理"}
           >
             <header className="client-heading">
-              <h2>
-                {client.name}
-              </h2>
+              <div className="client-heading-title">
+                <h2>{client.name}</h2><ClientActivity {...{ client, state }} />
+              </div>
               <div className="actions">
                 <button className="icon-button" aria-label="自动识别客户端" title="自动识别客户端"
                   disabled={!!busy} onClick={detect}><Search size={16} /></button>

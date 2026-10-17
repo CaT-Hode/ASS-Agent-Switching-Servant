@@ -70,7 +70,12 @@ const { modelSources, nativeModels } = require("../core/model-inventory.cjs");
 const { nativeOfficialProvider: resolveNativeOfficialProvider } = require("../core/native-official.cjs");
 const { apiIdentity } = require("../core/native-api-identity.cjs");
 const { withReadScope } = require("../core/read-scope.cjs");
-const { SnapshotPublisher } = require("../core/snapshot-publisher.cjs");
+const { SnapshotPublisher, ClientSnapshot } = require("../core/snapshot-publisher.cjs");
+const clientSnapshot = new ClientSnapshot(() => harnesses.snapshot());
+const { RuntimeHealth } = require('../core/runtime-health.cjs');
+let runtimeHealth;
+process.on('uncaughtExceptionMonitor', error => runtimeHealth?.record('uncaught', error));
+app.on('render-process-gone', () => runtimeHealth?.record('renderer-gone'));
 function nativeOfficialProvider(client, account) {
   return resolveNativeOfficialProvider(client, account, { home: harnesses.nativeHome, env: harnesses.nativeEnv });
 }
@@ -91,6 +96,16 @@ else
     "userData",
     path.join(app.getPath("appData"), "AI Switch Servant"),
   );
+// Resolve inherited MSIX virtualization before Chromium loads its encryption key
+// or any ASS store is opened. All normal launches must use the same profile.
+try {
+  if (require('../core/windows-profile.cjs').ensureDesktopProfile({
+    directory: app.getPath('userData'), explicit: !!process.env.ASS_DATA_DIR || !!(testMode && customData),
+  })) app.exit(0);
+} catch (error) {
+  dialog.showErrorBox('ASS 数据目录', error.message);
+  app.exit(1);
+}
 app.setName("ASS");
 app.setAppUserModelId("local.ass.desktop");
 const { ProtocolNegotiation } = require("../core/protocol-negotiation.cjs");
@@ -313,6 +328,7 @@ async function syncNativeSuppliers() {
     // The native scan may follow an external import/migration while ASS stays
     // open. Never promote from (or later save over) a stale provider snapshot.
     store.reload();
+    if (!connections.busy && !router.clientActive('codex')) proxyConfig.refreshOfficialCatalog();
     const clients = harnesses.snapshot().clients;
     for (const client of clients) {
       for (const profile of harnesses.nativeApis(client.id)) {
@@ -391,8 +407,7 @@ async function refreshClientState(clientId) {
 }
 function buildSnapshot() {
   store.reload();
-  const publicState = store.public(),
-    clientState = harnesses.snapshot();
+  const publicState = store.public(), clients = clientSnapshot.current(), clientState = clients.state;
   const nativeApiModels = [];
   for (const client of clientState.clients)
     for (const account of client.accounts) {
@@ -481,9 +496,11 @@ function buildSnapshot() {
   }
   const sources = modelSources(publicState, clientState, {
     home: harnesses.nativeHome, env: harnesses.nativeEnv, directories: providerModels, nativeApiModels,
+    ownsModel: (client, account, model) => nativeConfig.ownsModel(client.id, account, model),
   });
   return {
     ...publicState,
+    nativeScanError: clients.error,
     sequence: ++snapshotSequence,
     modelSources: sources,
     preferences: preferences.state,
@@ -537,7 +554,8 @@ function buildSnapshot() {
 const publisher = new SnapshotPublisher({ read: snapshot,
   canSend: () => !!window && !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
   send: (value) => window.webContents.send("ass:state", value),
-  onError: () => {
+  onError: (error) => {
+    runtimeHealth?.record('snapshot', error);
     if (window && !window.isDestroyed()) window.webContents.send("ass:state-error",
       "客户端状态读取失败，保留当前画面；请刷新重试。");
   } });
@@ -950,6 +968,7 @@ else {
             ).replace(/^~(?=[/\\]|$)/, os.homedir()),
           );
       fs.mkdirSync(dataDir, { recursive: true });
+      runtimeHealth = new RuntimeHealth(dataDir, safeStorage, app.getVersion());
       systemSession = session.fromPartition("ass-system");
       directSession = session.fromPartition("ass-direct");
       await systemSession.setProxy({ mode: "system" });
@@ -1038,6 +1057,7 @@ else {
       claudeDesktop = new ClaudeDesktopGateway(dataDir, testMode
         ? { directory: path.join(dataDir, "claude-desktop"), policyReader: () => ({}) } : {});
       proxyConfig = new ProxyConfig(dataDir, safeStorage, harnesses, store, config, claudeDesktop);
+      if (proxyConfig.recoveryError) runtimeHealth.record('codex-recovery', Error(proxyConfig.recoveryError));
       harnesses.options.proxyConfig = proxyConfig;
       const codexOfficialAuth = new (require('../core/codex-official-auth.cjs').CodexOfficialAuth)(codexDir);
       router = new Router({
@@ -1092,6 +1112,9 @@ else {
         // retired clients are not scanned, exposed, or writable through IPC.
         external: { "antigravity-keyring": require("../core/antigravity-status.cjs").keyringAdapter },
         onChange: push,
+        refresh: async () => {
+          if (!connections.busy && !router.clientActive('codex')) proxyConfig.refreshOfficialCatalog();
+        },
       });
       conversations = new ConversationLibrary({ dataDir, crypto: safeStorage,
         sources: () => harnesses.conversationSources() });
@@ -1806,7 +1829,7 @@ else {
           },
         };
       oauthHistory.start();
-      if (!testMode) void syncNativeSuppliers();
+      if (!testMode) void runtimeHealth.background('native-scan', syncNativeSuppliers);
       if (!testMode) updates.start();
     })
     .catch((error) => {
@@ -1821,6 +1844,7 @@ else {
       return;
     }
     quitting = true;
+    runtimeHealth?.record('exit');
     publisher.clear();
     updates?.stop();
     oauthHistory?.stop();

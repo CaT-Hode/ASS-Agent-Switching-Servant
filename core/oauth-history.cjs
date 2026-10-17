@@ -216,12 +216,21 @@ class OAuthHistory {
   }
   start() {
     if (this.timer) return;
-    this.scan({ immediate: true });
-    this.timer = setInterval(() => this.scan(), 2000);
+    this.scanSafe({ immediate: true });
+    this.timer = setInterval(() => this.scanSafe(), 2000);
     this.timer.unref?.();
     if (this.refresh) {
       this.refreshTimer = setInterval(() => this.refreshExternal(), 10000);
       this.refreshTimer.unref?.();
+    }
+  }
+  scanSafe(options) {
+    try { return this.scan(options); }
+    catch {
+      // A native app can replace its files/install directory during update.
+      // Retry at the next tick; never let a discovery failure terminate ASS.
+      this.errors.scan = '原生账户扫描暂时失败，已保留现有记录，将自动重试';
+      return false;
     }
   }
   async refreshExternal() {

@@ -9,12 +9,32 @@ before(async () => {
   require('esbuild').buildSync({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import {flushSync} from 'react-dom';
     import {ProjectConversations} from './src/project-conversations.jsx';
     import {ConversationHistory} from './src/conversation-history.jsx'; import {ModelEditor} from './src/editors.jsx';
+    import {Providers} from './src/providers.jsx'; import {ClientInjection} from './src/client-injection.jsx';
     const root=createRoot(document.getElementById('root'));
+    window.mountSuppliers=()=>flushSync(()=>root.render(<Providers providers={[]} activeProvider="" onOpenProvider={()=>{}} onBack={()=>{}} act={async(k,fn)=>fn()}
+      state={{providers:[{id:'woyao',name:'WOYAO',models:[{model:'custom',displayName:'Custom'}],enabled:true}],modelSources:[{id:'woyao',name:'WOYAO',models:[{model:'custom',displayName:'Custom'}],enabled:true}],
+      officialProviderIds:{},preferences:{providerOrder:[]},balances:{},harnesses:{clients:[]}}}/>));
+    window.mountInjection=(checked=false,accountless=false)=>flushSync(()=>root.render(<ClientInjection client={{id:'codex',name:'Codex',injection:{models:[],excludedProviders:[],predictionCompatibility:checked,officialModels:[{ref:'official',model:'gpt-fixture'}]}}}
+      state={{providers:[],connections:{busy:false,clients:{codex:{accountless}}}}} act={async(k,fn)=>fn()} onManage={()=>{}}/>));
+    window.renderToolInjection=()=>flushSync(()=>root.render(<main className="client-panel" style={{padding:24,maxWidth:1000,margin:'0 auto'}}>
+      <h1>{window.toolClient==='codex'?'Codex':'pi'}</h1><p>客户端注入</p>
+      <button className="button" onClick={()=>{window.appliedToolModes={...window.toolModes};window.renderToolInjection();}}>同步接入</button>
+      <span role="status">{JSON.stringify(window.toolModes||{})===JSON.stringify(window.appliedToolModes||{})?'已同步':'待同步'}</span>
+      {window.toolError&&<p role="alert">{window.toolError}</p>}
+      <ClientInjection client={{id:window.toolClient,name:window.toolClient==='codex'?'Codex':'pi',injection:{excludedProviders:[],
+        models:['flash','chat'].map((model,i)=>({ref:JSON.stringify(['fixture',model]),providerId:'fixture',providerName:'Fixture Relay',model,name:i?'Synthetic Chat':'Synthetic Flash',
+          protocol:i?'openai-chat':'openai-responses',included:true,codexToolMode:window.toolModes?.[JSON.stringify(['fixture',model])]||'auto'})),
+        officialModels:[{ref:'official',model:'gpt-fixture'}]}}}
+        state={{providers:[{id:'fixture',name:'Fixture Relay',baseUrl:'https://fixture.test'}],connections:{busy:false,clients:{codex:{}}}}}
+        busy={window.toolBusy?'saving':''} onManage={()=>{}} act={async(k,fn)=>{window.toolBusy=true;window.renderToolInjection();
+          try {await fn();window.toolError='';}catch(e){window.toolError=e.message;}
+          finally {window.toolBusy=false;window.renderToolInjection();}}}/></main>));
+    window.mountToolInjection=(client='codex')=>{window.toolClient=client;window.renderToolInjection();};
     window.mount=(name)=>flushSync(()=>root.render(React.createElement({project:ProjectConversations,history:ConversationHistory,model:ModelEditor}[name],
       name==='model'?{provider:{id:'p',name:'Test'},onSave:async()=>{},onClose:()=>{}}:
       {initialHarness:'codex',state:{preferences:{conversations:{}},harnesses:{clients:[{id:'codex',detected:true,accounts:[]}]}},onClose:()=>{},onChange:()=>{}})));`,
     resolveDir: path.resolve(__dirname, '..'), loader: 'jsx' }, bundle: true, outfile: path.join(root, 'renderer.js'), platform: 'browser', logLevel: 'silent' });
-  fs.writeFileSync(path.join(root, 'index.html'), '<html><head><title>ASS renderer regression</title></head><body><div id="root"></div><script src="renderer.js"></script></body></html>');
+  fs.writeFileSync(path.join(root, 'index.html'), `<html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'"><title>ASS renderer regression</title></head><body><div id="root"></div><script src="renderer.js"></script></body></html>`);
   fs.writeFileSync(path.join(root, 'main.cjs'), `const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(path.join(root,'profile'))});app.whenReady().then(()=>{const w=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}});w.loadURL('about:blank')});`);
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), path.join(root, 'main.cjs')], env }); page = await app.firstWindow(); page.setDefaultTimeout(process.env.CI ? 15000 : 5000);
@@ -25,6 +45,13 @@ before(async () => {
     const wait = key => new Promise((resolve,reject) => { window.pending[key]={resolve,reject}; });
     window.ass = { call: async (name,...args) => {
       window.calls.push([name,...args]);
+      if(name==='client-injection'&&args[1]?.codexToolMode) {
+        if(window.failMode){window.failMode=false;throw Error('Synthetic save failure');}
+        if(window.deferMode){window.deferMode=false;await wait('mode');}
+        const {ref,mode}=args[1].codexToolMode;window.toolModes={...window.toolModes};
+        if(mode==='auto')delete window.toolModes[ref];else window.toolModes[ref]=mode;
+        return {};
+      }
       if(window.failList && ['project-conversations-records','conversations-backups'].includes(name)) { window.failList=false; throw Error('Synthetic listing failure'); }
       const row = (short=false) => ({id:short?'short':'long',title:short?'Short':'Long',kind:'native',harness:'codex',available:true,nativePresent:true,capturedAt:'2026-10-02',file:'fake',backupBytes:1});
       if(name==='project-conversations-list') return {items:[{id:'p',name:'Project',cwd:'fake',enabled:false,targets:['codex'],counts:{codex:41},harnesses:['codex']}]};
@@ -45,6 +72,68 @@ after(async () => { await app?.close(); if(root) fs.rmSync(root,{recursive:true,
 beforeEach(async () => { rendererErrors.length = 0; await page.goto('file:///' + path.join(root,'index.html').replaceAll('\\','/')); });
 afterEach(() => assert.deepEqual(rendererErrors, [], 'no uncaught React renderer errors'));
 const mount = name => page.evaluate(name => window.mount(name), name);
+test('renderer: persisted WOYAO appears and remains searchable across remounts',async()=>{
+  for(let i=0;i<2;i++) {
+    await page.evaluate(()=>window.mountSuppliers());
+    await page.getByRole('article',{name:'WOYAO 供应商',exact:true}).waitFor();
+    await page.getByPlaceholder('搜索供应商或模型').fill('WOYAO');
+    assert.equal(await page.getByRole('article',{name:'WOYAO 供应商',exact:true}).count(),1);
+  }
+});
+test('renderer: prediction compatibility switch is explicit and disabled in accountless mode',async()=>{
+  await page.evaluate(()=>window.mountInjection());
+  const toggle=page.getByRole('switch',{name:'提示词预测兼容',exact:true});
+  assert.equal(await toggle.getAttribute('aria-checked'),'false');await toggle.click();
+  const call=await page.evaluate(()=>window.calls.find(c=>c[0]==='client-injection'));
+  assert.deepEqual(call,['client-injection','codex',{excludedProviders:[],predictionCompatibility:true}]);
+  await page.evaluate(()=>window.mountInjection(true));assert.equal(await toggle.getAttribute('aria-checked'),'true');
+  await page.evaluate(()=>window.mountInjection(true,true));assert.equal(await toggle.isDisabled(),true);
+});
+
+test('renderer: Codex injection model menu saves tool choices, retries failures and waits for sync',async()=>{
+  await page.evaluate(()=>window.mountToolInjection());
+  await page.getByText('Fixture Relay',{exact:true}).click();
+  const select=page.getByRole('combobox',{name:'Fixture Relay / Synthetic Flash Codex 工具兼容',exact:true});
+  assert.equal(await select.inputValue(),'auto');
+  assert.equal(await page.getByRole('combobox',{name:/Codex 工具兼容/}).count(),1,'official and already converted models have no native Responses override');
+  await page.evaluate(()=>{window.deferMode=true;});await select.selectOption('compatible');
+  await page.waitForFunction(()=>!!window.pending.mode);assert.equal(await select.isDisabled(),true);
+  await page.evaluate(()=>window.pending.mode.resolve());
+  await page.waitForFunction(()=>!window.toolBusy&&window.toolModes?.['["fixture","flash"]']==='compatible');
+  assert.equal(await select.inputValue(),'compatible');assert.equal(await page.getByRole('status').textContent(),'待同步');
+  const call=await page.evaluate(()=>window.calls.find(c=>c[0]==='client-injection'));
+  assert.deepEqual(call,['client-injection','codex',{codexToolMode:{ref:'["fixture","flash"]',mode:'compatible'}}]);
+  await page.evaluate(()=>window.mountToolInjection());assert.equal(await select.inputValue(),'compatible');
+  assert.deepEqual(await page.evaluate(()=>window.appliedToolModes||{}),{});
+  await page.getByRole('button',{name:'同步接入',exact:true}).click();assert.equal(await page.getByRole('status').textContent(),'已同步');
+  await page.evaluate(()=>{window.failMode=true;});await select.selectOption('native');
+  await page.getByRole('alert').getByText('Synthetic save failure',{exact:true}).waitFor();assert.equal(await select.inputValue(),'compatible');
+  for(const mode of ['native','compatible','auto','auto']) {
+    await select.selectOption(mode);await page.waitForFunction(()=>!window.toolBusy);
+    assert.equal(await select.inputValue(),mode);
+  }
+  await page.evaluate(()=>window.mountToolInjection('pi'));
+  assert.equal(await page.getByRole('combobox',{name:/Codex 工具兼容/}).count(),0);
+});
+
+test('renderer: Codex tool menu is visible without clipping in dark desktop and narrow light layouts',async()=>{
+  const warnings=[];const onConsole=message=>{if(['error','warning'].includes(message.type()))warnings.push(message.text())};page.on('console',onConsole);
+  try {
+    await page.addStyleTag({content:['style.css','controls.css','polish.css','clients.css','theme.css'].map(file=>fs.readFileSync(path.join(__dirname,'../src',file),'utf8')).join('\n')});
+    await page.evaluate(()=>{window.toolModes={'["fixture","flash"]':'compatible'};window.mountToolInjection();});
+    await page.getByText('Fixture Relay',{exact:true}).click();
+    const select=page.getByRole('combobox',{name:'Fixture Relay / Synthetic Flash Codex 工具兼容',exact:true});
+    for(const [width,theme] of [[1100,'dark'],[620,'light']]) {
+      await page.setViewportSize({width,height:800});await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
+      assert.equal(await select.isVisible(),true);assert.equal(await select.inputValue(),'compatible');
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no horizontal clipping');
+      await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+      await page.screenshot({path:path.join(os.tmpdir(),`ass-v0.3.45-codex-tool-mode-${theme}.png`),timeout:15000,animations:'disabled'});
+    }
+    assert.equal(await page.title(),'ASS renderer regression');assert.match(page.url(),/index\.html$/);
+    assert.equal(await page.locator('vite-error-overlay').count(),0);assert.deepEqual(warnings,[]);
+  } finally {page.off('console',onConsole);await page.setViewportSize({width:1280,height:720});}
+});
 for (const earlier of [false, true]) test(`renderer history: failed next page and return to same row reloads transcript at ${earlier ? 40 : 0}`, async () => {
   await mount('history'); await page.getByText('Latest answer', {exact:true}).waitFor();
   if(earlier) { await page.getByRole('button',{name:'更早内容',exact:true}).click(); await page.getByText('Earlier answer',{exact:true}).waitFor(); }

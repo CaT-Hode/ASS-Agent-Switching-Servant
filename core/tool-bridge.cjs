@@ -2,8 +2,11 @@ const { createHash } = require("node:crypto");
 // Convert client-executed custom/namespace tools to JSON functions. The proxy
 // never executes them; restore the exact client tool identity on the way back.
 function toolBridge(body) {
-  const mapping = new Map(), names = new Map(), tools = [];
+  const mapping = new Map(), names = new Map(), unqualified = new Map(), tools = [];
   const key = (namespace, name) => JSON.stringify([namespace || "", name]);
+  const aliasKey = (name, custom) => JSON.stringify([name, custom]);
+  const wireNameFor = (namespace, name, custom) => namespace || custom
+    ? "ass_" + createHash("sha256").update(key(namespace, name)).digest("hex").slice(0, 32) : name;
   function add(tool, namespace) {
     if (tool.type === "namespace") {
       for (const nested of tool.tools || []) add(nested, namespace ? namespace + "." + tool.name : tool.name);
@@ -11,9 +14,11 @@ function toolBridge(body) {
     }
     if (!["custom", "function"].includes(tool.type)) { tools.push(tool); return; }
     const original = { name: tool.name, ...(namespace ? { namespace } : {}), custom: tool.type === "custom" };
-    const wireName = namespace || original.custom ? "ass_" + createHash("sha256").update(key(namespace, tool.name)).digest("hex").slice(0, 32) : tool.name;
+    const wireName = wireNameFor(namespace, tool.name, original.custom);
     if (mapping.has(wireName)) throw Object.assign(Error("重复工具定义"), { status: 400 });
     mapping.set(wireName, original); names.set(key(namespace, tool.name), wireName);
+    const alias = aliasKey(tool.name, original.custom);
+    unqualified.set(alias, unqualified.has(alias) ? null : wireName);
     tools.push(original.custom ? { type: "function", name: wireName,
       description: [tool.description, "Pass the complete raw tool input as the input string.",
         tool.format?.syntax ? "Input syntax: " + tool.format.syntax : "", tool.format?.definition || ""].filter(Boolean).join("\n"),
@@ -24,11 +29,21 @@ function toolBridge(body) {
   function convertItem(item) {
     if (item.type === "custom_tool_call_output") return { ...item, type: "function_call_output" };
     if (!["function_call", "custom_tool_call"].includes(item.type)) return item;
-    const name = names.get(key(item.namespace, item.name));
-    if (!name && item.type === "custom_tool_call") throw Object.assign(Error("自定义工具历史缺少对应定义"), { status: 400 });
+    const custom = item.type === "custom_tool_call";
+    if (custom && (typeof item.name !== 'string' || !item.name || typeof item.input !== 'string'))
+      throw Object.assign(Error("自定义工具历史的名称或输入无效"), { status: 400 });
+    let name = names.get(key(item.namespace, item.name));
+    // Codex rollouts can omit namespace on stored calls. Rebind only when
+    // exactly one currently declared tool has the same name and input kind.
+    if (!name && !item.namespace) {
+      name = unqualified.get(aliasKey(item.name, custom));
+    }
+    // Historical tools may no longer be declared (including deferred tools).
+    // Translate their call/result pair without re-enabling an obsolete tool.
+    name ||= wireNameFor(item.namespace, item.name, custom);
     const { namespace, input, ...rest } = item;
-    return { ...rest, type: "function_call", name: name || item.name,
-      arguments: item.type === "custom_tool_call" ? JSON.stringify({ input }) : item.arguments };
+    return { ...rest, type: "function_call", name,
+      arguments: custom ? JSON.stringify({ input }) : item.arguments };
   }
   const choice = body.tool_choice;
   const request = { ...body, ...(body.tools ? { tools } : {}),
@@ -50,6 +65,9 @@ function toolBridge(body) {
     const { arguments: args, ...rest } = value;
     return { ...rest, ...identity, type: "custom_tool_call", input };
   }
+  function response(value) {
+    return { ...value, ...(Array.isArray(value.output) ? { output: value.output.map(item) } : {}) };
+  }
   async function* restore(events) {
     const customs = new Set(), argumentsById = new Map(); let sequence = 0;
     const output = event => ({ ...event, sequence_number: sequence++ });
@@ -67,9 +85,9 @@ function toolBridge(body) {
         yield output({ ...rest, type: "response.custom_tool_call_input.done", input: parsed.input }); continue;
       }
       yield output({ ...e, ...(e.item ? { item: item(e.item) } : {}),
-        ...(e.response ? { response: { ...e.response, output: e.response.output?.map(item) || [] } } : {}) });
+        ...(e.response ? { response: response(e.response) } : {}) });
     }
   }
-  return { request, restore };
+  return { request, restore, response };
 }
 module.exports = { toolBridge };

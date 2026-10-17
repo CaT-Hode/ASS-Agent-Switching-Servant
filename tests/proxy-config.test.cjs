@@ -46,6 +46,169 @@ function legacyWorkspaceRelay(f, baseline = null) {
   atomic(f.config.file, text); atomic(f.config.record, JSON.stringify(record));
 }
 
+test('missing Codex attachment recovers from encrypted applied snapshot after restart without applying drafts', t => {
+  const f=fixture(t); f.proxy.sync('codex');
+  const owned=JSON.parse(fs.readFileSync(f.config.record,'utf8'));
+  fs.unlinkSync(f.config.record);
+  const config=new ConfigManager(f.codex,f.data), proxy=new ProxyConfig(f.data,crypt,f.manager,f.store,config);
+  f.store.updateProvider({...f.store.state.providers[0],baseUrl:'https://draft.invalid/v1'});
+  const restored=fs.readFileSync(config.record);
+  assert.doesNotThrow(()=>config.preflightDetach());
+  assert.deepEqual(fs.readFileSync(config.record),restored,'preflight remains read only after startup recovery');
+  proxy.repair('codex');
+  assert.deepEqual(JSON.parse(fs.readFileSync(config.record,'utf8')),owned);
+  assert.equal(proxy.clients.codex.providers[0].baseUrl,'https://relay.example/v1');
+  proxy.repair('codex');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.codex,'auth.json'))).tokens.access_token,'synthetic-oauth-keep');
+});
+
+test('attachment recovery refuses corrupt present records, foreign config and missing trusted snapshot',t=>{
+  const f=fixture(t); f.proxy.sync('codex');
+  const owned=fs.readFileSync(f.config.record,'utf8');
+  atomic(f.config.record,'{broken');assert.throws(()=>f.config.preflightDetach(),/记录|解析/);
+  fs.unlinkSync(f.config.record);
+  atomic(f.config.file,fs.readFileSync(f.config.file,'utf8').replace('name = "ASS"','name = "foreign"'));
+  assert.throws(()=>f.config.preflightDetach(),/外部修改|不匹配/);
+  atomic(f.config.record,owned); const standalone=new ConfigManager(f.codex,f.data);fs.unlinkSync(f.config.record);
+  assert.throws(()=>standalone.preflightDetach(),e=>!e.message.includes('ENOENT')&&/记录.*缺失/.test(e.message));
+});
+
+test('failed missing-record recovery rolls back the record creation and can be retried',t=>{
+  const f=fixture(t);f.proxy.sync('codex');fs.unlinkSync(f.config.record);
+  const config=fs.readFileSync(f.config.file),catalog=fs.readFileSync(f.config.catalog);
+  const persist=f.proxy.persist.bind(f.proxy);let calls=0;
+  f.proxy.persist=(...args)=>{if(++calls===2)throw Error('synthetic recovery commit failure');return persist(...args)};
+  assert.throws(()=>f.proxy.repair('codex'),/recovery commit failure/);
+  assert.equal(fs.existsSync(f.config.record),false);assert.deepEqual(fs.readFileSync(f.config.file),config);
+  assert.deepEqual(fs.readFileSync(f.config.catalog),catalog);
+  f.proxy.persist=persist;f.proxy.repair('codex');assert.ok(fs.existsSync(f.config.record));f.proxy.repair('codex');
+});
+
+test('legacy attachment migration tolerates unreadable records and requires owned config before adoption',t=>{
+  const f=fixture(t);f.proxy.sync('codex');
+  const legacy=structuredClone(f.proxy.clients.codex);delete legacy.attachment;
+  f.proxy.persist({codex:legacy});
+  const native=fs.readFileSync(f.config.file,'utf8'),record=fs.readFileSync(f.config.record,'utf8');
+  const applied=fs.readFileSync(f.proxy.file);
+  const originalRead=fs.readFileSync;
+  fs.readFileSync=function(file,...args){
+    if(file===f.config.record)throw Object.assign(Error('synthetic access failure'),{code:'EACCES'});
+    return originalRead.call(this,file,...args);
+  };
+  try {
+    for(let i=0;i<2;i++){
+      let proxy;assert.doesNotThrow(()=>{proxy=new ProxyConfig(f.data,crypt,f.manager,f.store,new ConfigManager(f.codex,f.data))});
+      assert.equal(proxy.clients.codex.attachment,undefined);
+    }
+  } finally { fs.readFileSync=originalRead; }
+  for(const text of [null,f.original]){
+    if(text===null)fs.unlinkSync(f.config.file);else atomic(f.config.file,text);
+    for(let i=0;i<2;i++){
+      const proxy=new ProxyConfig(f.data,crypt,f.manager,f.store,new ConfigManager(f.codex,f.data));
+      assert.equal(proxy.clients.codex.attachment,undefined);
+      assert.deepEqual(fs.readFileSync(f.proxy.file),applied);
+      assert.equal(fs.readFileSync(f.config.record,'utf8'),record);
+    }
+  }
+  atomic(f.config.file,native);
+  const proxy=new ProxyConfig(f.data,crypt,f.manager,f.store,new ConfigManager(f.codex,f.data));
+  assert.deepEqual(proxy.clients.codex.attachment,JSON.parse(record));
+  const migrated=fs.readFileSync(proxy.file);
+  new ProxyConfig(f.data,crypt,f.manager,f.store,new ConfigManager(f.codex,f.data));
+  assert.deepEqual(fs.readFileSync(proxy.file),migrated);
+});
+
+test('official catalog refresh changes native metadata only; drafts, bindings and OAuth stay intact',t=>{
+  const f=fixture(t);f.proxy.sync('codex');
+  const applied=structuredClone(f.proxy.clients.codex),native=fs.readFileSync(f.config.file,'utf8'),auth=fs.readFileSync(path.join(f.codex,'auth.json'),'utf8');
+  atomic(path.join(f.codex,'models_cache.json'),JSON.stringify({models:[{slug:'gpt-6.1-sol',context_window:500000,max_context_window:872000,default_reasoning_level:'low'}]}));
+  f.store.updateProvider({...f.store.state.providers[0],baseUrl:'https://unapplied.invalid/v1'});
+  assert.equal(f.proxy.refreshOfficialCatalog(),true);assert.equal(f.proxy.refreshOfficialCatalog(),false);
+  assert.equal(f.proxy.clients.codex.catalog.models[0].context_window,500000);
+  assert.equal(f.proxy.clients.codex.catalog.models[0].max_context_window,872000);
+  assert.deepEqual(f.proxy.clients.codex.providers,applied.providers);
+  assert.deepEqual(f.proxy.clients.codex.catalog.models.filter(m=>m.slug.includes('::')),applied.catalog.models.filter(m=>m.slug.includes('::')));
+  assert.equal(fs.readFileSync(f.config.file,'utf8'),native);assert.equal(fs.readFileSync(path.join(f.codex,'auth.json'),'utf8'),auth);
+  atomic(f.config.catalog,'{}');
+  atomic(path.join(f.codex,'models_cache.json'),JSON.stringify({models:[{slug:'gpt-6.1-sol',context_window:600000}]}));
+  assert.throws(()=>f.proxy.refreshOfficialCatalog(),/外部修改/);assert.equal(fs.readFileSync(f.config.catalog,'utf8'),'{}');
+});
+
+test('applied DeepSeek tool metadata repairs without syncing drafts or changing OAuth and selections',t=>{
+  const f=fixture(t);
+  f.manager.save();
+  f.store.updateProvider({id:'deepseek',name:'DeepSeek',baseUrl:'https://api.deepseek.com',apiKey:'synthetic-deepseek',models:[{model:'deepseek-flash',wireApi:'openai-responses',contextWindow:900000,defaultEffort:'max'}]});
+  f.proxy.sync('codex');
+  const plan=structuredClone(f.proxy.clients.codex);
+  const entry=plan.catalog.models.find(m=>m.slug.endsWith('::deepseek-flash'));
+  Object.assign(entry,{use_responses_lite:true,tool_mode:'direct',apply_patch_tool_type:null,supports_parallel_tool_calls:false});
+  f.proxy.persist({...f.proxy.clients,codex:plan});
+  atomic(f.config.catalog,JSON.stringify(plan.catalog,null,2));
+  const native=fs.readFileSync(f.config.file),auth=fs.readFileSync(path.join(f.codex,'auth.json')),clients=fs.readFileSync(f.manager.file),applied=structuredClone(f.proxy.clients.codex);
+  f.store.updateProvider({...f.store.state.providers.find(p=>p.id==='deepseek'),baseUrl:'https://unapplied.invalid/v1',name:'Unapplied draft'});
+  assert.equal(f.proxy.refreshOfficialCatalog(),true);assert.equal(f.proxy.refreshOfficialCatalog(),false);
+  const repaired=f.proxy.clients.codex.catalog.models.find(m=>m.slug===entry.slug);
+  assert.equal(repaired.tool_mode,null);assert.equal(repaired.use_responses_lite,false);assert.equal(repaired.apply_patch_tool_type,'freeform');
+  assert.equal(repaired.context_window,900000);assert.equal(repaired.default_reasoning_level,'max');
+  assert.deepEqual(f.proxy.clients.codex.providers,applied.providers);assert.deepEqual(f.proxy.clients.codex.defaultModel,applied.defaultModel);
+  assert.deepEqual(f.proxy.clients.codex.catalog.models.filter(m=>!m.slug.includes('::')),applied.catalog.models.filter(m=>!m.slug.includes('::')));
+  assert.deepEqual(fs.readFileSync(f.config.file),native);assert.deepEqual(fs.readFileSync(path.join(f.codex,'auth.json')),auth);assert.deepEqual(fs.readFileSync(f.manager.file),clients);
+  const old=structuredClone(f.proxy.clients.codex);old.catalog.models.find(m=>m.slug===entry.slug).tool_mode='direct';
+  f.proxy.persist({...f.proxy.clients,codex:old});atomic(f.config.catalog,'{}');
+  assert.throws(()=>f.proxy.refreshOfficialCatalog(),/外部修改/);assert.equal(fs.readFileSync(f.config.catalog,'utf8'),'{}');
+});
+
+test('prediction compatibility is opt-in, preserves OAuth, survives repair and reverses cleanly',t=>{
+  const f=fixture(t),auth=fs.readFileSync(path.join(f.codex,'auth.json'),'utf8');
+  f.proxy.sync('codex');assert.equal(TOML.parse(fs.readFileSync(f.config.file,'utf8')).model_provider,'ASS');
+  f.manager.setInjection('codex',{excludedProviders:[],predictionCompatibility:true});
+  for(let i=0;i<2;i++) {
+    f.proxy.sync('codex');
+    const parsed=TOML.parse(fs.readFileSync(f.config.file,'utf8'));
+    assert.equal(parsed.model_provider,'openai');assert.equal(parsed.openai_base_url,f.config.baseUrl);
+    assert.equal(parsed.chatgpt_base_url,undefined);assert.equal(parsed.model_providers.openai,undefined);
+    assert.equal(parsed.model_providers.ASS.requires_openai_auth,true);
+    assert.equal(f.config.status().attached,true);assert.equal(f.proxy.status('codex',true).applied,true);
+    f.proxy.repair('codex');assert.equal(fs.readFileSync(path.join(f.codex,'auth.json'),'utf8'),auth);
+  }
+  f.proxy.sync('codex',true);assert.equal(f.proxy.clients.codex.predictionCompatibility,undefined);
+  assert.equal(TOML.parse(fs.readFileSync(f.config.file,'utf8')).model_provider,'ASS');
+  f.manager.setInjection('codex',{predictionCompatibility:false});f.proxy.sync('codex',false);
+  assert.equal(TOML.parse(fs.readFileSync(f.config.file,'utf8')).model_provider,'ASS');
+  f.config.detach();assert.deepEqual(TOML.parse(fs.readFileSync(f.config.file,'utf8')),TOML.parse(f.original));
+  assert.throws(()=>f.manager.setInjection('pi',{predictionCompatibility:true}),/无效/);
+  assert.throws(()=>f.manager.setInjection('codex',{predictionCompatibility:'yes'}),/无效/);
+});
+
+test('Codex per-model tool choice applies only on sync and survives repeated sync, repair and restart',t=>{
+  const f=fixture(t),ref=modelRef('relay','one');
+  f.store.updateProvider({...f.store.state.providers[0],models:f.store.state.providers[0].models.map(m=>({...m,wireApi:'openai-responses'}))});
+  const source=structuredClone(f.store.state.providers),auth=fs.readFileSync(path.join(f.codex,'auth.json'));
+  f.proxy.sync('codex');const applied=structuredClone(f.proxy.clients.codex);
+  f.manager.setInjection('codex',{codexToolMode:{ref,mode:'compatible'}});
+  assert.equal(f.proxy.status('codex',true).pending,true);
+  assert.deepEqual(f.proxy.clients.codex,applied,'saving injection choices never mutates applied routing');
+  assert.equal(f.proxy.desired('claude').providers[0].models[0].codexToolMode,undefined);
+  const bridge=require('../core/deepseek-compat.cjs').needsResponsesToolBridge;
+  const body={tools:[{type:'custom',name:'check'}]};
+  for(const mode of ['compatible','native','auto','compatible']) {
+    f.manager.setInjection('codex',{codexToolMode:{ref,mode}});
+    for(let i=0;i<2;i++) {
+      f.proxy.sync('codex');
+      const plan=f.proxy.clients.codex,p=plan.providers[0],m=p.models[0],entry=plan.catalog.models.find(m=>m.slug.endsWith('::one'));
+      assert.equal(bridge(p,body,m),mode==='compatible');
+      assert.equal(entry.tool_mode,mode==='compatible'?null:'direct');
+      assert.equal(entry.apply_patch_tool_type,mode==='compatible'?'freeform':null);
+      assert.equal(p.models[1].codexToolMode,undefined,'other models keep their own choice');
+      assert.deepEqual(plan.catalog.models.filter(m=>!m.slug.includes('::')),applied.catalog.models.filter(m=>!m.slug.includes('::')));
+      f.proxy.repair('codex');assert.equal(f.proxy.status('codex',true).applied,true);
+      const reloaded=new ProxyConfig(f.data,crypt,f.manager,f.store,new ConfigManager(f.codex,f.data));
+      assert.equal(bridge(reloaded.clients.codex.providers[0],body,reloaded.clients.codex.providers[0].models[0]),mode==='compatible');
+    }
+  }
+  assert.deepEqual(f.store.state.providers,source);assert.deepEqual(fs.readFileSync(path.join(f.codex,'auth.json')),auth);
+});
+
 for (const action of ["sync", "repair"]) {
   for (const baseline of [null, "https://chatgpt.com/backend-api/", "https://workspace.example/backend-api/"]) {
     test(`Codex ${action} retires v0.3.28 account relay with baseline ${baseline || "native default"}`, t => {
@@ -226,6 +389,28 @@ test("native selection writes stay applied and pending model drafts do not block
   assert.equal(fs.readFileSync(path.join(f.codex,'auth.json'),'utf8'),before);
   atomic(f.config.file,fs.readFileSync(f.config.file,'utf8').replace('base_url = '+JSON.stringify(f.config.baseUrl),'base_url = "https://foreign.invalid/v1"'));
   assert.throws(()=>f.proxy.requireCodexOfficialService(),/外部修改/);
+});
+
+test('restart ignores storage placeholders and native Codex model preferences, but preserves real injection edits',t=>{
+  const f=fixture(t);f.manager.save();f.proxy.sync('codex');
+  const files=[f.config.file,f.config.record,f.config.catalog,f.proxy.file,f.manager.file,path.join(f.codex,'auth.json')];
+  for(const [model,effort] of [['gpt-native-choice','max'],[require('../core/models.cjs').codexModelId('relay','two'),'low']]){
+    const parsed=TOML.parse(fs.readFileSync(f.config.file,'utf8'));
+    atomic(f.config.file,fs.readFileSync(f.config.file,'utf8').replace('model = '+JSON.stringify(parsed.model),'model = '+JSON.stringify(model))
+      .replace('model_reasoning_effort = '+JSON.stringify(parsed.model_reasoning_effort),'model_reasoning_effort = '+JSON.stringify(effort)));
+    const before=files.map(file=>fs.readFileSync(file));
+    const store=new Store(f.data,f.codex,crypt);
+    assert.equal(Object.hasOwn(store.state.providers[0],'secrets'),true,'exercise the real reload placeholder');
+    const manager=new HarnessManager(f.data,()=>store.state,store.officialModels,f.codex,{home:f.root,env:{},launchEnv:{PATH:''},isConnected:()=>true});
+    const proxy=new ProxyConfig(f.data,crypt,manager,store,new ConfigManager(f.codex,f.data));
+    assert.equal(proxy.status('codex',true).pending,false);assert.equal(proxy.status('codex',true).applied,true);
+    assert.doesNotThrow(()=>proxy.requireApplied('codex'));
+    assert.equal(Object.hasOwn(proxy.desired('codex').providers[0],'secrets'),false);
+    assert.deepEqual(files.map(file=>fs.readFileSync(file)),before,'status and restart preserve native selections, applied routes and credentials');
+    manager.setInjection('codex',{defaultModel:modelRef('relay','two')});
+    assert.equal(proxy.status('codex',true).pending,true,'an explicit ASS default-model edit still needs sync');
+    manager.setInjection('codex',{defaultModel:null});
+  }
 });
 
 test("leaving accountless mode keeps the shared ASS model until the connection is disabled", t => {

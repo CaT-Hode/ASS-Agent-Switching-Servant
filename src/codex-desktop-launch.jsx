@@ -37,7 +37,7 @@ export function CodexDesktopLaunch({ desktop, connection, busy, onLaunch }) {
     {unavailable && <p className="codex-launch-detection">请先同步无账号接入配置。</p>}
     {!desktop && <p className="codex-launch-detection">尚未识别到 Codex 桌面端；点击启动会重新识别，也可在客户端设置中指定安装目录。</p>}
     <p className="codex-launch-guidance">
-      已有窗口请在任务结束后完全退出，再从此处启动；不会自动关闭任务。
+      已有窗口会尝试唤起；新接入配置需在任务结束后完全退出再启动，不会自动关闭任务。
       {officialRelay && "普通开始菜单 / 任务栏入口不会启用此通道。"}
     </p>
     {officialRelay && <p className="codex-launch-boundary">仅处理连接链路，不解除账号权限、订阅额度或官方网关限制。</p>}

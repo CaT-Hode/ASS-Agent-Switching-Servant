@@ -240,7 +240,7 @@ test("duplicate, invalid, deleted or stale model edits never overwrite current c
   store.removeModel("work", "alpha");
   assert.throws(() => store.model("work", old, "alpha"), /已移除/);
 });
-test("official inline overrides rename display / ID; removal and restore leave native cache untouched", (t) => {
+test("official local preferences cannot rename injected IDs or override native model metadata", (t) => {
   const { store, dir, codex } = setup(t),
     cache = fs.readFileSync(path.join(codex, "models_cache.json")),
     old = store.public().officialModels[0];
@@ -254,14 +254,17 @@ test("official inline overrides rename display / ID; removal and restore leave n
   const cat = JSON.parse(
     fs.readFileSync(path.join(dir, "catalog-draft.json")),
   ).models;
-  assert.equal(cat.find((m) => m.slug === "gpt-alias").display_name, "Alias");
+  assert.equal(cat.some((m) => m.slug === 'gpt-alias'), false);
+  assert.deepEqual(cat.filter(m=>!m.slug.includes('::')), JSON.parse(cache).models);
+  assert.equal(store.public().officialModels[0].model, 'gpt-test');
   assert.throws(
     () =>
-      store.model("official", { ...old, wireApi: "anthropic" }, "gpt-alias"),
+      store.model("official", { ...old, wireApi: "anthropic" }, "gpt-test"),
     /只支持/,
   );
-  store.removeModel("official", "gpt-alias");
+  store.removeModel("official", "gpt-test");
   assert.equal(new Store(dir, codex, crypto).public().officialModels.length, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir,'catalog-draft.json'))).models.filter(m=>!m.slug.includes('::')), JSON.parse(cache).models);
   store.model("official", { model: "gpt-test" });
   assert.equal(store.public().officialModels.length, 2);
   assert.deepEqual(

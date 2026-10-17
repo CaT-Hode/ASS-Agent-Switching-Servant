@@ -24,4 +24,18 @@ class SnapshotPublisher {
     this.timer?.unref?.();
   }
 }
-module.exports = { SnapshotPublisher };
+class ClientSnapshot {
+  constructor(read) { this.read = read; this.last = { clients: [] }; }
+  current() {
+    try {
+      const state = this.read();
+      this.last = structuredClone(state);
+      return { state, error: '' };
+    } catch {
+      // Native application updates must not hide a successfully saved API
+      // provider by preventing the entire settings snapshot from publishing.
+      return { state: structuredClone(this.last), error: '原生客户端状态暂不可读，已保留上次账户信息；供应商配置已独立刷新。' };
+    }
+  }
+}
+module.exports = { SnapshotPublisher, ClientSnapshot };

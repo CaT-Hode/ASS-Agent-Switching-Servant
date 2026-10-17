@@ -18,26 +18,34 @@ function launchCodexDesktop(executable, options, spawnProcess=spawn) {
   });
 }
 
-// Shared by the desktop button and its regression tests. No task termination,
-// credential changes, shell trampoline, or native fallback on a relay failure.
+// Opening the installed primary also activates its existing single-instance
+// window. Never terminate tasks or rewrite a login to prepare an optional relay.
 async function openCodexDesktop({desktop,rediscover,workspaceOptions,preview,openNative,accountless=false,launchDesktop=launchCodexDesktop}) {
   let executable=desktop();
   if(!executable) { await rediscover(); executable=desktop(); }
   if(!executable) throw Error('未找到 Codex 桌面主程序 ChatGPT.exe，请重新自动识别或选择安装目录');
   if(!path.isAbsolute(executable)||path.basename(executable).toLowerCase()!=='chatgpt.exe')
     throw Error('Codex 桌面入口不是 ChatGPT.exe，未使用更新跳板或命令行程序启动');
-  const options=await workspaceOptions();
+  const native = async message => {
+    const error=await openNative(executable);
+    if(error) throw Error('无法打开 Codex 桌面客户端，请检查安装文件');
+    return {ok:true,message};
+  };
+  let options;
+  try { options=await workspaceOptions(); }
+  catch {
+    return {...await native('已按当前本机配置打开 Codex；ASS 官方服务通道未就绪，请在接入管理中检查自动恢复结果。'),degraded:true};
+  }
   if(options) {
-    const observed=await preview();
-    if(!observed?.value) throw Error('无法确认 Codex 运行状态，未重复启动；请结束任务后手动退出 Codex，再重试。');
-    if(observed.available) return {ok:true,message:'Codex 已在运行；请在任务结束后通过接入菜单重启，或完全退出后再从 ASS 打开，以启用官方服务 HTTPS 中转。'};
+    let observed;
+    try { observed=await preview(); } catch { /* Native activation remains available. */ }
+    if(!observed?.value) return {...await native('已按当前配置打开 Codex；无法确认运行状态，官方服务通道将在完全退出后重新启动时启用。'),degraded:true};
+    if(observed.available) return native('已唤起正在运行的 Codex；新官方服务通道需在任务结束后完全退出，再从 ASS 启动。');
     await launchDesktop(executable,options);
     return {ok:true,message:'已通过 ASS 打开 Codex，官方服务使用专用 HTTPS 中转。'};
   }
-  const error=await openNative(executable);
-  if(error) throw Error('无法打开 Codex 桌面客户端，请检查安装文件');
-  return {ok:true,message:accountless
+  return native(accountless
     ? '已打开 Codex 桌面端。若已有窗口仍使用旧配置，请结束任务后通过接入菜单重启。'
-    : '已打开 Codex 桌面端；当前未启用 ASS 官方服务修复通道。'};
+    : '已打开 Codex 桌面端；当前未启用 ASS 官方服务修复通道。');
 }
 module.exports={launchCodexDesktop,openCodexDesktop};

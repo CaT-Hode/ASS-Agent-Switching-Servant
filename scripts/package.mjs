@@ -31,6 +31,12 @@ const outputs = await packager({
   asar: true,
   platform: "win32",
   arch: "x64",
+  // Verify cached/downloaded archives against this pinned Electron package.
+  // An explicit build cache also supports offline builds after a host move.
+  download: {
+    checksums: JSON.parse(await readFile(new URL("../node_modules/electron/checksums.json", import.meta.url), "utf8")),
+    ...(process.env.ASS_ELECTRON_CACHE ? { cacheRoot: process.env.ASS_ELECTRON_CACHE } : {}),
+  },
   out: fileURLToPath(new URL("../release/v" + version, import.meta.url)),
   overwrite: true,
   tmpdir: false,

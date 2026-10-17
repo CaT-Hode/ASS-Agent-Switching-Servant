@@ -446,5 +446,15 @@ class NativeFields {
       }
     });
   }
+  ownsModel(harness, dir, provider) {
+    const entries = this.entries.filter(e => e.harness === harness &&
+      path.resolve(path.dirname(e.file)).toLowerCase() === path.resolve(dir).toLowerCase() &&
+      (e.credentialProvider === provider || e.path.includes(provider) || Object.values(e.selector || {}).includes(provider)));
+    if (!entries.some(e => e.credentialProvider === provider)) return false;
+    return entries.every(e => {
+      try { return equal(fieldAt(document(read(e.file), e.format).data, e.path, e.selector).current, e.after); }
+      catch { return false; }
+    });
+  }
 }
 module.exports = { NativeFields, document, edit, read, hash, safePath, atomic };

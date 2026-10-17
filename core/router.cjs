@@ -1,12 +1,13 @@
 const http = require("node:http");
 const { endpoint, normalizeEffort, codexProviderId } = require("./models.cjs");
-const { convertRequest, translateStream } = require("./adapters.cjs");
+const { convertRequest, translateStream, nativeResponsesEvents } = require("./adapters.cjs");
 const { SseMonitor } = require("./sse-monitor.cjs");
 const { readTaskJSON } = require('./task-outcome.cjs');
 const { forwardHarness, authorized } = require("./harness-route.cjs");
 const { providerSessionHeaders, protocolEndpoint } = require("./provider-transport.cjs");
 const crypto = require("node:crypto");
 const { toolBridge } = require("./tool-bridge.cjs");
+const { needsResponsesToolBridge } = require('./deepseek-compat.cjs');
 const { readJSON, readBytes } = require("./request-body.cjs");
 const { officialCodexHistory } = require("./response-history.cjs");
 const { withOutputLimit } = require('./output-tokens.cjs');
@@ -332,10 +333,11 @@ class Router {
         } else headers.authorization = "Bearer " + route.provider.apiKey;
       }
       secrets.push(route.provider?.apiKey, headers.authorization?.replace(/^Bearer\s+/i, ''), headers['x-api-key']);
-      const bridge = route.protocol !== "openai-responses" ? toolBridge(route.body) : null;
+      const nativeToolBridge = route.protocol === 'openai-responses' && needsResponsesToolBridge(route.provider, route.body, route.model);
+      const bridge = route.protocol !== "openai-responses" || nativeToolBridge ? toolBridge(route.body) : null;
       const request =
         route.protocol === "openai-responses"
-          ? route.body
+          ? bridge?.request || route.body
           : convertRequest(bridge.request, route.model, route.protocol);
       this.active++;
       this.controllers.add(controller);
@@ -390,7 +392,21 @@ class Router {
           message = message.split(key).join("[REDACTED]");
         throw Object.assign(new Error(message), { status: response.status });
       }
-      if (route.protocol === "openai-responses") {
+      if (nativeToolBridge) {
+        if (body.stream === false || match[1]) {
+          const { value } = await readTaskJSON(response);
+          const restored = bridge.response(value);
+          res.writeHead(response.status, { 'content-type': 'application/json',
+            'x-ass-provider': route.provider.id, 'x-ass-request-id': requestId });
+          await write(res, JSON.stringify(restored));
+        } else {
+          res.writeHead(response.status, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache',
+            'x-ass-provider': route.provider.id, 'x-ass-request-id': requestId });
+          res.flushHeaders();
+          for await (const event of bridge.restore(nativeResponsesEvents(response.body, controller.signal)))
+            await write(res, `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+      } else if (route.protocol === "openai-responses") {
         let contentType = response.headers.get("content-type");
         const streaming = body.stream !== false && !match[1];
         if (!streaming) {

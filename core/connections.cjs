@@ -484,7 +484,14 @@ class Connections {
     this.injections.preflight([id]);
     const plan = adapter.repairPlan(id);
     if (!plan.files.length && !plan.routeOnly) throw Error("受管字段已经一致，无需修复");
-    const restart = ["codex", "claude"].includes(id) && this.restarter ? await this.restarter.preview([id]) : null;
+    let restart = null, restartUnavailable;
+    if (["codex", "claude"].includes(id) && this.restarter) {
+      try { restart = await this.restarter.preview([id]); }
+      catch {
+        restartUnavailable = { applicable: true, available: false, closeAvailable: false, names: [],
+          reason: "无法检查客户端进程；仍可仅修复配置，不关闭或重启客户端。" };
+      }
+    }
     const ticket = crypto.randomBytes(24).toString("hex");
     for (const [key, p] of this.tickets)
       if (p.expires < Date.now()) this.tickets.delete(key);
@@ -493,7 +500,7 @@ class Connections {
       fingerprint: this.fingerprint([id], false), expires: Date.now() + 180000 });
     // Do not send credential values or encrypted-journal contents to the UI.
     return { ticket, names: [NAMES[id]], files: plan.files.length,
-      restart: this.restarter?.public(restart), ...(plan.migration ? { migration: true } : {}) };
+      restart: restartUnavailable || this.restarter?.public(restart), ...(plan.migration ? { migration: true } : {}) };
   }
   async repairApply({ ticket, acknowledged, restart = false, close = false } = {}) {
     const plan = this.tickets.get(ticket);

@@ -44,6 +44,45 @@ test('schema3 initializes missing clients correctly and restart can parse the re
   const f=fixture(t,{schemaVersion:3,injections:{pi:{excludedProviders:[]}}});
   f.manager.save(); assert.deepEqual(f.create().state.injections.dsh,{excludedProviders:[]});
 });
+
+test('Codex tool choices persist per model and client, follow renames, and reset to automatic', t => {
+  const f=fixture(t), one=modelRef('work','one'),two=modelRef('work','two'),renamed=modelRef('work','renamed');
+  const providers=structuredClone(f.providers);
+  f.manager.setInjection('codex',{excludedProviders:['unrelated']});
+  for(let i=0;i<2;i++) {
+    f.manager.setInjection('codex',{codexToolMode:{ref:one,mode:'compatible'}});
+    f.manager.setInjection('codex',{codexToolMode:{ref:two,mode:'native'}});
+  }
+  assert.deepEqual(f.create().state.injections.codex,{excludedProviders:['unrelated'],codexToolModes:{[one]:'compatible',[two]:'native'}});
+  assert.equal(f.create().injection('codex').models[0].codexToolMode,'compatible');
+  assert.equal(f.manager.injection('pi').models[0].codexToolMode,undefined);
+  assert.deepEqual(f.providers,providers,'shared supplier configuration stays unchanged');
+  f.manager.reconcileModel('work','one','renamed');
+  assert.deepEqual(f.manager.state.injections.codex.codexToolModes,{[renamed]:'compatible',[two]:'native'});
+  f.manager.reconcileModel('work','renamed',null);
+  for(let i=0;i<2;i++) f.manager.setInjection('codex',{codexToolMode:{ref:two,mode:'auto'}});
+  assert.deepEqual(f.create().state.injections.codex,{excludedProviders:['unrelated']});
+});
+
+test('Codex tool choices reject invalid references and roll back a failed save before retry', t => {
+  const f=fixture(t),ref=modelRef('work','one');f.manager.save();
+  const before=fs.readFileSync(f.manager.file),state=structuredClone(f.manager.state);
+  for(const change of [null,{ref,mode:'unknown'},{ref:modelRef('official','gpt-fixture'),mode:'compatible'},
+      {ref:modelRef('work','missing'),mode:'native'},{ref,mode:'native',extra:true}])
+    assert.throws(()=>f.manager.setInjection('codex',{codexToolMode:change}),/工具兼容设置无效/);
+  assert.throws(()=>f.manager.setInjection('pi',{codexToolMode:{ref,mode:'compatible'}}),/工具兼容设置无效/);
+  assert.deepEqual(f.manager.state,state);assert.deepEqual(fs.readFileSync(f.manager.file),before);
+  const save=f.manager.save.bind(f.manager);f.manager.save=()=>{throw Error('synthetic disk failure')};
+  assert.throws(()=>f.manager.setInjection('codex',{codexToolMode:{ref,mode:'native'}}),/disk failure/);
+  f.manager.save=save;f.manager.setInjection('codex',{excludedProviders:['keep']});
+  assert.equal(f.create().state.injections.codex.codexToolModes,undefined,'later edits cannot persist the failed choice');
+  f.manager.setInjection('codex',{codexToolMode:{ref,mode:'compatible'}});
+  assert.equal(f.create().state.injections.codex.codexToolModes[ref],'compatible');
+  const invalid=JSON.parse(fs.readFileSync(f.manager.file));invalid.injections.codex.codexToolModes[ref]='invalid';
+  fs.writeFileSync(f.manager.file,JSON.stringify(invalid));
+  assert.throws(()=>f.create(),/未覆盖 clients.json/);
+  assert.equal(JSON.parse(fs.readFileSync(f.manager.file)).injections.codex.codexToolModes[ref],'invalid');
+});
 test('fresh empty native injection refuses enable; previously applied all-off restores keys and survives restart', t => {
   const f=fixture(t), crypt={isEncryptionAvailable:()=>true,encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()};
   const n=new NativeConfig(f.data,crypt,f.manager);

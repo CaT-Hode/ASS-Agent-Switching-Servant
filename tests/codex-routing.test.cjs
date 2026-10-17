@@ -243,7 +243,7 @@ test("repair rejects unknown ownership and preserves non-ASS fields", t => {
   assert.equal(fs.readFileSync(manager.file, "utf8"), mixed);
   const unmarked = current.replaceAll("# >>> ass managed start\n", "").replaceAll("# <<< ass managed end\n", "");
   atomic(manager.file, unmarked);
-  assert.throws(() => manager.prepareRepair(), /无法确认归属/);
+  assert.deepEqual(TOML.parse(manager.prepareRepair().after), TOML.parse(unmarked), 'trusted transport fields allow marker repair without changing native preferences');
   assert.throws(() => manager.attach(), /其他工具/);
   assert.throws(() => manager.detach(), /无法归属/);
   assert.equal(fs.readFileSync(manager.file, "utf8"), unmarked);

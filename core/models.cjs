@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { codexApiMetadata } = require('./deepseek-compat.cjs');
 const { DEFAULT_OUTPUT_TOKENS } = require('./output-tokens.cjs');
 const { CONFIG_LIMITS, checkSize, validateProviders } = require('./config-limits.cjs');
 const { tail, inferProtocol, contextDefault } = require("./presets.cjs");
@@ -116,6 +117,10 @@ function normalizeHeaders(raw) {
       throw new Error(`无效或受保护的请求头：${k}`);
   return raw;
 }
+function officialModel(native, override = {}, officialModels = []) {
+  return normalizeModel({ model: native.slug, displayName: override.displayName || native.display_name,
+    enabled: override.enabled !== false }, { id: 'official', wireApi: 'openai-responses' }, officialModels);
+}
 function normalizeProvider(raw, officialModels = []) {
   if (!raw || typeof raw !== "object") throw new Error("供应商配置无效");
   if (/[\x00-\x1f\x7f]/.test(String(raw.apiKey || ''))) throw Error('API Key 含无效控制字符');
@@ -217,14 +222,10 @@ function makeCatalog(officialModels, providers, overrides = {}) {
   const templates = (officialModels.length ? officialModels : [baseline]).map(
     (m) => ({ ...baseline, ...m }),
   );
-  const models = templates
-    .filter((m) => overrides[m.slug]?.enabled !== false)
-    .map((m) => ({
-      ...m,
-      base_instructions:
-        m.base_instructions ||
-        "You are Codex, a coding assistant. Follow the user request and use tools carefully.",
-    }));
+  // Native subscription metadata belongs to Codex, including fields added by
+  // a newer release. ASS overrides are local UI preferences, never a catalog
+  // replacement for official models (even a stale disabled/renamed override).
+  const models = structuredClone(officialModels.length ? officialModels : templates);
   const apply = (entry, m) => ({
     ...entry,
     context_window: m.contextWindow,
@@ -235,19 +236,8 @@ function makeCatalog(officialModels, providers, overrides = {}) {
       description: `${e}（按上游实际能力）`,
     })),
   });
-  for (let i = 0; i < models.length; i++)
-    if (overrides[models[i].slug])
-      models[i] = apply(
-        {
-          ...models[i],
-          slug: overrides[models[i].slug].model || models[i].slug,
-          display_name:
-            overrides[models[i].slug].displayName || models[i].display_name,
-        },
-        overrides[models[i].slug],
-      );
-  const template =
-    models.find((x) => x.slug === "gpt-6-astra") || models[0] || templates[0];
+  const template = { ...baseline,
+    ...(models.find((x) => x.slug === "gpt-6-astra") || models[0] || templates[0]) };
   for (const p of providers.filter((p) => p.enabled))
     for (const m of p.models.filter((m) => m.enabled)) {
       const nativeGPT =
@@ -278,11 +268,12 @@ function makeCatalog(officialModels, providers, overrides = {}) {
         entry.support_verbosity = false;
         entry.supports_image_detail_original = false;
       }
-      models.push(apply(entry, m));
+      models.push(codexApiMetadata(apply(entry, m), p, m));
     }
   return { models };
 }
 module.exports = {
+  officialModel,
   EFFORTS,
   PROTOCOLS,
   normalizeEffort,

@@ -61,6 +61,17 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
         {codexModels.length > 0 && <optgroup label="已注入模型">{codexModels.map((m) => <option key={m.ref} value={m.ref}>{m.providerName} / {m.name || m.model}</option>)}</optgroup>}
       </select>
     </label>}
+    {client.id === 'codex' && <div className="accountless-control">
+      <div><strong>提示词预测兼容（实验）</strong><small>需 Codex 已登录并开放该功能；更新接入后在新对话中生效。</small></div>
+      <button type="button" role="switch" className="provider-injection-switch" aria-label="提示词预测兼容"
+        aria-checked={injection.predictionCompatibility === true} disabled={!!busy || state.connections.busy || connection?.accountless || !officialModels.length}
+        onClick={() => act('prediction-compatibility', () => api.call('client-injection', client.id, {
+          excludedProviders: [...excluded], predictionCompatibility: !injection.predictionCompatibility,
+        }))}><i /></button>
+    </div>}
+    {client.id === 'codex' && injection.models.some(m => m.protocol === 'openai-responses') && <p className="codex-tool-mode-hint">
+      展开供应商，在模型菜单中设置工具兼容。工具调用变成普通文字时可切换“兼容模式”；更改后同步接入生效。
+    </p>}
     {client.injectionUnsupported ? <p className="client-support-note">{client.injectionUnsupported}</p> :
       groups.size ? <div className="client-provider-list">{[...groups].map(([id, models]) => {
         const provider = state.providers.find((p) => p.id === id);
@@ -71,9 +82,24 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
           <details>
             <summary><span className="client-provider-logo" aria-hidden="true">{brand ? <img src={"./providers/" + brand + ".svg"} alt="" /> : <Layers3 size={21} data-motion-icon={undefined} />}</span>
               <strong>{models[0].providerName}</strong><small>{compatible.length} 个模型</small><ChevronRight className="provider-disclosure" size={16} /></summary>
-            <div className="client-provider-models">{models.map((m) => <div key={m.ref} className={m.issue ? "unavailable" : ""}>
+            <div className="client-provider-models">{models.map((m) => <div key={m.ref} className={[(m.issue ? "unavailable" : ""), (client.id === 'codex' && m.protocol === 'openai-responses' ? 'has-tool-mode' : '')].join(' ')}>
               <span title={m.model}>{m.name || m.model}<small>{m.name !== m.model ? m.model : ""}</small></span>
               <small>{m.issue || m.adapter || protocols[m.protocol] || m.protocol}</small>
+              {client.id === 'codex' && m.protocol === 'openai-responses' && <label className="codex-tool-mode">
+                <span>Codex 工具兼容</span>
+                <select aria-label={`${m.providerName} / ${m.name || m.model} Codex 工具兼容`}
+                  value={m.codexToolMode || 'auto'} disabled={!!busy || state.connections.busy}
+                  title="自动识别：按服务判断；兼容模式：转换自定义工具和命名空间；原生格式：直接传递工具格式"
+                  onChange={e => { const mode = e.target.value;
+                    act('codex-tool-mode', () => api.call('client-injection', 'codex', {
+                      codexToolMode: { ref: m.ref, mode },
+                    }));
+                  }}>
+                  <option value="auto">自动识别</option>
+                  <option value="compatible">兼容模式</option>
+                  <option value="native">原生格式</option>
+                </select>
+              </label>}
             </div>)}</div>
           </details>
           <button type="button" role="switch" className="provider-injection-switch" aria-label={models[0].providerName + " 供应商接入"}

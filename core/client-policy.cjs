@@ -55,6 +55,7 @@ function injectionCatalog(harness, providers, settings = {}) {
       ...(harness === "claude" ? { adapter: require("./provider-transport.cjs").messagesTransport(p, m).adapted
         ? "Messages 转换接入" : "Messages 原生接入" } : {}),
       ...(harness === "codex" && m.wireApi !== "openai-responses" ? { adapter: "Responses 转换接入" } : {}),
+      ...(harness === 'codex' ? { codexToolMode: settings.codexToolModes?.[ref] || 'auto' } : {}),
       ...(harness === 'dsh' && m.efforts?.includes('ultra') ? { adapter: 'DSH 原生档位：low / medium / high / xhigh / max；不传递 ultra' } : {}),
       included: !issue && !excludedProviders.has(p.id) && !excluded.has(ref) };
   }));

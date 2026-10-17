@@ -234,7 +234,8 @@ test("native-login clients reject account mutations while retired clients stay o
   ]) assert.throws(action, /未知客户端/);
   assert.deepEqual(new Set(manager.oauthHistorySources().map((s) => s.harness)), new Set(["codex", "claude", "pi", "zcode"]));
   assert.equal(manager.oauthHistoryAllows("zcode", "zai"), true);
-  assert.deepEqual(fs.readdirSync(f.home), ["clients.json"]);
+  assert.deepEqual(fs.readdirSync(f.home), ['backups', "clients.json"]);
+  assert.deepEqual(fs.readdirSync(path.join(f.home,'backups')), ['clients.previous.json']);
 });
 test("model catalogs aggregate without inflating official account counts and client preference persists", (t) => {
   const f = fixture(t); f.put(".kimi-code/config.toml", kimiConfig({ type: "openai", base_url: "https://third.example/v1", api_key: "third-party" }));

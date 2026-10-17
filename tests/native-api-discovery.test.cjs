@@ -14,6 +14,37 @@ const additional = require("../core/additional-harnesses.cjs");
 const { modelSources } = require("../core/model-inventory.cjs");
 const crypt = { isEncryptionAvailable: () => true, encryptString: (s) => Buffer.from(s), decryptString: (b) => b.toString() };
 const KEY = "synthetic-key-a", OTHER = "synthetic-key-b", BASE = "https://api.deepseek.com";
+
+for(const id of ['dsh','pi']) test(`${id}: runtime catalog cannot reimport owned providers as native source cards`,t=>{
+  const f=fixture(t);configured(f,id);f.native.sync(id);
+  const client=f.manager.snapshot().clients.find(c=>c.id===id);
+  const account=client.modelAccounts.find(a=>a.kind==='native'); assert.ok(account);
+  const owned=f.native.fields.entries.find(e=>e.harness===id&&e.credentialProvider);assert.ok(owned);
+  const rows=[{model:'deepseek-audit',wireApi:'openai-chat',nativeProvider:'deepseek'},
+    {model:'owned-only',wireApi:'openai-chat',nativeProvider:owned.credentialProvider}];
+  account.supplierId='same';
+  const make=()=>modelSources({providers:f.providers,officialModels:[]},{clients:[client]},
+    {home:f.home,env:f.env,directories:{['native-'+id]:{accounts:{[account.id]:{models:rows}}}},
+      nativeApiModels:[{clientId:id,accountId:account.id,nativeProvider:'deepseek',model:'deepseek-audit',supplierId:'same'}],
+      ownsModel:(client,account,model)=>f.native.ownsModel(client.id,account,model)});
+  for(let i=0;i<2;i++) assert.equal(make().some(s=>s.id==='native-'+id),false);
+  rows.push({model:'genuine-extra',wireApi:'openai-chat',nativeProvider:'deepseek'});
+  assert.deepEqual(make().find(s=>s.id==='native-'+id).models.map(m=>m.model),['genuine-extra']);
+  const configEntry=f.native.fields.entries.find(e=>e.harness===id&&e.file!==owned.file&&e.path.includes(owned.credentialProvider));
+  assert.ok(configEntry);const configBefore=fs.readFileSync(configEntry.file,'utf8');
+  const configDoc=require('../core/native-fields.cjs').document(configBefore,configEntry.format);
+  let parent=configDoc.data;for(const key of configEntry.path.slice(0,-1))parent=parent[key];
+  parent[configEntry.path.at(-1)]={...parent[configEntry.path.at(-1)],baseUrl:'https://changed-native.invalid/v1'};
+  put(configEntry.file,configEntry.format==='yaml'?require('yaml').stringify(configDoc.data):configDoc.data);
+  assert.equal(f.native.ownsModel(id,account,rows[1]),false,'a changed native endpoint must not be hidden');
+  put(configEntry.file,configBefore);assert.equal(f.native.ownsModel(id,account,rows[1]),true);
+  // A native credential changed outside ASS is no longer owned; do not hide it.
+  const doc=require('../core/native-fields.cjs').document(fs.readFileSync(owned.file,'utf8'),owned.format);
+  let value=doc.data;for(const key of owned.path.slice(0,-1))value=value[key];
+  const old=value[owned.path.at(-1)];value[owned.path.at(-1)]=typeof old==='string'?'changed-native-key':{...old,key:'changed-native-key',secret:'changed-native-key'};
+  put(owned.file,owned.format==='yaml'?require('yaml').stringify(doc.data):doc.data);
+  assert.equal(f.native.ownsModel(id,account,rows[1]),false);
+});
 test('DSH native account and identical saved API display once before/after model injection; other keys remain', (t) => {
   const f = fixture(t); configured(f, 'dsh');
   const inspect = () => f.manager.snapshot({ accountsOnly: true }).clients.find((c) => c.id === 'dsh').accounts;

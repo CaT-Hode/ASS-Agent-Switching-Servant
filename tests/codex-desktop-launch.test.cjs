@@ -21,18 +21,26 @@ test('missing cached desktop is rediscovered before launching and no trampoline 
     assert.deepEqual(invalid.calls,[]);
   }
 });
-for(const available of [true,undefined]) test(`running/unknown Codex is not reopened or stopped (${available})`,async()=>{
+for(const available of [true,undefined]) test(`running/unknown Codex uses native window activation without a relay relaunch (${available})`,async()=>{
   const f=fixture({preview:async()=>available?{available:true,value:{apps:[{}]}}:{available:false}});
-  if(available) assert.match((await openCodexDesktop(f.dependencies)).message,/已在运行/);
-  else await assert.rejects(openCodexDesktop(f.dependencies),/无法确认 Codex 运行状态/);
-  assert.deepEqual(f.calls,[]);
+  const result=await openCodexDesktop(f.dependencies);
+  assert.match(result.message,available?/已唤起正在运行/:/无法确认运行状态/);
+  assert.deepEqual(f.calls,[['native',exe]]);
 });
-test('relay preparation and launch failures never fall back to a normal native launch',async()=>{
-  for(const failedStep of ['workspaceOptions','launchDesktop']) {
-    const f=fixture({[failedStep]:async()=>{throw Error('synthetic relay failure');}});
-    await assert.rejects(openCodexDesktop(f.dependencies),/synthetic relay failure/);
-    assert.deepEqual(f.calls,[]);
+test('an optional relay preparation failure does not block native OAuth launch, including repeated clicks',async()=>{
+  const f=fixture({workspaceOptions:async()=>{throw Error('synthetic missing record');}});
+  for(let i=0;i<2;i++) {
+    const result=await openCodexDesktop(f.dependencies);
+    assert.equal(result.degraded,true);assert.match(result.message,/官方服务通道未就绪/);
   }
+  assert.deepEqual(f.calls,[['native',exe],['native',exe]]);
+  const failed=fixture({workspaceOptions:async()=>{throw Error('synthetic missing record');},openNative:async()=> 'synthetic shell failure'});
+  await assert.rejects(openCodexDesktop(failed.dependencies),/无法打开 Codex/);
+});
+test('a failed actual relay launch is not duplicated through another launcher',async()=>{
+  const f=fixture({launchDesktop:async()=>{throw Error('synthetic relay failure');}});
+  await assert.rejects(openCodexDesktop(f.dependencies),/synthetic relay failure/);
+  assert.deepEqual(f.calls,[]);
 });
 test('native launch is explicit when the relay is disabled; missing desktop remains actionable',async()=>{
   const f=fixture({workspaceOptions:async()=>null});

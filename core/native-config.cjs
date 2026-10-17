@@ -352,6 +352,11 @@ class NativeConfig {
   owns(id, file, provider) {
     return this.fields.owns(id, file, provider);
   }
+  ownsModel(id, account, model) {
+    const dir = account.nativeDir || path.dirname(account.sourcePath || '');
+    if (!path.isAbsolute(dir) || !model.nativeProvider) return false;
+    return this.fields.ownsModel(id, dir, model.nativeProvider);
+  }
   desired(id, selection) {
     if (["kimi", "zcode"].includes(id) && selection) throw Error("请在原生客户端内选择模型；ASS 不修改默认模型");
     const plan = compose(id, this.manager, selection);

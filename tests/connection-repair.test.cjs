@@ -190,6 +190,73 @@ test("Codex repair restores managed config and catalog, preserves OAuth/user set
   assert.equal(f.router.stops, 0); assert.equal(f.processes.stops, 0);
 });
 
+test('Codex config repair stays available when optional process inspection fails', async t => {
+  const f=fixture(t);await enable(f,'codex');
+  f.connections.restarter={preview:async()=>{throw Error('Synthetic process inspection failure');},public:p=>p};
+  const before=[text(f.config.file),text(path.join(f.codex,'auth.json'))];
+  const p=await f.connections.repairPreview('codex');
+  assert.equal(p.restart.available,false);assert.equal(p.restart.closeAvailable,false);
+  assert.match(p.restart.reason,/仍可仅修复配置/);
+  await assert.rejects(f.connections.repairApply({ticket:p.ticket,acknowledged:true,restart:true}),/重启目标/);
+  assert.equal((await f.connections.repairApply({ticket:p.ticket,acknowledged:true})).ok,true);
+  await repair(f,'codex');assert.deepEqual([text(f.config.file),text(path.join(f.codex,'auth.json'))],before);
+  assert.equal(f.processes.stops,0);
+});
+
+test('one-click repair rolls back an interrupted Codex transaction, preserves drafts, and supports repeat repair', async t => {
+  const f=fixture(t);await enable(f,'codex');
+  const before=[text(f.config.file),text(f.config.catalog),text(f.config.record),text(path.join(f.codex,'auth.json'))];
+  const partial=before[1].slice(0,60);
+  f.proxy.persist(f.proxy.clients,{files:[{file:f.config.catalog,before:before[1],after:partial}]});put(f.config.catalog,partial);
+  f.store.state.providers[0].baseUrl='https://unapplied.invalid/v1';
+  const p=await f.connections.repairPreview('codex');assert.equal(p.files,1);
+  assert.equal(text(f.config.catalog),partial,'preview must not write');
+  assert.equal((await f.connections.repairApply({ticket:p.ticket,acknowledged:true})).ok,true);
+  assert.equal(f.proxy.pending,null);await repair(f,'codex');
+  assert.deepEqual([text(f.config.file),text(f.config.catalog),text(f.config.record),text(path.join(f.codex,'auth.json'))],before);
+  assert.equal(f.proxy.clients.codex.providers[0].baseUrl,'https://original.example/v1');assert.equal(f.processes.stops,0);
+});
+
+test('pending repair retries disk failure, refuses external changes, and does not expand to another client', async t => {
+  const f=fixture(t);await enable(f,'codex');
+  const before=text(f.config.catalog),partial=before.slice(0,60);
+  f.proxy.persist(f.proxy.clients,{files:[{file:f.config.catalog,before,after:partial}]});put(f.config.catalog,partial);
+  const p=await f.connections.repairPreview('codex'),write=fs.writeFileSync;
+  fs.writeFileSync=function(file,...args){if(String(file).startsWith(f.config.catalog+'.'))throw Error('Synthetic disk full');return write.call(this,file,...args);};
+  try {await assert.rejects(f.connections.repairApply({ticket:p.ticket,acknowledged:true}),/disk full/);}finally{fs.writeFileSync=write;}
+  assert.ok(f.proxy.pending);assert.equal(text(f.config.catalog),partial);
+  const saved=text(f.proxy.file);put(f.config.catalog,'external new catalog');
+  await assert.rejects(f.connections.repairPreview('codex'),/外部修改/);assert.equal(text(f.proxy.file),saved);
+  put(f.config.catalog,partial);await repair(f,'codex');assert.equal(text(f.config.catalog),before);assert.equal(f.proxy.pending,null);
+  await enable(f,'claude');
+  const foreign=require('../core/claude-native.cjs').targets(f.manager).settings;
+  put(foreign,'{"synthetic":true}');const value=text(foreign);
+  f.proxy.persist(f.proxy.clients,{files:[{file:foreign,before:value,after:value}]});
+  await assert.rejects(f.connections.repairPreview('codex'),/涉及其他客户端/);assert.ok(f.proxy.pending);
+});
+
+test('explicit repair seeds missing legacy attachment evidence without applying pending edits',async t=>{
+  const f=fixture(t);await enable(f,'codex');
+  const legacy=structuredClone(f.proxy.clients.codex);delete legacy.attachment;f.proxy.persist({codex:legacy});
+  fs.unlinkSync(f.proxy.codexRecovery.file);
+  const before=[text(f.config.file),text(f.config.record),text(path.join(f.codex,'auth.json'))];
+  f.store.state.providers[0].baseUrl='https://unapplied.invalid/v1';await repair(f,'codex');
+  assert.ok(f.proxy.clients.codex.attachment);assert.ok(fs.existsSync(f.proxy.codexRecovery.file));
+  const checkpoint=text(f.proxy.codexRecovery.file);await repair(f,'codex');assert.equal(text(f.proxy.codexRecovery.file),checkpoint);
+  assert.deepEqual([text(f.config.file),text(f.config.record),text(path.join(f.codex,'auth.json'))],before);
+  assert.equal(f.proxy.clients.codex.providers[0].baseUrl,'https://original.example/v1');
+});
+
+for (const broken of [null,'{}']) test(`one-click repair restores a ${broken===null?'lost':'incomplete'} record after startup`,async t=>{
+  const f=fixture(t);await enable(f,'codex');
+  const before=[text(f.config.file),text(f.config.catalog),text(path.join(f.codex,'auth.json'))];
+  if(broken===null)fs.unlinkSync(f.config.record);else put(f.config.record,broken);
+  f.store.state.providers[0].baseUrl='https://unapplied.invalid/v1';
+  await repair(f,'codex');assert.deepEqual(JSON.parse(text(f.config.record)),f.proxy.clients.codex.attachment);
+  await repair(f,'codex');assert.deepEqual([text(f.config.file),text(f.config.catalog),text(path.join(f.codex,'auth.json'))],before);
+  assert.equal(f.proxy.clients.codex.providers[0].baseUrl,'https://original.example/v1');assert.equal(f.processes.stops,0);
+});
+
 test("Codex repair can explicitly force restart, preserving OAuth and never applying pending drafts", async (t) => {
   const f = fixture(t); await enable(f, "codex");
   const applied = text(f.config.file), oauth = text(path.join(f.codex, "auth.json")), calls = [];

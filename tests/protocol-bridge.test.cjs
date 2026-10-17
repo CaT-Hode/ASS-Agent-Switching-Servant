@@ -77,6 +77,42 @@ test("namespace functions and custom raw tools round-trip identity, arguments, h
   assert.deepEqual(events.map(e => e.sequence_number), events.map((_, i) => i));
   assert.ok(!events.some(e => e.type === "response.function_call_arguments.delta"));
 });
+
+test('stored calls without namespace match a unique current tool and keep completed call/result pairs',()=>{
+  const body={tools:[{type:'namespace',name:'functions',tools:[{type:'custom',name:'exec',format:{type:'text'}},
+    {type:'function',name:'read',parameters:{type:'object'}}]}],input:[]};
+  for(let i=0;i<910;i++)body.input.push({type:'custom_tool_call',name:'exec',call_id:'old-'+i,input:'SYNTHETIC_HISTORY_'+i},
+    {type:'custom_tool_call_output',call_id:'old-'+i,output:'SYNTHETIC_RESULT_'+i});
+  body.input.push({type:'function_call',name:'read',call_id:'read-old',arguments:'{"name":"fixture"}'},
+    {type:'function_call_output',call_id:'read-old',output:'Synthetic read result'});
+  const original=structuredClone(body),bridge=toolBridge(body);
+  for(let i=0;i<910;i++){
+    assert.equal(bridge.request.input[i*2].name,bridge.request.tools[0].name);
+    assert.deepEqual(JSON.parse(bridge.request.input[i*2].arguments),{input:'SYNTHETIC_HISTORY_'+i});
+    assert.equal(bridge.request.input[i*2+1].call_id,'old-'+i);assert.equal(bridge.request.input[i*2+1].type,'function_call_output');
+  }
+  assert.equal(bridge.request.input.at(-2).name,bridge.request.tools[1].name);
+  assert.equal(bridge.request.input.at(-2).arguments,'{"name":"fixture"}');
+  assert.deepEqual(toolBridge(body).request,bridge.request,'repeated conversion is stable');assert.deepEqual(body,original,'no in-place history mutation');
+});
+
+test('retired or ambiguous historical tools remain history without inventing callable tools',()=>{
+  const body={tools:[{type:'namespace',name:'left',tools:[{type:'custom',name:'same'}]},
+    {type:'namespace',name:'right',tools:[{type:'custom',name:'same'}]}],input:[
+    {type:'custom_tool_call',name:'removed',namespace:'old',call_id:'retired',input:'SYNTHETIC_RETIRED'},
+    {type:'custom_tool_call_output',call_id:'retired',output:'SYNTHETIC_DONE'},
+    {type:'custom_tool_call',name:'same',call_id:'ambiguous',input:'SYNTHETIC_AMBIGUOUS'},
+  ]};
+  const bridge=toolBridge(body),names=bridge.request.tools.map(t=>t.name);
+  assert.equal(names.length,2);assert.equal(names.includes(bridge.request.input[0].name),false);
+  assert.equal(names.includes(bridge.request.input[2].name),false,'never bind an ambiguous old call to an arbitrary current namespace');
+  assert.deepEqual(JSON.parse(bridge.request.input[0].arguments),{input:'SYNTHETIC_RETIRED'});
+  assert.equal(bridge.request.input[1].call_id,'retired');assert.equal(bridge.request.input[1].output,'SYNTHETIC_DONE');
+  assert.deepEqual(toolBridge(body).request,bridge.request);
+  const historyOnly=toolBridge({input:body.input});assert.equal(historyOnly.request.tools,undefined);
+  assert.equal(historyOnly.request.input[0].name,bridge.request.input[0].name);
+  for(const input of [undefined,null,{},42]) assert.throws(()=>toolBridge({input:[{type:'custom_tool_call',name:'removed',input}]}),e=>e.status===400&&/历史.*无效/.test(e.message));
+});
 test("complete tool arguments in Anthropic start events are retained", async () => {
   const body = sse([{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "a", name: "echo", input: { marker: "ok" } } }, { type: "message_stop" }]);
   const events = []; for await (const e of translateStream(body.body, "anthropic", "test")) events.push(e);

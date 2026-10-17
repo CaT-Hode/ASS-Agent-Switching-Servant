@@ -3,6 +3,17 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 const { withReadScope, memoRead } = require("../core/read-scope.cjs");
 const { SnapshotPublisher } = require("../core/snapshot-publisher.cjs");
+const { ClientSnapshot } = require('../core/snapshot-publisher.cjs');
+
+test('native update read failure preserves account cache without hiding newly saved providers',()=>{
+  let broken=false;
+  const cache=new ClientSnapshot(()=>{if(broken)throw Error('native update');return{clients:[{id:'codex',accounts:[{id:'native'}]}]}});
+  cache.current().state.clients[0].accounts=[];broken=true;
+  const result={providers:[{id:'woyao'}],...cache.current()};
+  assert.equal(result.providers[0].id,'woyao');assert.equal(result.state.clients[0].accounts.length,1);assert.ok(result.error);
+  result.state.clients[0].accounts=[];assert.equal(cache.current().state.clients[0].accounts.length,1);
+  broken=false;assert.equal(cache.current().error,'');
+});
 
 test("read scope reuses nested synchronous work but expires between operations", () => {
   let calls = 0;

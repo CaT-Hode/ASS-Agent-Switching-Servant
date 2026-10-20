@@ -13,7 +13,7 @@ const { officialCodexHistory } = require("./response-history.cjs");
 const { withOutputLimit } = require('./output-tokens.cjs');
 const { classifyFailure, diagnosticError, responseFailure } = require('./diagnostic-failure.cjs');
 const { officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
-  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexWorkspaceRequest } = require('./http-passthrough.cjs');
+  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexImagesRequest, codexWorkspaceRequest } = require('./http-passthrough.cjs');
 // A pre-accountless conversation keeps the provider id stored when it was
 // created. Codex stores that id on the thread, not per request, so a thread
 // created under the built-in `openai` provider keeps authenticating with the
@@ -246,16 +246,21 @@ class Router {
         await forwardHarness(this, req, res);
         return;
       }
-      const bootstrap = client !== "codex" ? null : workspaceRelay
+      const images = client === 'codex' && !workspaceRelay ? codexImagesRequest(req.url, req.method) : null;
+      const bootstrap = images || (client !== "codex" ? null : workspaceRelay
         ? codexWorkspaceRequest(req.url, req.method)
-        : req.method === "GET" ? codexBootstrapRequest(req.url) : null;
+        : req.method === "GET" ? codexBootstrapRequest(req.url) : null);
       if (bootstrap) {
         const state = this.getState(client) || {};
         const credential = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-        if (workspaceRelay && !/^Bearer\s+\S+$/i.test(req.headers.authorization || ''))
+        if ((workspaceRelay || images) && !/^Bearer\s+\S+$/i.test(req.headers.authorization || ''))
           throw Object.assign(Error('官方服务需要当前 OAuth 登录'), { status: 401 });
         if (state.accountless)
           throw Object.assign(Error("无账号模式不转发官方账户请求"), { status: 401 });
+        if (images && credential === this.clientToken)
+          throw Object.assign(Error('图片生成需要 Codex 官方 OAuth 登录，模型 API 凭据不能请求订阅图片服务'), { status: 403 });
+        if (images && /^[a-f0-9]{64}$/i.test(credential) && !(state.gatewayAuth && authorized(credential, state.localToken)))
+          throw Object.assign(Error('本机接入凭据已变化，请重新打开 Codex'), { status: 401 });
         const headers = officialRequestHeaders(req.headers);
         // This service request uses ASS's real Chromium transport identity.
         // Model Responses routes still preserve the original Codex User-Agent.
@@ -264,7 +269,7 @@ class Router {
           if (!this.getOfficialAuth)
             throw Object.assign(Error("官方 OAuth 不可用，请在 Codex 账户中登录"), { status: 401 });
           const auth = await this.getOfficialAuth({ signal: controller.signal });
-          if (!/^Bearer\s+\S+$/i.test(auth?.authorization || ""))
+          if (!/^Bearer\s+\S+$/i.test(auth?.authorization || "") || images && auth.authorization === req.headers.authorization)
             throw Object.assign(Error("官方 OAuth 不可用，请重新登录"), { status: 401 });
           delete headers["chatgpt-account-id"];
           Object.assign(headers, auth);
@@ -276,9 +281,10 @@ class Router {
         res.on("close", () => {
           if (!res.writableFinished) controller.abort();
         });
-        const body = workspaceRelay && !['GET','HEAD'].includes(req.method) ? await readBytes(req) : undefined;
+        if (images) route = { source: 'OpenAI 官方图片', body: {} };
+        const body = (workspaceRelay || images) && !['GET','HEAD'].includes(req.method) ? await readBytes(req) : undefined;
         const response = await this.fetch(bootstrap.upstreamUrl, {
-          method: workspaceRelay ? req.method : "GET", headers, ...(body ? { body } : {}), signal: controller.signal,
+          method: workspaceRelay || images ? req.method : "GET", headers, ...(body ? { body } : {}), signal: controller.signal,
           redirect: "error", credentials: "omit",
         }, "system");
         httpStatus = response.status;
@@ -291,7 +297,7 @@ class Router {
         });
         forwardingError = true;
         let sample = '';
-        if (/json|text\/|event-stream/i.test(response.headers.get('content-type') || ''))
+        if ((!images || !response.ok) && /json|text\/|event-stream/i.test(response.headers.get('content-type') || ''))
           sample = await forwardErrorBody(response, chunk => write(res, chunk), secrets);
         else if (response.body) for await (const chunk of response.body) await write(res, chunk);
         if (!response.ok) {
@@ -301,7 +307,7 @@ class Router {
         }
         res.end();
         this.log({
-          time: new Date().toISOString(), source: workspaceRelay ? "OpenAI 官方服务" : "OpenAI 官方账户设置", model: "",
+          time: new Date().toISOString(), source: images ? 'OpenAI 官方图片' : workspaceRelay ? "OpenAI 官方服务" : "OpenAI 官方账户设置", model: "",
           status: response.status, ms: Date.now() - began, ok: response.ok,
           httpStatus, httpOk: response.ok, taskOk: response.ok, requestId, upstream,
         });

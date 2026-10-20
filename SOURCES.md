@@ -67,6 +67,12 @@ ASS 是独立实现，不是原产品的官方版本。界面不沿用旧产品�
 - [Pi AuthStorage 源码](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/auth-storage.ts)：`oauth` 与 `api_key` 记录，读取时不执行动态密钥命令。
 - 本机 `D:\deepseek-harness\packages\credentials\credentials-local\README.md` 与 `packages\llm\llm-pi-ai\src\auth.ts`：版本化 `.credentials.yaml`、`refs`、`records` 和 `llm-pi-ai/<provider>` grant 结构。只实现已确认格式，不把任意插件 grant 误判为 OAuth。
 
+## Codex 图片工具接入
+
+- 本机 Codex Desktop `26.1013.4894.0` 附带后端 `0.163.0-alpha.10.2`：隔离 OAuth 和本地模拟服务实际捕获 `image_gen.imagegen` 请求模型接入地址的 `/v1/images/generations`，编辑时请求 `/v1/images/edits`，附带账户与 `x-codex-image-turn-id`。
+- `scripts/codex-images-qa.cjs` 使用实际后端经 ASS 路由完成生成、带本地图编辑及保存，分别验证内置 `openai` 与自定义 `ASS` 供应商。官方 Codex 后端的图片接口为 Responses 同级的 `images/generations` / `images/edits`；原始请求字节与图片结果保留。测试上游为本地模拟，无真实云端请求。
+- 本轮 OpenAI Docs 搜索工具不可用，官方图片生成文档页面返回 403；以上结论来自本机请求与原生工具回归，不将网页摘要作为依据。
+
 ## 本地对话与 OAuth 保留
 
 - [Claude Code Manage sessions](https://code.claude.com/docs/en/sessions)：CLI JSONL 目录、`CLAUDE_CONFIG_DIR`、绝对 transcript 路径续聊，以及 CLI / Desktop / Web 历史分离的边界。按本机 2.1.283 可用行为适配。

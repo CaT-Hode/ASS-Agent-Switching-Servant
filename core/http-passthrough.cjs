@@ -67,6 +67,13 @@ function codexBootstrapRequest(url) {
     upstreamUrl: 'https://chatgpt.com/backend-api' + backendPath + parsed.search,
   };
 }
+// Native Codex's image tool uses the same model-provider base URL as Responses,
+// but calls these sibling endpoints. Keep image generation on the official
+// ChatGPT backend rather than treating its image-model name as an ASS alias.
+function codexImagesRequest(url, method) {
+  const match = method === 'POST' && /^\/v1\/images\/(generations|edits)$/.exec(url);
+  return match ? { upstreamUrl: 'https://chatgpt.com/backend-api/codex/images/' + match[1] } : null;
+}
 function codexWorkspaceRequest(url, method) {
   if (!['GET','HEAD','POST','PUT','PATCH','DELETE'].includes(method) ||
       typeof url !== 'string' || !url.startsWith('/backend-api/') || /[\\\r\n]/.test(url)) return null;
@@ -133,5 +140,5 @@ async function forwardErrorBody(response, write, secrets = []) {
 
 module.exports = {
   officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
-  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexWorkspaceRequest,
+  summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexImagesRequest, codexWorkspaceRequest,
 };

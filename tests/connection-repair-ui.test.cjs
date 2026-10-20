@@ -22,7 +22,8 @@ before(async () => {
   fs.writeFileSync(path.join(output,'index.html'), `<html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'"><title>ASS connection repair UI</title><link rel="stylesheet" href="renderer.css"></head><body><div id="root"></div><script src="renderer.js"></script></body></html>`);
   fs.writeFileSync(path.join(output,'main.cjs'), `const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(path.join(output,'profile'))});app.whenReady().then(()=>{new BrowserWindow({show:false,width:1200,height:900,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}}).loadURL('about:blank')});`);
   const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
-  app=await electron.launch({args:[...(process.platform==='linux'?['--no-sandbox']:[]),path.join(output,'main.cjs')],env});page=await app.firstWindow();page.setDefaultTimeout(3500);
+  app=await electron.launch({args:[...(process.platform==='linux'?['--no-sandbox']:[]),path.join(output,'main.cjs')],env});page=await app.firstWindow();
+  page.setDefaultTimeout(process.env.CI ? 15000 : 3500);
   page.on('pageerror',e=>errors.push(e.message));page.on('console',msg=>{if(msg.type()==='error')errors.push(msg.text());});
   await page.context().route(/^https?:/,route=>route.abort());
   await page.addInitScript(()=>{

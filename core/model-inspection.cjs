@@ -3,6 +3,10 @@ const { endpoint, EFFORTS, PROTOCOLS } = require("./models.cjs");
 const { convertRequest, sseMessages, anthropicLimited } = require("./adapters.cjs");
 const { protocolEndpoint, providerSessionHeaders } = require("./provider-transport.cjs");
 const { abortable } = require("./abortable.cjs");
+// A completed stream can take well over 20 seconds even for a small request.
+// Keep each protocol bounded, independently of the following connection check.
+const PROBE_TIMEOUT_MS = 90000;
+const DIAGNOSTIC_TIMEOUT_MS = (PROTOCOLS.length + 1) * PROBE_TIMEOUT_MS;
 const modelKey = (provider, model) => JSON.stringify([provider, model]);
 const strings = (value) =>
   Array.isArray(value)
@@ -256,7 +260,7 @@ async function nativeProbe(
   model,
   protocol,
   fetchUpstream,
-  { effort, tool = false, signal, timeoutMs = 20000 } = {},
+  { effort, tool = false, signal, timeoutMs = PROBE_TIMEOUT_MS } = {},
 ) {
   const nonce = crypto.randomBytes(8).toString("hex"),
     started = Date.now();
@@ -324,8 +328,8 @@ async function nativeProbe(
       requestSignal.throwIfAborted();
       return {
         status: "rejected",
-        unsupported: [404, 405, 415].includes(response.status) ||
-          ([400, 422].includes(response.status) && /(?:unsupported|not supported|不支持).{0,60}(?:protocol|endpoint|api format|responses api|messages api)|(?:protocol|endpoint|responses api|messages api).{0,60}(?:unsupported|not supported|不支持)/i.test(raw)),
+        unsupported: [405, 415].includes(response.status) ||
+          ([400, 404, 422].includes(response.status) && /(?:unsupported|not supported|不支持).{0,60}(?:protocol|endpoint|api format|responses api|messages api)|(?:protocol|endpoint|responses api|messages api).{0,60}(?:unsupported|not supported|不支持)/i.test(raw)),
         httpStatus: response.status,
         effortError:
           [400, 422].includes(response.status) &&
@@ -446,6 +450,8 @@ async function probeCapabilities(
   }
 }
 module.exports = {
+  PROBE_TIMEOUT_MS,
+  DIAGNOSTIC_TIMEOUT_MS,
   modelKey,
   declaredCapabilities,
   discoverModels,

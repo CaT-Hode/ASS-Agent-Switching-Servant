@@ -134,6 +134,65 @@ test('official catalog refresh changes native metadata only; drafts, bindings an
   assert.throws(()=>f.proxy.refreshOfficialCatalog(),/外部修改/);assert.equal(fs.readFileSync(f.config.catalog,'utf8'),'{}');
 });
 
+test('catalog refresh repairs old missing instruction sources without publishing drafts and repeats without writes', t => {
+  for (const accountless of [false, true]) {
+    const f = fixture(t); f.manager.save(); f.proxy.sync('codex', accountless);
+    const legacy = structuredClone(f.proxy.clients.codex);
+    for (const entry of legacy.catalog.models) { delete entry.base_instructions; entry.model_messages = null; }
+    f.proxy.persist({ ...f.proxy.clients, codex: legacy });
+    atomic(f.config.catalog, JSON.stringify(legacy.catalog, null, 2));
+    f.store.updateProvider({ ...f.store.state.providers[0], baseUrl: 'https://unapplied.invalid/v1' });
+    const protectedFiles = [f.config.file, f.config.record, f.manager.file, f.store.file, path.join(f.codex, 'auth.json')];
+    const before = protectedFiles.map(file => fs.readFileSync(file));
+    const restarted = new ProxyConfig(f.data, crypt, f.manager, f.store, new ConfigManager(f.codex, f.data));
+    assert.equal(restarted.refreshOfficialCatalog(), true);
+    assert.equal(restarted.clients.codex.catalog.models.every(entry => typeof entry.base_instructions === 'string'), true);
+    assert.deepEqual(restarted.clients.codex.providers, legacy.providers);
+    assert.deepEqual(restarted.clients.codex.defaultModel, legacy.defaultModel);
+    assert.deepEqual(restarted.clients.codex.catalog.models.map(({ base_instructions, ...entry }) => entry), legacy.catalog.models);
+    assert.doesNotThrow(() => restarted.checkFiles('codex'));
+    const catalog = fs.readFileSync(f.config.catalog), applied = fs.readFileSync(restarted.file);
+    assert.equal(restarted.refreshOfficialCatalog(), false);
+    assert.deepEqual(fs.readFileSync(f.config.catalog), catalog); assert.deepEqual(fs.readFileSync(restarted.file), applied);
+    protectedFiles.forEach((file, i) => assert.deepEqual(fs.readFileSync(file), before[i]));
+  }
+});
+
+test('failed instruction-source repair rolls back the old catalog and applied memory, then retries successfully', t => {
+  const f = fixture(t); f.proxy.sync('codex');
+  const legacy = structuredClone(f.proxy.clients.codex);
+  for (const entry of legacy.catalog.models) delete entry.base_instructions;
+  f.proxy.persist({ ...f.proxy.clients, codex: legacy });
+  atomic(f.config.catalog, JSON.stringify(legacy.catalog, null, 2));
+  const before = fs.readFileSync(f.config.catalog), persist = f.proxy.persist.bind(f.proxy);
+  let writes = 0;
+  f.proxy.persist = (...args) => { if (++writes === 2) throw Error('synthetic catalog commit failure'); return persist(...args); };
+  assert.throws(() => f.proxy.refreshOfficialCatalog(), /synthetic catalog commit failure/);
+  assert.deepEqual(fs.readFileSync(f.config.catalog), before);
+  assert.deepEqual(f.proxy.clients.codex, legacy); assert.equal(f.proxy.pending, null);
+  f.proxy.persist = persist;
+  assert.equal(f.proxy.refreshOfficialCatalog(), true); assert.equal(f.proxy.refreshOfficialCatalog(), false);
+  assert.doesNotThrow(() => f.proxy.checkFiles('codex'));
+});
+
+test('modern native prompts gain an exact legacy alias without changing subscriptions or making the plan pending', t => {
+  const f = fixture(t);
+  const native = { ...f.store.officialModels[0], context_window: 500000, max_context_window: 900000,
+    default_reasoning_level: 'low', model_messages: { instructions_template: 'Literal native {{unchanged}}', future: 'retain' } };
+  delete native.base_instructions;
+  atomic(path.join(f.codex, 'models_cache.json'), JSON.stringify({ models: [native] }));
+  const source = fs.readFileSync(path.join(f.codex, 'models_cache.json'));
+  f.proxy.sync('codex');
+  const legacy = structuredClone(f.proxy.clients.codex); delete legacy.catalog.models[0].base_instructions;
+  f.proxy.persist({ ...f.proxy.clients, codex: legacy }); atomic(f.config.catalog, JSON.stringify(legacy.catalog, null, 2));
+  const config = fs.readFileSync(f.config.file), auth = fs.readFileSync(path.join(f.codex, 'auth.json'));
+  assert.equal(f.proxy.refreshOfficialCatalog(), true); assert.equal(f.proxy.refreshOfficialCatalog(), false);
+  assert.deepEqual(f.proxy.clients.codex.catalog.models[0], { ...native, base_instructions: native.model_messages.instructions_template });
+  assert.equal(f.proxy.status('codex', true).pending, false);
+  assert.deepEqual(fs.readFileSync(path.join(f.codex, 'models_cache.json')), source);
+  assert.deepEqual(fs.readFileSync(f.config.file), config); assert.deepEqual(fs.readFileSync(path.join(f.codex, 'auth.json')), auth);
+});
+
 test('applied DeepSeek tool metadata repairs without syncing drafts or changing OAuth and selections',t=>{
   const f=fixture(t);
   f.manager.save();

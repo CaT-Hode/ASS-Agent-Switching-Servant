@@ -7,11 +7,13 @@ const { forwardHarness, authorized } = require("./harness-route.cjs");
 const { providerSessionHeaders, protocolEndpoint } = require("./provider-transport.cjs");
 const crypto = require("node:crypto");
 const { toolBridge } = require("./tool-bridge.cjs");
-const { needsResponsesToolBridge } = require('./deepseek-compat.cjs');
+const { needsResponsesToolBridge, nativeDeepSeek } = require('./deepseek-compat.cjs');
 const { readJSON, readBytes } = require("./request-body.cjs");
 const { officialCodexHistory } = require("./response-history.cjs");
 const { withOutputLimit } = require('./output-tokens.cjs');
 const { classifyFailure, diagnosticError, responseFailure } = require('./diagnostic-failure.cjs');
+const { CodexCompaction, requested: compactionRequested } = require('./codex-compaction.cjs');
+const { CodexReasoning } = require('./codex-reasoning.cjs');
 const { officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
   summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexImagesRequest, codexWorkspaceRequest } = require('./http-passthrough.cjs');
 // A pre-accountless conversation keeps the provider id stored when it was
@@ -103,6 +105,7 @@ class Router {
     onActivity = () => {},
     getOfficialAuth,
     getNativeCredential,
+    compactionCrypto,
   }) {
     this.getState = getState;
     this.fetch = fetchUpstream;
@@ -111,6 +114,8 @@ class Router {
     this.onActivity = onActivity;
     this.getOfficialAuth = getOfficialAuth;
     this.getNativeCredential = getNativeCredential;
+    this.compaction = new CodexCompaction(compactionCrypto);
+    this.reasoning = new CodexReasoning(compactionCrypto);
     this.requests = new Map();
     this.server = null;
     this.controllers = new Set();
@@ -198,6 +203,7 @@ class Router {
     let httpStatus = null;
     let upstream;
     let forwardingError = false;
+    let compacting = false;
     const requestId = crypto.randomUUID();
     const secrets = [req.headers.authorization?.replace(/^Bearer\s+/i, '')].filter(Boolean);
     try {
@@ -328,7 +334,7 @@ class Router {
         );
       if (!/^Bearer\s+\S+$/i.test(req.headers.authorization || ""))
         throw Object.assign(new Error("需要 Codex 登录凭据"), { status: 401 });
-      const body = await readJSON(req);
+      const body = this.reasoning.expand(this.compaction.expand(await readJSON(req)));
       const state = this.getState(this.requests.get(req)?.client);
       const credential = req.headers.authorization.replace(/^Bearer\s+/i, "");
       const gatewayAuthenticated = state.gatewayAuth && authorized(credential, state.localToken);
@@ -344,6 +350,8 @@ class Router {
           throw Object.assign(Error("无账号模式仅允许使用已注入的模型；请新建对话并选择 ASS 模型"), { status: 403 });
       }
       route = routeFor(body, state, match[1] || "");
+      compacting = !route.official && compactionRequested(body);
+      if (compacting) route.body = this.compaction.prepare(route.body, route.model);
       if (route.official && req.headers.authorization.replace(/^Bearer\s+/i, "") === this.clientToken)
         throw Object.assign(new Error("此窗口使用模型 API 凭据，不能请求 ChatGPT 订阅模型；请从官方账户卡片启动"), { status: 403 });
       const headers = route.official
@@ -370,6 +378,7 @@ class Router {
       secrets.push(route.provider?.apiKey, headers.authorization?.replace(/^Bearer\s+/i, ''), headers['x-api-key']);
       const nativeToolBridge = route.protocol === 'openai-responses' && needsResponsesToolBridge(route.provider, route.body, route.model);
       const bridge = route.protocol !== "openai-responses" || nativeToolBridge ? toolBridge(route.body) : null;
+      const reasoningView = route.protocol === 'openai-responses' && nativeDeepSeek(route.provider) ? this.reasoning.view() : null;
       const request =
         route.protocol === "openai-responses"
           ? bridge?.request || route.body
@@ -429,10 +438,19 @@ class Router {
           message = message.split(key).join("[REDACTED]");
         throw Object.assign(new Error(message), { status: response.status });
       }
-      if (nativeToolBridge) {
+      if (compacting) {
+        const checkpoint = await this.compaction.collect(response, route.protocol, controller.signal, body.model);
+        controller.signal.throwIfAborted();
+        res.writeHead(response.status, { 'content-type': body.stream === false ? 'application/json' : 'text/event-stream',
+          'cache-control': 'no-store', 'x-ass-provider': route.provider.id, 'x-ass-request-id': requestId });
+        if (body.stream === false) await write(res, JSON.stringify(checkpoint));
+        else for (const event of this.compaction.events(checkpoint))
+          await write(res, `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      } else if (nativeToolBridge || reasoningView) {
         if (body.stream === false || match[1]) {
           const { value } = await readTaskJSON(response);
-          const restored = bridge.response(value);
+          const toolsRestored = bridge ? bridge.response(value) : value;
+          const restored = reasoningView ? reasoningView.response(toolsRestored) : toolsRestored;
           res.writeHead(response.status, { 'content-type': 'application/json',
             'x-ass-provider': route.provider.id, 'x-ass-request-id': requestId });
           await write(res, JSON.stringify(restored));
@@ -440,7 +458,10 @@ class Router {
           res.writeHead(response.status, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache',
             'x-ass-provider': route.provider.id, 'x-ass-request-id': requestId });
           res.flushHeaders();
-          for await (const event of bridge.restore(nativeResponsesEvents(response.body, controller.signal)))
+          let events = nativeResponsesEvents(response.body, controller.signal);
+          if (reasoningView) events = reasoningView.restore(events);
+          if (bridge) events = bridge.restore(events);
+          for await (const event of events)
             await write(res, `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
         }
       } else if (route.protocol === "openai-responses") {
@@ -565,6 +586,7 @@ class Router {
         ok: true,
         httpStatus, httpOk: httpStatus >= 200 && httpStatus < 300, taskOk: true,
         requestId, upstream,
+        ...(compacting ? { operation: 'compaction' } : {}),
       });
     } catch (error) {
       const diagnostic = client === 'diagnostics'
@@ -610,6 +632,7 @@ class Router {
         error: message.slice(0, 500),
         requestId, upstream,
         ...(diagnostic ? { diagnostic } : {}),
+        ...(compacting ? { operation: 'compaction' } : {}),
       });
     } finally {
       this.requests.delete(req);

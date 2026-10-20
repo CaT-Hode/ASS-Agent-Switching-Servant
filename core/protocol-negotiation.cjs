@@ -23,6 +23,15 @@ class ProtocolNegotiation {
         if (saved.version !== 1) throw Error();
         this.records = JSON.parse(crypto.decryptString(Buffer.from(saved.encrypted, "base64")));
         if (!this.records || typeof this.records !== "object" || Array.isArray(this.records)) throw Error();
+        // Older versions treated every 404 as an unsupported protocol, even
+        // model/channel errors. Correct that inference in memory without
+        // rewriting history or initiating unrequested network probes.
+        for (const record of Object.values(this.records)) for (const result of Object.values(record?.protocols || {})) {
+          if (result?.status === 'unsupported' && result.httpStatus === 404 && !result.unsupportedEvidence) {
+            result.status = result.lastSuccess ? 'passed' : 'unknown';
+            result.message = '旧版仅依据 HTTP 404，尚未确认协议是否不支持';
+          }
+        }
       }
     } catch { this.records = {}; this.error = "协议检测记录无法读取，未覆盖原文件"; }
   }
@@ -48,6 +57,7 @@ class ProtocolNegotiation {
       record.protocols[protocol] = { status: status === "unknown" && old?.status === "passed" ? "passed" : status,
         time: report.time, ms: result.ms, httpStatus: result.httpStatus,
         lastStatus: status, lastSuccess: status === "passed" ? report.time : old?.lastSuccess,
+        ...(status === 'unsupported' ? { unsupportedEvidence: 'response' } : {}),
         ...(status === "unknown" ? { message: "暂未确认；网络、权限、限流或请求参数可能影响检测" } : {}) };
     }
     record.time = report.time;

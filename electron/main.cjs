@@ -31,6 +31,8 @@ const {
   declaredCapabilities,
   probeCapabilities,
   discoverModels,
+  PROBE_TIMEOUT_MS,
+  DIAGNOSTIC_TIMEOUT_MS,
 } = require("../core/model-inspection.cjs");
 const { ModelDirectory } = require("../core/model-directory.cjs");
 const {
@@ -608,10 +610,10 @@ async function diagnose(providerId, modelName, signal) {
   if (diagnosticControllers.has(key)) throw Error("此模型正在检测");
   const fingerprint = native ? diagnosticFingerprint(native) : diagnosticHistory.fingerprint(providerId, name);
   const controller = new AbortController();
-  const requestSignal = AbortSignal.any([
+  let requestSignal = AbortSignal.any([
     controller.signal,
     ...(signal ? [signal] : []),
-    AbortSignal.timeout(90000),
+    AbortSignal.timeout(official || native ? PROBE_TIMEOUT_MS : DIAGNOSTIC_TIMEOUT_MS),
   ]);
   diagnosticControllers.set(key, controller);
   let result, failure;
@@ -637,6 +639,7 @@ async function diagnose(providerId, modelName, signal) {
     requestSignal.throwIfAborted();
     if (!official && !native) {
       await protocols.ensure(p, selected, { force: true, signal: requestSignal });
+      requestSignal = AbortSignal.any([requestSignal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]);
       metrics = diagnosticMetrics(protocols.select(p, selected, "codex"), "router");
     }
     if (native) {
@@ -1070,6 +1073,7 @@ else {
         onActivity: push,
         getOfficialAuth: options => codexOfficialAuth.headers(options),
         getNativeCredential: () => codexOfficialAuth.currentAccessToken(),
+        compactionCrypto: safeStorage,
       });
       codexWorkspaceRelay = new CodexWorkspaceRelay({ dataDir, crypto: safeStorage, router });
       restarter = new ClientRestart({

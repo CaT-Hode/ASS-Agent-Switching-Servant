@@ -25,8 +25,8 @@ function setup(t) {
     path.join(codex, "models_cache.json"),
     JSON.stringify({
       models: [
-        { slug: "gpt-test", display_name: "GPT Test", context_window: 128000 },
-        { slug: "gpt-other", display_name: "Other", context_window: 128000 },
+        { slug: "gpt-test", display_name: "GPT Test", context_window: 128000, base_instructions: 'Native test instructions', supports_parallel_tool_calls: true },
+        { slug: "gpt-other", display_name: "Other", context_window: 128000, base_instructions: 'Other native instructions', supports_parallel_tool_calls: false },
       ],
     }),
   );

@@ -194,6 +194,26 @@ function endpoint(base, protocol, suffix = "") {
   u.pathname = `${/\/v\d+(?:beta\d*)?(?:\/openai)?$/.test(root) ? root : root + "/v1"}/${tail}${suffix}`;
   return u.toString();
 }
+const DEFAULT_CATALOG_INSTRUCTIONS = 'You are a coding assistant. Follow user instructions and use the provided tools when needed.';
+function catalogInstructions(model) {
+  const legacy = model.base_instructions, modern = model.model_messages?.instructions_template;
+  if ((legacy != null && typeof legacy !== 'string') || (modern != null && typeof modern !== 'string'))
+    throw Error(`模型 ${model.slug} 的指令字段必须为字符串`);
+  // Older CLIs require the legacy field even when the desktop cache supplies a
+  // modern template. Mirror its literal text, including intentional emptiness;
+  // never replace native prompts or change their structured metadata.
+  if (typeof legacy === 'string') return model;
+  return { ...model, base_instructions: typeof modern === 'string' ? modern : DEFAULT_CATALOG_INSTRUCTIONS };
+}
+function compatibleCatalogModel(model) {
+  const entry = catalogInstructions(model);
+  // Codex 0.146 requires this flag; newer catalogs no longer emit it. Keep an
+  // explicit native value, and use the conservative legacy value when absent.
+  if (entry.supports_parallel_tool_calls == null) return { ...entry, supports_parallel_tool_calls: false };
+  if (typeof entry.supports_parallel_tool_calls !== 'boolean')
+    throw Error(`模型 ${entry.slug} 的 supports_parallel_tool_calls 必须为布尔值`);
+  return entry;
+}
 function makeCatalog(officialModels, providers, overrides = {}) {
   const baseline = {
     slug: "gpt-6-astra",
@@ -218,6 +238,7 @@ function makeCatalog(officialModels, providers, overrides = {}) {
     supports_reasoning_summaries: false,
     supports_parallel_tool_calls: false,
     tool_mode: "direct",
+    base_instructions: DEFAULT_CATALOG_INSTRUCTIONS,
   };
   const templates = (officialModels.length ? officialModels : [baseline]).map(
     (m) => ({ ...baseline, ...m }),
@@ -225,7 +246,8 @@ function makeCatalog(officialModels, providers, overrides = {}) {
   // Native subscription metadata belongs to Codex, including fields added by
   // a newer release. ASS overrides are local UI preferences, never a catalog
   // replacement for official models (even a stale disabled/renamed override).
-  const models = structuredClone(officialModels.length ? officialModels : templates);
+  // Add only missing legacy fields required by older CLI consumers.
+  const models = structuredClone(officialModels.length ? officialModels : templates).map(compatibleCatalogModel);
   const apply = (entry, m) => ({
     ...entry,
     context_window: m.contextWindow,
@@ -255,8 +277,7 @@ function makeCatalog(officialModels, providers, overrides = {}) {
         available_access_programs: { cyber: [] },
         upgrade: null,
         model_messages: null,
-        base_instructions:
-          "You are a coding assistant. Follow user instructions and use the provided tools when needed.",
+        base_instructions: DEFAULT_CATALOG_INSTRUCTIONS,
       };
       if (!nativeGPT) {
         entry.tool_mode = "direct";
@@ -284,6 +305,8 @@ module.exports = {
   parseImport,
   endpoint,
   makeCatalog,
+  catalogInstructions,
+  compatibleCatalogModel,
   codexProviderId,
   codexModelId,
 };

@@ -67,7 +67,7 @@ test("catalog writes chosen effort list and context exactly", () => {
 test('injection preserves every native official model field despite stale ASS overrides', () => {
   const official = [{ slug: 'gpt-6.1-sol', display_name: 'Sol', context_window: 500000,
     max_context_window: 872000, default_reasoning_level: 'low', supported_reasoning_levels: [{effort:'low'}],
-    base_instructions: 'Native instructions', future_capability: { enabled: true } }];
+    base_instructions: 'Native instructions', supports_parallel_tool_calls: true, future_capability: { enabled: true } }];
   const providers = parseImport(source);
   const stale = { 'gpt-6.1-sol': { model:'renamed', contextWindow:272000, efforts:['high'], defaultEffort:'high', enabled:false } };
   for (let i=0;i<2;i++) {

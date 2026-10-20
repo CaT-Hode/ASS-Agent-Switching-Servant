@@ -63,13 +63,7 @@ class Store {
       this.officialModels.splice(0, this.officialModels.length, ...models);
       this.catalogStamp = stamp;
     } catch {
-      if (!this.officialModels.length) this.officialModels.push(
-        {
-          slug: "gpt-6-astra",
-          display_name: "GPT-6-Astra",
-          context_window: 272000,
-        },
-      );
+      if (!this.officialModels.length) this.officialModels.push(...makeCatalog([], []).models);
     }
   }
   save() {

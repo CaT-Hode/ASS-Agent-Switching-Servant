@@ -70,7 +70,7 @@ for(const stream of [false,true])test(`DeepSeek native Responses rejects malform
   }
 });
 test('DeepSeek Codex metadata follows the official tool protocol and preserves native subscription models',()=>{
-  const native={slug:'gpt-fixture',context_window:500000,use_responses_lite:true,tool_mode:'direct',supports_parallel_tool_calls:false,input_modalities:['text'],unrelated:'native'};
+  const native={slug:'gpt-fixture',context_window:500000,use_responses_lite:true,tool_mode:'direct',supports_parallel_tool_calls:false,input_modalities:['text'],unrelated:'native',base_instructions:'Native instructions'};
   const original=structuredClone(native),catalog=makeCatalog([native],[provider]);
   assert.deepEqual(catalog.models[0],original);
   const entry=catalog.models.find(x=>x.slug.includes('::'));

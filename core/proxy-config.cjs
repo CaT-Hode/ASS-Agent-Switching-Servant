@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { atomic } = require("./config.cjs");
 const { hash } = require("./injection-files.cjs");
-const { makeCatalog, codexModelId } = require("./models.cjs");
+const { makeCatalog, codexModelId, compatibleCatalogModel } = require("./models.cjs");
 const { modelRef } = require("./client-policy.cjs");
 const { safePath } = require("./native-fields.cjs");
 const { randomUUID } = require("node:crypto");
@@ -199,13 +199,13 @@ class ProxyConfig {
     const native = !plan.accountless && this.store.catalogStamp ? structuredClone(this.store.officialModels)
       : plan.catalog.models.filter(m => !m.slug.includes('::'));
     const catalog = { ...this.clients.codex.catalog, models: [
-      ...native,
+      ...native.map(compatibleCatalogModel),
       ...plan.catalog.models.filter(m => m.slug.includes('::')).map(entry => {
         for (const provider of plan.providers) {
           const model = provider.models.find(m => codexModelId(provider.id, m.model) === entry.slug);
-          if (model) return codexApiMetadata(entry, provider, model);
+          if (model) return codexApiMetadata(compatibleCatalogModel(entry), provider, model);
         }
-        return entry;
+        return compatibleCatalogModel(entry);
       }),
     ] };
     if (equal(catalog, this.clients.codex.catalog)) return false;

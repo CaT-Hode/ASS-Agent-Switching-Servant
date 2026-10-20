@@ -52,7 +52,7 @@ test("Chat is checked independently when either Responses or Messages succeeds",
   }
 });
 test("manual recheck fills legacy Chat evidence and persists explicit endpoint rejection", async t => {
-  const f = fixture(t, url => url.endsWith("/completions") ? Response.json({}, { status: 404 }) : success(url.endsWith("/messages") ? "anthropic" : "openai-responses"));
+  const f = fixture(t, url => url.endsWith("/completions") ? Response.json({ error: { message: 'This endpoint is not supported' } }, { status: 404 }) : success(url.endsWith("/messages") ? "anthropic" : "openai-responses"));
   f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { "openai-responses": { status: "passed" }, anthropic: { status: "passed" } } });
   await f.protocols.ensure(f.p, f.m);
   assert.equal(f.calls.length, 0, "Old history must not trigger unrequested background probes");
@@ -61,6 +61,50 @@ test("manual recheck fills legacy Chat evidence and persists explicit endpoint r
   const reloaded = new ProtocolNegotiation(f.options);
   assert.equal(reloaded.get(f.p, f.m).protocols["openai-chat"].status, "unsupported");
   assert.equal(reloaded.get(f.p, f.m).protocols["openai-chat"].httpStatus, 404);
+});
+
+test('model-specific 404 errors are unknown observations and cannot erase a previous protocol success', async t => {
+  const f = fixture(t);
+  f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { anthropic: { status: 'passed' } } });
+  for (let i = 0; i < 2; i++) {
+    const result = await nativeProbe(f.p, f.m, 'anthropic', async () => Response.json({ error: {
+      code: 'model_not_found', message: 'This model is temporarily unavailable in this channel',
+    } }, { status: 404 }));
+    assert.equal(result.unsupported, false);
+    f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { anthropic: result, 'openai-responses': result } });
+    const saved = new ProtocolNegotiation(f.options).get(f.p, f.m);
+    assert.equal(saved.protocols.anthropic.status, 'passed');
+    assert.equal(saved.protocols.anthropic.lastStatus, 'unknown');
+    assert.equal(saved.protocols['openai-responses'].status, 'unknown');
+    assert.equal(saved.protocols['openai-responses'].httpStatus, 404);
+  }
+});
+
+test('legacy unsupported 404 cache is corrected without file writes or background requests, and can be rechecked', async t => {
+  const f = fixture(t);
+  f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { anthropic: { status: 'passed' } } });
+  const row = f.protocols.get(f.p, f.m);
+  row.protocols = {
+    anthropic: { status: 'unsupported', lastStatus: 'unsupported', httpStatus: 404, time: row.time },
+    'openai-responses': { status: 'unsupported', httpStatus: 404, lastSuccess: row.time },
+    'openai-chat': { status: 'unsupported', httpStatus: 405 },
+  };
+  fs.writeFileSync(f.protocols.file, JSON.stringify({ version: 1, encrypted: crypt.encryptString(JSON.stringify(f.protocols.records)).toString('base64') }));
+  const before = fs.readFileSync(f.protocols.file);
+  for (let i = 0; i < 2; i++) {
+    const reloaded = new ProtocolNegotiation(f.options), r = reloaded.get(f.p, f.m);
+    assert.equal(r.protocols.anthropic.status, 'unknown');
+    assert.equal(r.protocols.anthropic.httpStatus, 404);
+    assert.equal(r.protocols['openai-responses'].status, 'passed');
+    assert.equal(r.protocols['openai-chat'].status, 'unsupported');
+    await reloaded.ensure(f.p, f.m);
+    assert.equal(f.calls.length, 0);
+    assert.deepEqual(fs.readFileSync(f.protocols.file), before);
+  }
+  const fresh = new ProtocolNegotiation(f.options);
+  await fresh.ensure(f.p, f.m, { force: true });
+  assert.equal(f.calls.length, 3);
+  assert.equal(new ProtocolNegotiation(f.options).get(f.p, f.m).protocols.anthropic.status, 'passed');
 });
 test("later protocol rate limits stop the remaining probes", async t => {
   for (const limitAt of ["anthropic", "openai-chat"]) {

@@ -11,8 +11,25 @@ const { needsResponsesToolBridge } = require('./deepseek-compat.cjs');
 const { readJSON, readBytes } = require("./request-body.cjs");
 const { officialCodexHistory } = require("./response-history.cjs");
 const { withOutputLimit } = require('./output-tokens.cjs');
+const { classifyFailure, diagnosticError, responseFailure } = require('./diagnostic-failure.cjs');
 const { officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
   summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexWorkspaceRequest } = require('./http-passthrough.cjs');
+// A pre-accountless conversation keeps the provider id stored when it was
+// created. Codex stores that id on the thread, not per request, so a thread
+// created under the built-in `openai` provider keeps authenticating with the
+// native ChatGPT grant even after ASS switches the client to accountless mode.
+// That grant authenticates the local client only; it is never forwarded upstream
+// and still only serves injected models.
+function looksLikeNativeGrant(value) {
+  return /^[\w-]+\.[\w-]+\.[\w-]+$/.test(value);
+}
+function accountlessCredentialError(credential) {
+  if (looksLikeNativeGrant(credential))
+    return "无账号模式：此对话保留了旧的 Codex 登录接入，请在 Codex 中新建对话后继续";
+  if (/^[a-f0-9]{64}$/i.test(credential))
+    return "无账号模式：本机接入凭据已变化，请重新打开 Codex 加载当前配置";
+  return "无账号模式已启用，请重新启动客户端加载本机接入凭据";
+}
 async function write(res, data) {
   if (res.destroyed) throw Error("客户端已断开");
   if (!res.write(data)) await new Promise((resolve, reject) => {
@@ -85,6 +102,7 @@ class Router {
     allowClient = () => true,
     onActivity = () => {},
     getOfficialAuth,
+    getNativeCredential,
   }) {
     this.getState = getState;
     this.fetch = fetchUpstream;
@@ -92,6 +110,7 @@ class Router {
     this.allowClient = allowClient;
     this.onActivity = onActivity;
     this.getOfficialAuth = getOfficialAuth;
+    this.getNativeCredential = getNativeCredential;
     this.requests = new Map();
     this.server = null;
     this.controllers = new Set();
@@ -160,6 +179,16 @@ class Router {
       await new Promise((resolve) => setTimeout(resolve, 20));
     if (this.clientActive(id)) throw Error("客户端请求尚未结束，未继续切换配置");
   }
+  // Read-only credential snapshot for request authentication. Never refreshes:
+  // the native client owns rotation and a refresh here would race its writes.
+  nativeCredential() {
+    try { return String(this.getNativeCredential?.() || ""); } catch { return ""; }
+  }
+  authorizeLocal(client, state, credential) {
+    if (!state?.accountless) return authorized(credential, this.clientToken);
+    if (authorized(credential, state.localToken)) return true;
+    return client === "codex" && authorized(credential, this.nativeCredential());
+  }
   async handle(req, res) {
     const began = Date.now();
     let route;
@@ -225,7 +254,7 @@ class Router {
         const credential = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
         if (workspaceRelay && !/^Bearer\s+\S+$/i.test(req.headers.authorization || ''))
           throw Object.assign(Error('官方服务需要当前 OAuth 登录'), { status: 401 });
-        if (state.accountless && (workspaceRelay || authorized(credential, state.localToken)))
+        if (state.accountless)
           throw Object.assign(Error("无账号模式不转发官方账户请求"), { status: 401 });
         const headers = officialRequestHeaders(req.headers);
         // This service request uses ASS's real Chromium transport identity.
@@ -303,10 +332,10 @@ class Router {
       if (state.gatewayAuth && !gatewayAuthenticated && credential !== this.clientToken && /^[a-f0-9]{64}$/.test(credential))
         throw Object.assign(Error('本机接入凭据已变化，请重新打开 Codex'), { status: 401 });
       if (state.accountless) {
-        if (!authorized(req.headers.authorization.replace(/^Bearer\s+/i, ""), state.localToken))
-          throw Object.assign(Error("无账号模式已启用，请重新启动客户端加载本机接入凭据"), { status: 401 });
+        if (!this.authorizeLocal(client, state, credential))
+          throw Object.assign(Error(accountlessCredentialError(credential)), { status: 401 });
         if (typeof body.model !== "string" || !body.model.includes("::"))
-          throw Object.assign(Error("无账号模式仅允许使用已注入的模型"), { status: 403 });
+          throw Object.assign(Error("无账号模式仅允许使用已注入的模型；请新建对话并选择 ASS 模型"), { status: 403 });
       }
       route = routeFor(body, state, match[1] || "");
       if (route.official && req.headers.authorization.replace(/^Bearer\s+/i, "") === this.clientToken)
@@ -360,6 +389,8 @@ class Router {
       httpStatus = response.status;
       upstream = upstreamDiagnostics(response, secrets);
       if (!response.ok) {
+        if (client === 'diagnostics')
+          throw diagnosticError(await responseFailure(response, { signal: controller.signal }));
         if (route.official) {
           forwardingError = true;
           res.writeHead(response.status, {
@@ -530,6 +561,9 @@ class Router {
         requestId, upstream,
       });
     } catch (error) {
+      const diagnostic = client === 'diagnostics'
+        ? classifyFailure(error, { httpStatus, layer: httpStatus ? 'upstream' : route ? 'network' : 'local' }) : null;
+      const responseStatus = diagnostic?.httpStatus >= 400 ? diagnostic.httpStatus : error.status || 502;
       let message = controller.signal.aborted
         ? "请求已取消或超过 5 分钟"
         : error instanceof SyntaxError
@@ -543,17 +577,19 @@ class Router {
       } else if (res.headersSent) {
         if (!res.destroyed && !res.writableEnded) {
           res.write(
-            `event: error\ndata: ${JSON.stringify({ type: "error", error: { code: "stream_failed", message: "上游流中断，请重试" } })}\n\n`,
+            `event: error\ndata: ${JSON.stringify({ type: "error", error: { code: diagnostic?.failure.code || "stream_failed", message: diagnostic?.message || "上游流中断，请重试" } })}\n\n`,
           );
           res.end();
         }
       } else {
-        res.writeHead(error.status || 502, {
+        res.writeHead(responseStatus, {
           "content-type": "application/json",
+          ...(diagnostic ? { 'x-ass-diagnostic-error': '1' } : {}),
         });
         res.end(
           JSON.stringify({
-            error: { code: error.code || "route_error", message },
+            error: { code: error.code || "route_error", message: diagnostic?.message || message },
+            ...(diagnostic ? { diagnostic } : {}),
           }),
         );
       }
@@ -561,12 +597,13 @@ class Router {
         time: new Date().toISOString(),
         source: route?.source || "本地",
         model: route?.body.model || "",
-        status: error.status || 502,
+        status: responseStatus,
         ms: Date.now() - began,
         ok: false,
         httpStatus, httpOk: httpStatus !== null && httpStatus >= 200 && httpStatus < 300, taskOk: false,
         error: message.slice(0, 500),
         requestId, upstream,
+        ...(diagnostic ? { diagnostic } : {}),
       });
     } finally {
       this.requests.delete(req);

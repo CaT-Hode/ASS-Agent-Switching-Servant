@@ -461,7 +461,16 @@ class ProxyConfig {
   routingState(id) {
     if (!this.supports(id)) return { ...this.store.state, providers: this.manager.effectiveProviders?.(id) || this.store.state.providers }; // Diagnostics use drafts.
     const plan = this.clients[id];
-    return { providers: this.error ? [] : (plan?.providers || []), accountless: plan?.accountless === true,
+    // A transport preference must also reach already-injected models. Retain
+    // the applied model/protocol/credential snapshot; only the network mode
+    // may follow an unchanged provider identity, never a replaced URL or key.
+    const providers = (plan?.providers || []).map(provider => {
+      const current = this.store.state.providers.find(p => p.id === provider.id &&
+        p.baseUrl === provider.baseUrl && p.apiKey === provider.apiKey);
+      return current && ["system", "direct", "direct-doh"].includes(current.network)
+        ? { ...provider, network: current.network } : provider;
+    });
+    return { providers: this.error ? [] : providers, accountless: plan?.accountless === true,
       gatewayAuth: plan?.gatewayAuth === true, localToken: this.error ? undefined : plan?.localToken };
   }
   requireApplied(id) {

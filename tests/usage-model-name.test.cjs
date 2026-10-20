@@ -1,16 +1,20 @@
 const { test } = require('node:test'), assert = require('node:assert/strict');
 
-test('usage removes only recognized Codex routing namespaces, including historical cached IDs', async () => {
+test('usage groups every client by the final model component across nested namespaces', async () => {
   const { usageModelName } = await import('../src/usage-view.mjs');
   const current = require('../core/models.cjs').codexModelId('fixture', 'deepseek-v4-pro');
   assert.equal(usageModelName(current, 'codex'), 'deepseek-v4-pro');
   assert.equal(usageModelName('ASS_295c4b059d7cb6be362b3f68::deepseek-v4-pro', 'codex'), 'deepseek-v4-pro');
   assert.equal(usageModelName('aimami_relay_960e58ea39::deepseek-v4-flash', 'codex'), 'deepseek-v4-flash');
   assert.equal(usageModelName('aimami_relay_0a211c788d::gpt-5.6-sol', 'codex'), 'gpt-5.6-sol');
-  assert.equal(usageModelName(current, 'pi'), current);
-  for (const name of ['gpt-6-astra', 'openrouter/vendor/model', 'vendor::model', 'ASS_fixture::model',
-    'ASS_295c4b059d7cb6be362b3f68::', 'aimami_relay_not-a-hash::model', 'aimami_relay_960e58ea39::bad\nname'])
-    assert.equal(usageModelName(name, 'codex'), name);
+  assert.equal(usageModelName(current, 'pi'), 'deepseek-v4-pro');
+  for (const client of ['codex','claude','opencode','pi','dsh','kimi','zcode']) {
+    for (const name of ['openrouter/vendor/model', 'vendor::model', 'ASS_fixture::model',
+      'ASS_fixture::relay::openrouter/vendor/model', 'aimami_relay_not-a-hash::model'])
+      assert.equal(usageModelName(name, client), 'model');
+    assert.equal(usageModelName('gpt-6-astra', client), 'gpt-6-astra');
+  }
+  for (const name of ['', 'vendor::', 'vendor/', 'bad\nname']) assert.equal(usageModelName(name), '未标注');
   assert.equal(usageModelName(undefined, 'codex'), '未标注');
 });
 
@@ -21,9 +25,9 @@ test('cached native and routed model names group together without rewriting rows
   const rows = [
     { ...base, model: 'gpt-5.6-sol' },
     { ...base, provider: 'ASS', model: require('../core/models.cjs').codexModelId('fixture', 'gpt-5.6-sol') },
-    { ...base, provider: 'aimai1', model: 'aimami_relay_0a211c788d::gpt-5.6-sol', sessions: ['other'] },
-    { ...base, client: 'pi', provider: 'custom', model: 'gpt-5.6-sol', sessions: ['pi'] },
-    { ...base, model: 'deepseek-v4-pro' }
+    { ...base, provider: 'aimai1', model: 'aimami_relay_0a211c788d::router/vendor/gpt-5.6-sol', sessions: ['other'] },
+    { ...base, client: 'pi', provider: 'custom', model: 'openrouter/vendor/gpt-5.6-sol', sessions: ['pi'] },
+    { ...base, model: 'deepseek-ai/deepseek-v4-pro' }
   ];
   const cached = JSON.parse(JSON.stringify(rows)), before = JSON.stringify(cached), now = new Date(2026, 9, 10, 12);
   for (const range of ['week', 'month', 'year']) {

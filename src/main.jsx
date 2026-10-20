@@ -103,9 +103,10 @@ function RequestTable({ rows }) {
               {r.model.split("::").at(-1)}
             </span>
             <span className="muted">{r.source}</span>
-            <span className={r.ok ? "success" : "danger"} title={r.error}>
+            <span className={r.ok ? "success" : "danger"} title={r.diagnostic?.failure ?
+              `${r.diagnostic.failure.label} · ${r.diagnostic.failure.code || ""} · 上游 HTTP ${r.httpStatus || "未收到"} · ASS 本地 HTTP ${r.status}` : r.error}>
               {r.ok ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}{" "}
-              {r.taskOk === false && r.httpOk ? `任务失败 · HTTP ${r.httpStatus}` : r.ok ? "成功" : r.status}
+              <span className="ellipsis">{r.diagnostic?.failure?.label || (r.taskOk === false && r.httpOk ? `任务失败 · HTTP ${r.httpStatus}` : r.ok ? "成功" : r.status)}</span>
             </span>
             <span className="muted mono">{(r.ms / 1000).toFixed(2)} s</span>
           </div>
@@ -222,7 +223,8 @@ function Diagnostics({ state, providers, act, busy }) {
                       <DiagnosticTime result={d} />
                     </small>
                   )}
-                  {d && <DiagnosticDetails result={d} />}
+                  {showResult && <DiagnosticDetails result={run?.failure && d.time < batch.startedAt ? run : d} />}
+                  {!d && run?.failure && <DiagnosticDetails result={run} />}
                 </div>
                 <ModelCheckButton
                   provider={p}

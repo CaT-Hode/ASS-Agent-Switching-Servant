@@ -14,8 +14,8 @@ before(async () => {
     window.mountSuppliers=()=>flushSync(()=>root.render(<Providers providers={[]} activeProvider="" onOpenProvider={()=>{}} onBack={()=>{}} act={async(k,fn)=>fn()}
       state={{providers:[{id:'woyao',name:'WOYAO',models:[{model:'custom',displayName:'Custom'}],enabled:true}],modelSources:[{id:'woyao',name:'WOYAO',models:[{model:'custom',displayName:'Custom'}],enabled:true}],
       officialProviderIds:{},preferences:{providerOrder:[]},balances:{},harnesses:{clients:[]}}}/>));
-    window.mountInjection=(checked=false,accountless=false)=>flushSync(()=>root.render(<ClientInjection client={{id:'codex',name:'Codex',injection:{models:[],excludedProviders:[],predictionCompatibility:checked,officialModels:[{ref:'official',model:'gpt-fixture'}]}}}
-      state={{providers:[],connections:{busy:false,clients:{codex:{accountless}}}}} act={async(k,fn)=>fn()} onManage={()=>{}}/>));
+    window.mountInjection=(checked=false,accountless=false,applied=true)=>flushSync(()=>root.render(<ClientInjection client={{id:'codex',name:'Codex',injection:{models:[],excludedProviders:[],predictionCompatibility:checked,officialModels:[{ref:'official',model:'gpt-fixture'}]}}}
+      state={{providers:[],connections:{busy:false,clients:{codex:{accountless,applied,predictionCompatibility:checked,resumeRecovery:{predictionCount:2}}}}}} act={async(k,fn)=>fn()} onManage={()=>{}}/>));
     window.renderToolInjection=()=>flushSync(()=>root.render(<main className="client-panel" style={{padding:24,maxWidth:1000,margin:'0 auto'}}>
       <h1>{window.toolClient==='codex'?'Codex':'pi'}</h1><p>客户端注入</p>
       <button className="button" onClick={()=>{window.appliedToolModes={...window.toolModes};window.renderToolInjection();}}>同步接入</button>
@@ -88,6 +88,14 @@ test('renderer: prediction compatibility switch is explicit and disabled in acco
   assert.deepEqual(call,['client-injection','codex',{excludedProviders:[],predictionCompatibility:true}]);
   await page.evaluate(()=>window.mountInjection(true));assert.equal(await toggle.getAttribute('aria-checked'),'true');
   await page.evaluate(()=>window.mountInjection(true,true));assert.equal(await toggle.isDisabled(),true);
+});
+test('renderer: old prediction bindings remain actionable separately from the enabled switch',async()=>{
+  await page.evaluate(()=>window.mountInjection(true));
+  await page.getByText('旧对话预测待修复 · 2 个',{exact:true}).waitFor();
+  const repair=page.getByRole('button',{name:'修复旧对话预测',exact:true});await repair.click();
+  assert.ok((await page.evaluate(()=>window.calls)).some(call=>call[0]==='codex-prediction-repair'));
+  await page.evaluate(()=>window.mountInjection(true,false,false));assert.equal(await repair.isDisabled(),true);
+  await page.evaluate(()=>window.mountInjection(true,true));assert.equal(await repair.count(),0);
 });
 
 test('renderer: Codex injection model menu saves tool choices, retries failures and waits for sync',async()=>{

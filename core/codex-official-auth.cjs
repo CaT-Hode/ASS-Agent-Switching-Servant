@@ -68,6 +68,12 @@ class CodexOfficialAuth {
   constructor(codexDir, { refresh = refreshNative, now = Date.now } = {}) {
     Object.assign(this, { codexDir, refresh, now }); this.pending = null;
   }
+  // Read-only snapshot of the current grant for local request authentication.
+  // Never refreshes: the native client owns rotation, and a refresh here would
+  // duplicate its network work and race its own auth.json write.
+  currentAccessToken() {
+    try { return read(path.join(this.codexDir, 'auth.json')).access_token || ''; } catch { return ''; }
+  }
   async headers({ signal } = {}) {
     const file = path.join(this.codexDir, 'auth.json');
     let grant;

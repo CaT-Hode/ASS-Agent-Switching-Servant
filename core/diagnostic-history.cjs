@@ -3,6 +3,7 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { atomic } = require("./config.cjs");
 const { modelKey } = require("./model-inspection.cjs");
+const { savedFailure } = require("./diagnostic-failure.cjs");
 
 function officialIdentity(auth) {
   const bearer = auth?.authorization;
@@ -81,8 +82,12 @@ function normalizeResult(result) {
     if (Number.isFinite(result[key]) && result[key] >= 0) metrics[key] = result[key];
   if (Number.isInteger(result.httpStatus) && result.httpStatus >= 100 && result.httpStatus <= 599)
     metrics.httpStatus = result.httpStatus;
+  if (result.httpStatus === null) metrics.httpStatus = null;
+  if (Number.isInteger(result.localStatus) && result.localStatus >= 100 && result.localStatus <= 599)
+    metrics.localStatus = result.localStatus;
   if (["connect", "headers", "stream", "complete"].includes(result.phase)) metrics.phase = result.phase;
   if (["native", "router"].includes(result.route)) metrics.route = result.route;
+  const failure = !result.ok && savedFailure(result);
   return {
     providerId: result.providerId,
     model: result.model,
@@ -95,6 +100,7 @@ function normalizeResult(result) {
     message: result.ok
       ? nativeProtocol ? "连接成功 · 完整流式响应" : "HTTP 200 · response.completed"
       : failureMessage(result.message),
+    ...(failure || {}),
   };
 }
 
@@ -156,7 +162,8 @@ class DiagnosticHistory {
         status: interrupted ? "cancelled" : e.status,
         message: interrupted ? "上次测试被中断" : e.status === "failed" ? failureMessage(e.message)
           : e.status === "passed" ? "连接成功 · 完整流式响应" : e.status === "skipped" ? "上次测试未发送请求" : "已取消",
-        ...(Number.isFinite(e.ms) && e.ms >= 0 ? { ms: e.ms } : {}) }];
+        ...(Number.isFinite(e.ms) && e.ms >= 0 ? { ms: e.ms } : {}),
+        ...(e.status === "failed" ? savedFailure(e) || {} : {}) }];
     });
     return { running: false, stopping: false, startedAt: input.startedAt,
       ...(Number.isFinite(Date.parse(input.finishedAt)) ? { finishedAt: input.finishedAt } : {}),

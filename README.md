@@ -6,6 +6,8 @@
 
 ASS（Agent-Switching-Servant）是你的 Windows 桌面 AI 路由与账户助手。把模型、API 凭据与官方授权放到一个独立窗口，切换客户端时不必反复搬配置。关闭窗口后继续在托盘运行。
 
+v0.4.3 增加旧 Codex 对话的预测绑定修复，用量按多级模型名的最后一级合并；包含诊断失败分类、供应商专用 HTTPS DNS 和无账号旧对话认证修复。详见 [v0.4.3](docs/RELEASE-v0.4.3.md)。可更新下次启动入口并保持当前 ASS 运行。
+
 v0.3.40 将太阳光线旋转速度降为此前的三分之一，保留加强后的波纹。累计更新包含 Codex 专用 HTTPS 启动通道、统一桌面识别、全部注入刷新与主题滑动修复；主题资源已提炼为 `best-light-dark-switching`。详见 [v0.3.40](docs/release-v0.3.40.md)、[v0.3.39](docs/release-v0.3.39.md) 和 [v0.3.38](docs/release-v0.3.38.md)。本机可使用 `node scripts/local-release.cjs install --keep-running --json` 仅更新下次启动入口，不关闭当前进程或替换其正在使用的资源。
 
 v0.3.26 修复 Codex 订阅额度耗尽时连带禁止第三方模型发送新消息，采用本机网关认证并保留原有 OAuth。详见 [v0.3.26 发布说明](docs/release-v0.3.26.md)。客户端同步与续聊恢复见 [v0.3.25](docs/release-v0.3.25.md)，统一 128K 默认输出见 [v0.3.24](docs/release-v0.3.24.md)，关于页 SVG 动画见 [v0.3.23](docs/release-v0.3.23.md)，从当前实现提炼的可复用主题见 [best-light-dark-switching skill](skills/best-light-dark-switching/SKILL.md)。
@@ -19,7 +21,7 @@ v0.3.5 的 Codex 跨供应商历史思考项及运行中归档删除修复继续
 - 在“供应商与模型”导出可重新导入的供应商配置。默认移除 API 密钥和额外请求头；可主动选择包含密钥，保存前显示明文泄露警告。OAuth 令牌、客户端账户与本地路由凭据不在导出范围。
 - Codex 官方请求与第三方 API 严格分流；第三方失败不会自动切到官方账户。
 - 模型自动检测 Responses / Anthropic Messages / Chat Completions，逐项检查并记录三种协议；按客户端选择实测协议，兼容接入转换请求、流式回复与工具历史。协议结果按模型长期保存、不按时间过期，支持情况标记在模型行；普通接入不发起检测。临时 502 不抹掉此前成功记录，点闪电可手动更新；取消或限流会停止剩余探测。
-- Codex 桌面端 / Claude Code 可在模型接入后分别启用“无账号启动”，仅使用已注入模型，不需要官方 OAuth；原有登录保留。CC 开启后直接在系统终端运行 `claude` 也生效，关闭时恢复原生配置字段；Codex 已运行的窗口需重启。Claude Code 的自定义模型列表需要 2.1.242+。
+- Codex 桌面端 / Claude Code 可在模型接入后分别启用“无账号启动”，仅使用已注入模型，不需要官方 OAuth；原有登录保留。CC 开启后直接在系统终端运行 `claude` 也生效，关闭时恢复原生配置字段；Codex 已运行的窗口需重启。Codex 旧对话仍保留创建时的 provider 时，见“接入开关与安全关闭”中的本机认证说明；没有本机官方登录凭据时请新建对话。Claude Code 的自定义模型列表需要 2.1.242+。
 - 通过 Electron / Chromium 网络栈使用 Windows 信任证书和系统代理，不关闭 TLS 校验。
 - 按供应商、模型名称推导上下文默认值，支持手动覆盖。
 - 双滑块选择 `low / medium / high / xhigh / max / ultra` 范围，也可逐项勾选。非 GPT 模型默认不启用 ultra。
@@ -68,7 +70,7 @@ ASS 备份并向 `%USERPROFILE%\.codex\config.toml` 写入唯一的 `ASS` provid
 
 若报错 `The 'aimami_relay_...::...' model is not supported when using Codex with a ChatGPT account`，说明带本地路由前缀的模型名进入了官方通道，不代表这个第三方模型需要 ChatGPT 订阅。该前缀也可能只是导入后保留的供应商 ID，不能据此判断 AiMaMi 正在接管。先确认实际运行的 ASS 版本和可执行文件位置，再同步接入、重启 Codex，并在新会话选择 `ASS_...::...` 模型。源码已更新不代表旧发布目录中的 EXE 已更新。ASS 同时设置自定义 provider 和内置 OpenAI 的本地入口，独立 OAuth 账户启动配置也遵循此规则；未知或已删除的命名空间只在本地报错，不回退到官方。
 
-Codex 唯一入口为 `http://127.0.0.1:25819/clients/ASS/v1`（端口随本机设置）。旧 `clients/codex/v1` 和根 `/v1` 入口已删除。重同步后需要重启客户端；保留旧 provider 的历史会话不会由 ASS 改写，应改用新会话。ASS 不为迁移强行关闭正在运行的客户端。
+Codex 唯一入口为 `http://127.0.0.1:25819/clients/ASS/v1`（端口随本机设置）。旧 `clients/codex/v1` 和根 `/v1` 入口已删除。普通同步不会改写旧对话的 provider，仍经 `openai_base_url` 进入本机路由。启用“提示词预测兼容”后，旧 ASS 对话需在 Codex 退出时使用“修复旧对话预测”，或确认重启 Codex 并更新接入；原模型和聊天内容保留。ASS 不为迁移自动关闭客户端。
 
 从第三方 Responses 模型切回官方 GPT 时，ASS 只在发往 ChatGPT Codex 后端的请求副本中移除 `content` 非空的 `reasoning` 项及该项携带的供应商加密状态，避免 `Invalid 'input[…].content': array too long`。正常问答、工具调用及其结果、图片、assistant phase 和内容为空的官方思考状态保持不变；第三方原生 Responses 请求和本地对话日志不改动。该规则依据后端输入结构，不猜测任意不透明密文的来源，也不自动重试失败请求。
 
@@ -89,6 +91,8 @@ Claude 桌面版会按模型 ID 中出现的供应商名称过滤非 Anthropic �
 ### 接入开关与安全关闭
 
 Codex 常规接入使用本机网关认证，避免桌面端在 ChatGPT 额度耗尽时连带禁止第三方模型发送消息。官方 OAuth 文件原样保留；普通接入仍可请求官方模型，由 ASS 按请求读取当前官方授权并如实返回额度限制。桌面端会显示自定义 API 模式，订阅和余额在 ASS 的账户卡片查看；依赖桌面 ChatGPT 登录的云端功能在关闭接入后恢复。旧版升级后重新同步 Codex 接入，并完整退出、重新打开 Codex；ASS 不自动关闭客户端。
+
+Codex 的对话会记录创建时的 provider，切换接入方式本身不会改写已有对话。无账号启动把全局配置切到 ASS provider 与本机令牌后，旧对话若仍属于内置 OpenAI provider，会继续携带本机保存的官方登录凭据向 ASS 发起请求；ASS 只用它确认请求来自本机 Codex，不转发该凭据、不读取官方额度，且仍只允许已注入模型，官方模型请求照旧拒绝。没有可读的官方登录凭据时，这类旧对话需在 Codex 中新建后才能使用无账号模型；新建对话直接使用本机令牌。仅重启客户端不会改变已有对话绑定，预测兼容修复须使用专用操作。
 
 Claude 桌面 Gateway 默认写入 `coworkEgressAllowedHosts: ["*"]`，恢复 Cowork / 桌面 Code 的工具联网，避免第三方模式默认仅放行本机推理端点而导致 Git、网页读取及安装依赖返回 403。此选项会放开工具出网沙箱限制，但不改变 ASS 的本机监听与推理鉴权；网页读取仍受 Claude 的私网限制。显式保存的域名白名单（或空列表）在后续模型同步中保留。旧版 ASS 本地配置只在新版中确认同步接入时升级，不在后台改写。退出恢复仍只撤回 ASS 自己的配置项，不覆盖其他配置或组织策略。修改生效需要完全退出并重新打开 Claude，再开始新会话，无需重启 ASS。详见 [Claude 官方出网配置](https://claude.com/docs/third-party/claude-desktop/configuration#coworkegressallowedhosts)。
 

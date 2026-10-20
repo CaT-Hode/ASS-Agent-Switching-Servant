@@ -150,7 +150,7 @@ function normalizeProvider(raw, officialModels = []) {
     baseUrl: url.toString().replace(/\/$/, ""),
     apiKey: String(raw.apiKey || "").trim(),
     wireApi,
-    network: raw.network === "direct" ? "direct" : "system",
+    network: ["direct", "direct-doh"].includes(raw.network) ? raw.network : "system",
     extraHeaders: normalizeHeaders(raw.extraHeaders),
     enabled: raw.enabled !== false,
   };

@@ -40,6 +40,8 @@ export function ModelCheckButton({ provider, model, state, act, busy }) {
       title={
         result
           ? result.message +
+            (result.failure?.code ? ` · ${result.failure.code}` : "") +
+            (result.httpStatus ? ` · 上游 HTTP ${result.httpStatus}` : result.failure ? " · 未收到上游 HTTP" : "") +
             " · 上次测试：" +
             exactTime(result.time) +
             ` · 总耗时 ${Math.round(result.ms)} ms` +

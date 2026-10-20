@@ -62,12 +62,20 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
       </select>
     </label>}
     {client.id === 'codex' && <div className="accountless-control">
-      <div><strong>提示词预测兼容（实验）</strong><small>需 Codex 已登录并开放该功能；更新接入后在新对话中生效。</small></div>
+      <div><strong>提示词预测兼容（实验）</strong><small>更新接入并重新加载 Codex 后，新对话采用预测通道。旧对话需单独修复；仍需官方功能开放与模型支持。</small></div>
       <button type="button" role="switch" className="provider-injection-switch" aria-label="提示词预测兼容"
         aria-checked={injection.predictionCompatibility === true} disabled={!!busy || state.connections.busy || connection?.accountless || !officialModels.length}
         onClick={() => act('prediction-compatibility', () => api.call('client-injection', client.id, {
           excludedProviders: [...excluded], predictionCompatibility: !injection.predictionCompatibility,
         }))}><i /></button>
+    </div>}
+    {client.id === 'codex' && injection.predictionCompatibility && !connection?.accountless &&
+      (connection?.resumeRecovery?.predictionCount > 0 || connection?.resumeRecovery?.pending) && <div className="accountless-control">
+      <div><strong>旧对话预测待修复{connection.resumeRecovery.predictionCount > 0 ? ` · ${connection.resumeRecovery.predictionCount} 个` : ''}</strong>
+        <small>任务结束后正常退出 Codex，再点修复；或在更新接入时确认重启。保留原模型与聊天内容，ASS 保持运行。</small></div>
+      <button className="button" disabled={!!busy || state.connections.busy || !connection.predictionCompatibility || !connection.applied}
+        title={!connection.predictionCompatibility || !connection.applied ? '请先更新接入以应用预测兼容' : '仅修复旧对话的预测通道；请先正常退出 Codex'}
+        onClick={() => act('prediction-repair', () => api.call('codex-prediction-repair'))}>修复旧对话预测</button>
     </div>}
     {client.id === 'codex' && injection.models.some(m => m.protocol === 'openai-responses') && <p className="codex-tool-mode-hint">
       展开供应商，在模型菜单中设置工具兼容。工具调用变成普通文字时可切换“兼容模式”；更改后同步接入生效。

@@ -29,6 +29,46 @@ function fixture(t, assertIdle = async () => {}) {
   const handoff = new CodexSessionHandoff({codexDir:codex,dataDir:data,crypto:crypt,config,officialModels:()=>[{slug:'gpt-6.1-sol'}],assertIdle});
   return {root,codex,data,id,file,database,original,config,handoff};
 }
+function predictionRoute(f) {
+  const catalog = { models: [{ slug: codexModelId('provider','mimo') }] };
+  atomic(f.config.catalog, JSON.stringify(catalog));
+  const prepared=f.config.prepareAttach({model:codexModelId('provider','mimo'),effort:'xhigh'},'synthetic',true,true);
+  atomic(f.config.record,JSON.stringify({replaced:prepared.replaced,blocks:prepared.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g)}));
+  atomic(f.config.file,prepared.text);
+}
+
+test('prediction repair changes only owned provider metadata and preserves model, history and archive identity',async t=>{
+  const f=fixture(t);predictionRoute(f);
+  const tail=fs.readFileSync(f.file,'utf8').split('\n').slice(1).join('\n');
+  const beforeConfig=fs.readFileSync(f.config.file),beforeCatalog=fs.readFileSync(f.config.catalog);
+  const db=new DatabaseSync(f.database);db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?)').run('independent','other',codexModelId('provider','mimo'),'missing','independent',0,101);db.close();
+  assert.equal(f.handoff.status().predictionCount,1);
+  assert.equal((await f.handoff.restorePrediction()).count,1);
+  assert.equal(fs.readFileSync(f.file,'utf8').split('\n').slice(1).join('\n'),tail);
+  const check=new DatabaseSync(f.database,{readOnly:true}),row=check.prepare('SELECT * FROM threads WHERE id=?').get(f.id);
+  assert.equal(check.prepare('SELECT model_provider FROM threads WHERE id=?').get('independent').model_provider,'other');check.close();
+  assert.equal(row.model_provider,'openai');assert.equal(row.model,codexModelId('provider','mimo'));
+  assert.equal(row.title,'preserve title');assert.equal(row.archived,1);assert.equal(row.updated_at,100);
+  assert.deepEqual(fs.readFileSync(f.config.file),beforeConfig);assert.deepEqual(fs.readFileSync(f.config.catalog),beforeCatalog);
+  assert.equal(fs.readdirSync(path.join(f.data,'backups')).filter(n=>n.startsWith('codex-prediction-')).length,1);
+  assert.equal((await f.handoff.restorePrediction()).count,0);
+});
+
+test('prediction repair refuses unsynced/accountless routes and live Codex without changing history',async t=>{
+  const f=fixture(t,async()=>{throw Error('Codex running');}),before=fs.readFileSync(f.file);
+  await assert.rejects(f.handoff.restorePrediction(),/同步普通 OAuth/);
+  predictionRoute(f);await assert.rejects(f.handoff.restorePrediction(),/running/);
+  assert.deepEqual(fs.readFileSync(f.file),before);assert.equal(fs.existsSync(f.handoff.journal),false);
+  f.config.attach({model:codexModelId('provider','mimo'),effort:'medium'},'synthetic',false);
+  await assert.rejects(f.handoff.restorePrediction(),/无账号模式/);
+});
+
+test('prediction repair rolls back a file failure and detects concurrent history writes',async t=>{
+  let calls=0,file;const f=fixture(t,async()=>{if(++calls===2)fs.appendFileSync(file,'concurrent-tail\n');});file=f.file;predictionRoute(f);
+  await assert.rejects(f.handoff.restorePrediction(),/同时被修改/);
+  assert.equal(f.handoff.status().predictionCount,1);assert.ok(fs.readFileSync(file,'utf8').endsWith('concurrent-tail\n'));
+  assert.equal(fs.existsSync(f.handoff.journal),true);
+});
 test('detach restores provider, index and resume selection without rewriting messages, tools or archive state',async t=>{
   const f=fixture(t);assert.equal(f.handoff.status().count,1);
   const result=await f.handoff.restore();assert.equal(result.count,1);

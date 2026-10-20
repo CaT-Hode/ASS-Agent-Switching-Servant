@@ -10,7 +10,8 @@ fs.mkdirSync(codex); fs.mkdirSync(data);
 const binaries = path.join(process.env.LOCALAPPDATA,'OpenAI','Codex','bin');
 const executable = process.env.ASS_QA_CODEX_BIN || fs.readdirSync(binaries).map(d=>path.join(binaries,d,'codex.exe')).find(f=>fs.existsSync(f));
 const requests = []; let processHandle, sequence=0;
-const oauth = process.env.ASS_QA_OAUTH === '1';
+const prediction = process.env.ASS_QA_PREDICTION === '1';
+const oauth = prediction || process.env.ASS_QA_OAUTH === '1';
 function launch() {
   const env={...process.env,CODEX_HOME:codex,OPENAI_API_KEY:'synthetic-local-key'};
   for(const key of ['CODEX_API_KEY','CODEX_ACCESS_TOKEN','OPENAI_IDENTITY_TOKEN_FILE'])delete env[key];
@@ -24,7 +25,7 @@ function launch() {
   const close=async()=>{child.stdin.end();await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{child.kill();reject(Error('fixture app-server failed to exit'));},5000);child.once('exit',()=>{clearTimeout(timer);resolve();});});if(processHandle===child)processHandle=null;};
   return {rpc,completed,close,notify:(method,params)=>child.stdin.write(JSON.stringify({method,params})+'\n')};
 }
-const nativeModels=makeCatalog([],[]).models.map(m=>({...m,slug:'gpt-6.1-sol',display_name:'GPT fixture'}));
+const nativeModels=makeCatalog([],[]).models.map(m=>({...m,slug:'gpt-6.1-sol',display_name:'GPT fixture',base_instructions:'You are a fixture assistant. Use the provided tools.'}));
 const server=http.createServer(async(req,res)=>{
   if(req.method==='GET'){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({models:nativeModels,data:[{id:'gpt-6.1-sol'}]}));return;}
   const chunks=[];for await(const c of req)chunks.push(c);let bytes=Buffer.concat(chunks);
@@ -33,7 +34,8 @@ const server=http.createServer(async(req,res)=>{
   if (oauth && body.input?.some(item=>item.type==='reasoning'&&item.content?.length)) {
     res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:'foreign reasoning was replayed to official backend'}}));return;
   }
-  const message={type:'message',id:'msg_fixture_'+requests.length,role:'assistant',phase:'final_answer',status:'completed',content:[{type:'output_text',text:'fixture answer',annotations:[]}]};
+  const text=body.text?.format?.type==='json_schema'?JSON.stringify({suggestion:'fixture suggestion'}):'fixture answer';
+  const message={type:'message',id:'msg_fixture_'+requests.length,role:'assistant',phase:'final_answer',status:'completed',content:[{type:'output_text',text,annotations:[]}]};
   const response={id:'resp_fixture_'+requests.length,object:'response',created_at:Math.floor(Date.now()/1000),model:body.model,status:'completed',output:[message],usage:{input_tokens:6,output_tokens:4,total_tokens:10,input_tokens_details:{cached_tokens:0},output_tokens_details:{reasoning_tokens:0}}};
   const events=[{type:'response.created',response:{...response,status:'in_progress',output:[]}},
     {type:'response.output_item.added',output_index:0,item:{...message,status:'in_progress',content:[]}},
@@ -55,22 +57,37 @@ server.on('upgrade',(_,socket)=>socket.end('HTTP/1.1 426 Upgrade Required\r\nCon
   const provider=normalizeProvider({id:'fixture',baseUrl:'https://example.test/v1',apiKey:'synthetic',models:[{model:'mimo',wireApi:'openai-responses'}]});
   const config=new ConfigManager(codex,data,port);atomic(config.catalog,JSON.stringify(makeCatalog(nativeModels,[provider])));
   config.attach({model:codexModelId(provider.id,'mimo'),effort:'medium'});
-  let client=launch();await client.rpc('initialize',{clientInfo:{name:'ass_resume_qa',version:'1'}});client.notify('initialized',{});
+  let client=launch();await client.rpc('initialize',{clientInfo:{name:'ass_resume_qa',version:'1'},capabilities:{experimentalApi:true}});client.notify('initialized',{});
   const started=await client.rpc('thread/start',{cwd:out,approvalPolicy:'never',sandbox:'read-only'});const id=started.thread.id;
   const first=await client.rpc('turn/start',{threadId:id,input:[{type:'text',text:'original fixture question'}]});await client.completed(first.turn.id);
   await client.close();
-  if (oauth) {
+  if (oauth && !prediction) {
     const {DatabaseSync}=require('node:sqlite'),db=new DatabaseSync(path.join(codex,fs.readdirSync(codex).find(f=>/^state_\d+\.sqlite$/.test(f))),{readOnly:true});
     const file=db.prepare('SELECT rollout_path FROM threads WHERE id=?').get(id).rollout_path;db.close();
     fs.appendFileSync(file,JSON.stringify({timestamp:new Date().toISOString(),type:'response_item',payload:{type:'reasoning',summary:[],content:[{type:'reasoning_text',text:'foreign reasoning fixture'}],encrypted_content:'foreign-encrypted-fixture'}})+'\n');
   }
   const handoff=new CodexSessionHandoff({codexDir:codex,dataDir:data,crypto:crypt,config,officialModels:()=>nativeModels,
     assertIdle:async()=>{if(processHandle&&processHandle.exitCode===null)throw Error('fixture Codex running');}});
-  assert.ok(handoff.status().count>0);const migrated=await handoff.restore();config.detach();
-  client=launch();await client.rpc('initialize',{clientInfo:{name:'ass_resume_qa',version:'1'}});client.notify('initialized',{});
-  const resumed=await client.rpc('thread/resume',{threadId:id});assert.equal(resumed.thread.modelProvider,'openai');assert.equal(resumed.model,'gpt-6.1-sol');
+  assert.ok(handoff.status().count>0);
+  if(prediction){
+    const prepared=config.prepareAttach({model:codexModelId(provider.id,'mimo'),effort:'medium'},'synthetic',true,true);
+    atomic(config.record,JSON.stringify({replaced:prepared.replaced,blocks:prepared.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g)}));
+    atomic(config.file,prepared.text);
+  }
+  const migrated=await (prediction?handoff.restorePrediction():handoff.restore());if(!prediction)config.detach();
+  client=launch();await client.rpc('initialize',{clientInfo:{name:'ass_resume_qa',version:'1'},capabilities:{experimentalApi:true}});client.notify('initialized',{});
+  const resumed=await client.rpc('thread/resume',{threadId:id});assert.equal(resumed.thread.modelProvider,'openai');
+  const expectedModel=prediction?codexModelId(provider.id,'mimo'):'gpt-6.1-sol';assert.equal(resumed.model,expectedModel);
   const second=await client.rpc('turn/start',{threadId:id,input:[{type:'text',text:'continue fixture question'}]});await client.completed(second.turn.id);
-  const last=requests.findLast(body=>Array.isArray(body.input)&&typeof body.model==='string');assert.equal(last?.model,'gpt-6.1-sol');
+  const last=requests.findLast(body=>Array.isArray(body.input)&&typeof body.model==='string');assert.equal(last?.model,expectedModel);
   assert.ok(JSON.stringify(last.input).includes('original fixture question'));assert.ok(JSON.stringify(last.input).includes('fixture answer'));
-  await client.close();console.log(JSON.stringify({passed:true,migrated:migrated.count,modelProvider:resumed.thread.modelProvider,model:resumed.model,historyRetained:true,oauth,realCloudCalls:0,out}));
+  if(prediction){
+    const fork=await client.rpc('thread/fork',{threadId:id,experimentalPredictionMode:true,ephemeral:true,excludeTurns:true});
+    assert.equal(fork.thread.modelProvider,'openai');
+    const schema={type:'object',properties:{suggestion:{type:['string','null']}},required:['suggestion'],additionalProperties:false};
+    const predicted=await client.rpc('turn/start',{threadId:fork.thread.id,input:[{type:'text',text:'Predict the next fixture message'}],outputSchema:schema});
+    await client.completed(predicted.turn.id);
+    assert.equal(requests.at(-1).text?.format?.type,'json_schema');
+  }
+  await client.close();console.log(JSON.stringify({passed:true,migrated:migrated.count,modelProvider:resumed.thread.modelProvider,model:resumed.model,historyRetained:true,oauth,predictionFork:prediction,realCloudCalls:0,out}));
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{processHandle?.kill();server.closeAllConnections();server.close();});

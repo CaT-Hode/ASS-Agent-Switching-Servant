@@ -219,7 +219,9 @@ test("in-flight requests block a mode change and configuration changes invalidat
   f.manager.setInjection("codex", { excludedProviders: ["relay"] });
   await assert.rejects(f.connections.apply({ ticket: next.ticket, mode: "safe", acknowledged: true }), /已变化/);
 });
-test("accountless router rejects OAuth, non-injected and subscription models before network access; discovery needs its own credential", async t => {
+// Unknown OAuth is still rejected. The current native Codex grant is only
+// accepted for retained conversations; see codex-accountless-native-credential.
+test("accountless router rejects unknown OAuth, non-injected and subscription models before network access; discovery needs its own credential", async t => {
   const f = fixture(t); await f.apply("codex"); await f.apply("codex", true); await f.apply("claude"); await f.apply("claude", true);
   const base = `http://127.0.0.1:${f.router.port}`;
   const send = (client, token, model) => fetch(base + `/clients/${client === "codex" ? "ASS" : client}/v1/responses`, { method: "POST", headers: { authorization: "Bearer " + token }, body: JSON.stringify({ model, input: "OK" }) });

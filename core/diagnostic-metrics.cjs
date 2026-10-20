@@ -6,8 +6,10 @@ function diagnosticMetrics(protocol, route, clock = () => performance.now()) {
   const elapsed = () => Math.max(0, Math.round(clock() - started));
   let streamStart;
   return {
-    headers(response) {
-      values.httpStatus = response.status;
+    headers(response, { relay = false } = {}) {
+      // A local 502 may mean no upstream HTTP response was received at all.
+      values.httpStatus = relay && !response.ok ? null : response.status;
+      if (relay) values.localStatus = response.status;
       values.headersMs = elapsed();
       values.phase = "headers";
       streamStart = clock();

@@ -32,6 +32,16 @@ ASS 是独立实现，不是原产品的官方版本。界面不沿用旧产品�
 - 官方配置文档本轮获取返回 403；以上行为依据公开源码与隔离测试，不把无法打开的文档当成已验证证据。运行时验收范围由实际测试结果单独说明。
 - 0.2.5 的本机 `codex-cli 0.158.0-alpha.2.1` 隔离运行完成四条调用（含当时存在的旧别名）。0.2.6 的测试脚本仅保留内置 `openai` → 第三方 / 官方模型、`ASS` → 第三方三条当前入口；旧别名和旧地址改为拒绝断言。测试使用虚构凭据、本地 ASS 与内存上游，不验证真实上游服务，也不关闭运行中的桌面实例。
 
+## Codex 无账号模式与保留 provider 的对话（2026-10-20）
+
+- 本机 `codex-cli 0.163.0-alpha.10.2` 的隔离 `app-server`：对话在全局 provider 为内置 `openai` 时创建后，会保存该 provider；切换 ASS 配置并 `thread/resume` 后仍按保存的 provider 使用本机 ChatGPT 登录凭据。`codex exec resume` 会按当前配置重算 provider，两者行为不同，ASS 以桌面端 `app-server` 的行为为准。证据脚本 `scripts/codex-accountless-retained-qa.cjs` 使用虚构 OAuth、本地刷新模拟和内存上游，不发起云调用。
+- 该版本拒绝同名覆盖内置 provider（`model_providers contains reserved built-in provider IDs: 'openai'. Built-in providers cannot be overridden.`），因此旧对话不能靠 `[model_providers.openai]` 改成静态本机令牌。ASS 只在请求侧接受本机可读的当前官方凭据用于本机认证：凭据不转发上游、不读取官方额度，官方模型和无账号模式下的官方账户请求仍被拒绝。没有可读凭据时，旧对话需在 Codex 中新建。
+
+## Codex 旧对话预测兼容（2026-10-20）
+
+- 本机 Codex 桌面版 26.1013.4894.0 的预测实现只接受 `modelProvider === 'openai'`；已保存为 `ASS` 的对话直接返回 `unsupported_provider`。全局设置不能替代旧对话的供应商绑定；官方预测配置、模型限制和内容检查仍独立生效。
+- `ASS_QA_PREDICTION=1 node scripts/codex-session-handoff-qa.cjs` 使用当前安装的后端、临时客户端目录、虚拟 OAuth 和本地模拟服务，验证 provider-only 修复后的重载、第三方模型/上下文保留、`experimentalPredictionMode` 临时分支与 JSON schema 输出。当前分页历史的预测分支要求 `ephemeral: true` 和 `excludeTurns: true`。没有真实云调用，也没有改动本机用户对话。
+
 ## v0.1.1 官方账户与 API 入口
 
 - [OpenRouter PKCE](https://openrouter.ai/docs/guides/overview/auth/oauth)：S256、localhost 回调、`/api/v1/auth/keys` 换取 API Key。实现不是订阅 OAuth 通用移植器。

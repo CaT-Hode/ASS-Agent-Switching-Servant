@@ -46,11 +46,11 @@ function add(to, row) {
 }
 // Presentation/grouping only: retain the original IDs in native logs and the
 // encrypted usage cache. Historical router IDs are not routing aliases.
-export function usageModelName(model, client) {
-  if (typeof model !== "string") return "未标注";
-  if (client !== "codex") return model;
-  const routed = /^(?:ASS_[a-f0-9]{24}|aimami_relay_[a-f0-9]{8,64})::([^\x00-\x1f\x7f]+)$/.exec(model);
-  return routed ? routed[1] : model;
+export function usageModelName(model) {
+  if (typeof model !== "string" || /[\x00-\x1f\x7f]/.test(model)) return "未标注";
+  // Suppliers and clients can nest both provider::model and vendor/model.
+  // The usage view intentionally merges by the final model component only.
+  return model.trim().split(/::|\//).at(-1).trim() || "未标注";
 }
 export function summarize(rows, options, now = new Date()) {
   const bounds = rangeBounds(options.range, now),

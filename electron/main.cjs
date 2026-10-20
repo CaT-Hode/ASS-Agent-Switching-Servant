@@ -30,20 +30,21 @@ const {
   modelKey,
   declaredCapabilities,
   probeCapabilities,
-  inspectStream,
   discoverModels,
 } = require("../core/model-inspection.cjs");
 const { ModelDirectory } = require("../core/model-directory.cjs");
 const {
   DiagnosticHistory,
   diagnosticFingerprint,
-  failureMessage,
 } = require("../core/diagnostic-history.cjs");
 const {
   DiagnosticBatch,
   diagnosticTargets,
 } = require("../core/diagnostic-batch.cjs");
 const { diagnosticMetrics } = require("../core/diagnostic-metrics.cjs");
+const { classifyFailure } = require("../core/diagnostic-failure.cjs");
+const { inspectConnectionResponse } = require("../core/connection-diagnostic.cjs");
+const { ScopedDns } = require("../core/scoped-dns.cjs");
 const {
   OFFICIAL_SERVICES,
   serviceForProvider,
@@ -168,12 +169,20 @@ const diagnosticBatch = new DiagnosticBatch({
 });
 const iconPath = path.join(__dirname, "../public/ass-app-icon.png");
 let systemSession, directSession, testFetch;
+let scopedDns;
 const servicePort =
   testMode && /^\d+$/.test(process.env.ASS_TEST_PORT || "")
     ? Number(process.env.ASS_TEST_PORT)
     : 25819;
 async function upstream(url, init, network = "system") {
   if (testMode && testFetch) return testFetch(url, init, network);
+  if (network === "direct-doh") {
+    scopedDns ||= new ScopedDns({
+      sessionFor: name => session.fromPartition(name),
+      dnsFetch: (address, options) => systemSession.fetch(address, options),
+    });
+    return scopedDns.fetch(url, init);
+  }
   return (network === "direct" ? directSession : systemSession).fetch(url, {
     ...init,
     credentials: "omit",
@@ -605,7 +614,7 @@ async function diagnose(providerId, modelName, signal) {
     AbortSignal.timeout(90000),
   ]);
   diagnosticControllers.set(key, controller);
-  let result;
+  let result, failure;
   const model = official ? name : codexModelId(providerId, name);
   const body = {
     model,
@@ -654,16 +663,7 @@ async function diagnose(providerId, modelName, signal) {
         signal: requestSignal,
       },
     );
-    metrics.headers(r);
-    if (!r.ok) {
-      await r.body?.cancel();
-      throw new Error(
-        "HTTP " + r.status + "；请检查该模型的凭据、协议和网络出口",
-      );
-    }
-    const inspected = await inspectStream(r.body, "openai-responses", undefined, metrics.observe);
-    if (!inspected.completed || !inspected.text)
-      throw new Error("未收到完整结束事件");
+    await inspectConnectionResponse(r, 'openai-responses', metrics, { relay: true, signal: requestSignal });
     result = {
       providerId,
       ok: true,
@@ -674,6 +674,7 @@ async function diagnose(providerId, modelName, signal) {
     };
     }
   } catch (error) {
+    failure = classifyFailure(error, { httpStatus: metrics.finish(false).httpStatus });
     result = {
       providerId,
       ok: false,
@@ -685,13 +686,14 @@ async function diagnose(providerId, modelName, signal) {
           ? "已取消"
           : error.name === "TimeoutError"
             ? "请求超时（90 秒）"
-            : failureMessage(error.message),
+            : failure.message,
       cancelled: !!signal?.aborted || controller.signal.aborted,
     };
   } finally {
     diagnosticControllers.delete(key);
   }
   Object.assign(result, metrics.finish(result.ok));
+  if (failure && !result.cancelled) Object.assign(result, failure);
   if (result.ok && !signal?.aborted && !controller.signal.aborted && native?.client && native?.account) {
     const current = nativeOfficialProvider(native.client, native.account);
     if (current?.apiKey === native.provider.apiKey &&
@@ -1067,6 +1069,7 @@ else {
         allowClient: (id) => connections.allow(id),
         onActivity: push,
         getOfficialAuth: options => codexOfficialAuth.headers(options),
+        getNativeCredential: () => codexOfficialAuth.currentAccessToken(),
       });
       codexWorkspaceRelay = new CodexWorkspaceRelay({ dataDir, crypto: safeStorage, router });
       restarter = new ClientRestart({
@@ -1099,7 +1102,7 @@ else {
           codexDir, dataDir, crypto: safeStorage, config, officialModels: () => store.officialModels,
           assertIdle: testMode ? async () => {} : async () => {
             try { await require('../core/conversation-delete-guard.cjs').assertDeletionIdle([{ harness: 'codex' }]); }
-            catch (error) { throw Error('请先关闭 Codex，或选择强制关闭 / 重启，再恢复官方续聊。', { cause: error }); }
+            catch (error) { throw Error('请在任务结束并正常退出 Codex 后修复对话绑定，或在同步接入时确认重启 Codex；ASS 保持运行。', { cause: error }); }
           },
         }),
       });
@@ -1220,6 +1223,10 @@ else {
         return connections.preview(scope, enabled, quit, accountless);
       });
       register("connection-repair-preview", (scope) => connections.repairPreview(scope));
+      register("codex-prediction-repair", async () => {
+        await nativeLogin.assertIdle('codex');
+        return connections.repairPrediction();
+      });
       register("connections-refresh", () => connections.refreshAll({ assertIdle: id => nativeLogin.assertIdle(id) }));
       register("connection-repair", async (input) => {
         for (const id of connections.tickets.get(input?.ticket)?.ids || [])
@@ -1855,6 +1862,7 @@ else {
     for (const controller of probeControllers.values()) controller.abort();
     openRouterAuth?.cancel();
     router?.stop();
+    scopedDns?.close();
     void codexWorkspaceRelay?.stop();
   });
 }

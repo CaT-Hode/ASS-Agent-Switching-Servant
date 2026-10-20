@@ -27,6 +27,7 @@ const allowed = [
   "app-exit-direct",
   "connection-repair-preview",
   "connection-repair",
+  "codex-prediction-repair",
   "diagnose",
   "diagnose-all",
   "diagnose-cancel",

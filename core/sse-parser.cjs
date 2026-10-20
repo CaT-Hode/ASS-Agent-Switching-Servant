@@ -20,7 +20,7 @@ class SseParser {
           try { event = data === '[DONE]' ? { done: true } : JSON.parse(data); }
           catch { throw Error('上游 SSE 事件不是有效 JSON'); }
           if (!event || typeof event !== 'object' || Array.isArray(event)) throw Error('上游 SSE 事件格式无效');
-          assertTaskOutcome(event);
+          assertTaskOutcome(event, { layer: 'stream' });
           if (event.error || ['error', 'response.failed'].some(value => value === event.type || value === type)) throw Error('上游流返回失败事件，请检查供应商状态或模型参数');
           frames.push({ event, raw: lines.join('\n') + '\n\n' });
           if (terminal(event)) this.ended = true;

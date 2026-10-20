@@ -143,7 +143,8 @@ test("native direct checks require visible text plus protocol terminal event, ke
     };
     assert.deepEqual(await checkNativeConnection(context, fetch), { message: "连接成功 · 完整流式响应", protocol });
     await assert.rejects(checkNativeConnection(context, async () => new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')), /完整结束/);
-    await assert.rejects(checkNativeConnection(context, async () => new Response("private-upstream-body", { status: 502 })), /^Error: HTTP 502$/);
+    await assert.rejects(checkNativeConnection(context, async () => new Response("private-upstream-body", { status: 502 })), e =>
+      e.diagnostic?.failure.kind === "server" && e.diagnostic.httpStatus === 502 && !e.message.includes("private-upstream-body"));
   }
 });
 

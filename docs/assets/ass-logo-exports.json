@@ -1,5 +1,5 @@
 {
-  "version": "0.3.31",
+  "version": "0.4.3",
   "reference": "public/ass-logo-reference.svg",
   "spec": {
     "size": 1254,
@@ -761,15 +761,15 @@
     },
     {
       "file": "public/ass-logo.png",
-      "sha256": "4735eaf2f148a86891ba7d233ff99b2668218b27c671b80da21fddea320fd14b"
+      "sha256": "25cefb529f57e9c3d749c975265b74fa5f0f3273370e30c34dec58f211e41f86"
     },
     {
       "file": "public/ass-app-icon.png",
-      "sha256": "4735eaf2f148a86891ba7d233ff99b2668218b27c671b80da21fddea320fd14b"
+      "sha256": "25cefb529f57e9c3d749c975265b74fa5f0f3273370e30c34dec58f211e41f86"
     },
     {
       "file": "assets/ass.ico",
-      "sha256": "4d7923ed2a04ecbaee60895da1507d45a0a0982d23a4499d7a383c65775b4520"
+      "sha256": "f337f79c79de5bd4c01e0fb19382d9cee7d06459888e16d11f21af3045d55df6"
     }
   ],
   "icoSizes": [

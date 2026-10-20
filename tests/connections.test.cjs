@@ -128,6 +128,18 @@ test('failed Codex session handoff retains the provider definition and enabled r
   assert.equal(restores,1);assert.equal(f.config.detachCalls,0);assert.equal(f.router.stops,0);
   assert.equal(f.connections.enabled.codex,true);assert.equal(f.config.attached,true);
 });
+test('prediction repair preserves routing and refuses active requests or unsynced modes',async t=>{
+  let repaired=0;const proxy={clients:{codex:{predictionCompatibility:true}},preflight:()=>{},supports:()=>true,
+    fingerprint:()=>'',status:()=>({applied:true})};
+  const f=connectionFixture(t,{proxyConfig:proxy,sessionHandoff:{status:()=>({predictionCount:2}),restorePrediction:async()=>{repaired++;return {count:2};}}});
+  f.connections.enabled.codex=true;f.config.attached=f.config.managed=true;
+  f.router.active.codex=1;await assert.rejects(f.connections.repairPrediction(),/仍有请求/);assert.equal(repaired,0);
+  f.router.active.codex=0;proxy.clients.codex.accountless=true;
+  await assert.rejects(f.connections.repairPrediction(),/同步普通 OAuth/);proxy.clients.codex.accountless=false;
+  const result=await f.connections.repairPrediction();assert.equal(result.count,2);assert.equal(repaired,1);
+  assert.equal(f.config.detachCalls,0);assert.equal(f.router.stops,0);assert.equal(f.processes.stopCalls.length,0);
+  assert.equal(f.connections.busy,false);assert.equal(f.connections.blocked.size,0);
+});
 
 test("initial all-false connection state is persisted and restart stays closed without starting router", async (t) => {
   const f = connectionFixture(t);
@@ -244,6 +256,20 @@ test("connection enable and disable restart only with explicit per-operation opt
   await f.connections.apply({ ticket: off.ticket, mode: "safe", acknowledged: true, restart: true }); assert.deepEqual(r.calls, ["validate", "stop", "launch"]);
   r.calls = []; const on = await f.connections.preview("codex", true);
   await f.connections.apply({ ticket: on.ticket, mode: "safe", acknowledged: true, restart: true }); assert.deepEqual(r.calls, ["validate", "stop", "launch"]);
+});
+test('prediction migration runs after confirmed Codex stop and sync, before relaunch, never on ordinary sync',async t=>{
+  const order=[],r=fakeRestarter();
+  const proxy={clients:{codex:{predictionCompatibility:true}},preflight:()=>{},supports:()=>true,
+    fingerprint:()=>'',status:()=>({applied:true}),sync:()=>order.push('sync')};
+  const f=connectionFixture(t,{restarter:r,proxyConfig:proxy,sessionHandoff:{status:()=>({predictionCount:1}),
+    restorePrediction:async()=>{order.push('migrate');return {count:1};}}});
+  f.connections.enabled.codex=true;f.config.attached=f.config.managed=true;
+  r.stop=async()=>order.push('stop');r.launch=async(_plan,ready)=>{order.push('launch');ready();return {ok:true};};
+  let plan=await f.connections.preview('codex',true);
+  await f.connections.apply({ticket:plan.ticket,mode:'safe',acknowledged:true});assert.deepEqual(order,['sync']);
+  order.length=0;plan=await f.connections.preview('codex',true);
+  await f.connections.apply({ticket:plan.ticket,mode:'safe',acknowledged:true,restart:true});
+  assert.deepEqual(order,['stop','sync','migrate','launch']);assert.equal(f.router.stops,0);
 });
 test("DSH native sync reports the browser catalog refresh boundary", async (t) => {
   const nativeConfig = {

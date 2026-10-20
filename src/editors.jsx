@@ -723,6 +723,7 @@ export function ProviderEditor({
                 >
                   <option value="system">跟随系统代理</option>
                   <option value="direct">直接连接</option>
+                  <option value="direct-doh">直接连接 · HTTPS DNS（仅此供应商）</option>
                 </select>
               </Field>
               <Field

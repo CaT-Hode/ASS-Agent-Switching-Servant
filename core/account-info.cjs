@@ -318,6 +318,8 @@ function apiProfile(provider, nativeConnection = false) {
         "网络出口",
         nativeConnection
           ? "原生客户端配置"
+          : provider.network === "direct-doh"
+            ? "直连 · HTTPS DNS · 系统 CA"
           : provider.network === "direct"
             ? "直连 · 系统 CA"
             : "系统代理 · 系统 CA",

@@ -245,6 +245,9 @@ main { padding-top: 18px; }
 .diagnostic-extra summary { width: fit-content; color: var(--muted); font-size: 11px; cursor: pointer; }
 .diagnostic-extra[open] { padding-bottom: 4px; }
 .diagnostic-stale { display: block; margin-top: 10px; color: light-dark(#97601c, #f4c17b); }
+.diagnostic-failure { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--surface); }
+.diagnostic-failure strong { font-size: 12px; color: var(--ink); }
+.diagnostic-failure p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .check-model.stale { color: var(--muted); background: var(--subtle); }
 .diagnostic-progress { flex-wrap: wrap; }
 .diagnostic-progress > .diagnostic-time { flex-basis: 100%; }

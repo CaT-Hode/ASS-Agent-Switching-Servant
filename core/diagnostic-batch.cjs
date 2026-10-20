@@ -1,4 +1,5 @@
 const { modelKey } = require("./model-inspection.cjs");
+const { savedFailure, classifyFailure } = require("./diagnostic-failure.cjs");
 
 function diagnosticTargets(state, authReady) {
   return [
@@ -90,12 +91,14 @@ class DiagnosticBatch {
             message:
               signal.aborted || result.cancelled ? "已取消" : result.message,
             ms: result.ms,
+            ...(!result.ok && !result.cancelled && !signal.aborted ? savedFailure(result) || {} : {}),
           });
-        } catch {
+        } catch (error) {
           entry.status = signal.aborted ? "cancelled" : "failed";
           entry.message = signal.aborted
             ? "已取消"
             : "检测未完成，请检查模型配置或网络";
+          if (!signal.aborted) Object.assign(entry, classifyFailure(error));
         }
         this.onChange();
       }

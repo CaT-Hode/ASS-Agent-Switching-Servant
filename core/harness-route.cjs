@@ -78,8 +78,11 @@ async function forwardHarness(router, req, res) {
     const credential =
       req.headers["x-api-key"] ||
       req.headers.authorization?.replace(/^Bearer /i, "");
-    const state = router.getState(router.requests.get(req)?.client);
-    if (!authorized(credential, state.accountless ? state.localToken : router.clientToken))
+    const client = router.requests.get(req)?.client;
+    const state = router.getState(client);
+    // Accountless mode accepts the local token, plus the retained native grant
+    // for Codex conversations that still belong to the built-in provider.
+    if (!router.authorizeLocal(client, state, credential))
       throw Object.assign(
         new Error("客户端路由凭据已失效，请从 ASS 重新启动客户端"),
         { status: 401 },

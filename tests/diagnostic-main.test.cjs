@@ -15,6 +15,13 @@ test('main-process single/batch diagnostic reasons survive restart without chang
   app = await launch(); let page = await app.firstWindow(); const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.waitForSelector('h1');
+  // A headless Linux runner can render the app without a desktop secret
+  // service. This integration test persists encrypted state across restarts;
+  // keep the native Windows path mandatory rather than weakening OS crypto.
+  if (process.platform === 'linux' && !await app.evaluate(({ safeStorage }) => safeStorage.isEncryptionAvailable())) {
+    t.skip('Native credential encryption is unavailable on this headless Linux runner');
+    return;
+  }
   const results = await app.evaluate(async () => {
     const t = global.assTest;
     const codes = { auth: 'invalid_api_key', quota: 'insufficient_quota', rate: 'rate_limit_exceeded' };

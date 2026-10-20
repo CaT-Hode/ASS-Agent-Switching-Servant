@@ -18,8 +18,9 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
+      - name: Build production renderer for main-process tests
+        run: npm run build
       - if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum npm test
       - if: runner.os == 'Windows'
         run: node --test --test-concurrency=2 tests/*.test.cjs
-      - run: npm run build

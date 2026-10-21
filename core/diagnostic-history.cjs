@@ -78,7 +78,7 @@ function normalizeResult(result) {
   const nativeProtocol =
     ["openai-chat", "openai-responses", "anthropic"].includes(result.protocol) ? result.protocol : undefined;
   const metrics = {};
-  for (const key of ["headersMs", "firstEventMs", "firstTextMs", "streamMs", "eventCount", "responseBytes", "inputTokens", "outputTokens", "reasoningTokens"])
+  for (const key of ["protocolMs", "headersMs", "firstEventMs", "firstTextMs", "streamMs", "eventCount", "responseBytes", "inputTokens", "outputTokens", "reasoningTokens"])
     if (Number.isFinite(result[key]) && result[key] >= 0) metrics[key] = result[key];
   if (Number.isInteger(result.httpStatus) && result.httpStatus >= 100 && result.httpStatus <= 599)
     metrics.httpStatus = result.httpStatus;

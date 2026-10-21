@@ -12,7 +12,8 @@ export function DiagnosticDetails({ result: r }) {
     <dl className="diagnostic-measurements">
       <div title="发出检测请求至收到 HTTP 响应头；包含路由处理和上游等待"><dt>响应头</dt><dd>{timing(r.headersMs)}</dd></div>
       <div title="发出请求至第一个正文文本事件；不将握手、思考事件视为正文"><dt>首字延迟</dt><dd>{timing(r.firstTextMs)}</dd></div>
-      <div title="检测请求开始至完整响应结束或失败"><dt>总耗时</dt><dd>{timing(r.ms)}</dd></div>
+      {Number.isFinite(r.protocolMs) && <div title="寻找并验证可用上游协议的耗时"><dt>协议确认</dt><dd>{timing(r.protocolMs)}</dd></div>}
+      <div title="从点击测试至完整响应结束或失败，包含协议确认"><dt>总耗时</dt><dd>{timing(r.ms)}</dd></div>
       <div><dt>{!r.ok && !r.failure ? "HTTP（旧记录）" : "上游 HTTP"}</dt><dd>{r.httpStatus || (r.failure ? "未收到" : "—")}</dd></div>
     </dl>
     <details className="diagnostic-extra"><summary>测试详情</summary>

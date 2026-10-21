@@ -168,7 +168,7 @@ test("DeepSeek probe and native injection share its actual Messages endpoint", a
     assert.equal(init.headers["x-api-key"], f.p.apiKey); return success("anthropic");
   });
 });
-test("effective protocol reaches native configs and applied proxy snapshots without mutating a running route", async t => {
+test("verified protocol updates an applied route without publishing draft models or rewriting its snapshot", async t => {
   const f = fixture(t); await f.protocols.ensure(f.p, f.m);
   const manager = new HarnessManager(f.dataDir, () => f.store.state, [], f.store.codexDir,
     { home: path.join(f.dataDir, "home"), env: {}, protocols: f.protocols });
@@ -177,8 +177,75 @@ test("effective protocol reaches native configs and applied proxy snapshots with
   assert.equal(proxy.desired("claude").providers[0].models[0].wireApi, "anthropic");
   proxy.sync("claude");
   f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { anthropic: { status: "rejected", unsupported: true } } });
-  assert.equal(proxy.routingState("claude").providers[0].models[0].wireApi, "anthropic");
+  const before = fs.readFileSync(proxy.file);
+  f.p.models.push({ ...f.m, model: 'unpublished', enabled: true, wireApi: 'openai-chat' });
+  assert.equal(proxy.routingState("claude").providers[0].models[0].wireApi, "openai-responses");
+  assert.equal(proxy.routingState("claude").providers[0].models.length, 1);
+  assert.deepEqual(fs.readFileSync(proxy.file), before);
+  assert.equal(proxy.clients.claude.providers[0].models[0].wireApi, 'anthropic');
   assert.equal(proxy.desired("claude").providers[0].models[0].wireApi, "openai-responses");
   const native = compose("pi", manager);
   assert.ok(native.fields.some(f => f.value?.api === "openai-responses"));
+});
+
+test('connection checks stop at a completed stream and leave untested protocols unknown', async t => {
+  const f = fixture(t);
+  await f.protocols.ensure(f.p, f.m, { force: true, untilAvailable: true });
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.protocols.get(f.p, f.m).protocols['openai-responses'].status, 'passed');
+  assert.equal(f.protocols.get(f.p, f.m).protocols.anthropic, undefined);
+  assert.equal(f.protocols.get(f.p, f.m).protocols['openai-chat'], undefined);
+  f.protocols.fetcher = () => { throw Error('unused slow protocol must not be contacted'); };
+  f.calls.length = 0;
+  await f.protocols.ensure(f.p, f.m);
+  assert.equal(f.calls.length, 0);
+});
+
+test('quick recheck starts with the working protocol, falls back on failure and prefers newly confirmed evidence', async t => {
+  const f = fixture(t);
+  f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { 'openai-chat': { status: 'passed' } } });
+  await f.protocols.ensure(f.p, f.m, { force: true, untilAvailable: true });
+  assert.deepEqual(f.calls.map(u=>new URL(u).pathname), ['/v1/chat/completions']);
+  f.calls.length = 0;
+  f.protocols.fetcher = url => { f.calls.push(url); return url.endsWith('completions') ? Response.json({}, { status: 502 }) : success('openai-responses'); };
+  await f.protocols.ensure(f.p, f.m, { force: true, untilAvailable: true });
+  assert.deepEqual(f.calls.map(u=>new URL(u).pathname), ['/v1/chat/completions', '/v1/responses']);
+  assert.equal(f.protocols.select(f.p, f.m, 'codex'), 'openai-responses');
+  f.protocols.fetcher = url => url.endsWith('responses') ? Response.json({}, { status: 502 }) : success('anthropic');
+  await f.protocols.ensure(f.p, f.m, { force: true, untilAvailable: true });
+  assert.equal(f.protocols.get(f.p, f.m).protocols['openai-responses'].status, 'passed', 'retain previous success as history');
+  assert.equal(f.protocols.select(f.p, f.m, 'codex'), 'anthropic', 'a current completed stream wins over retained unknown evidence');
+});
+
+test('a successful check repairs the actual Codex Gemini route but never crosses changed credentials or headers', async t => {
+  const f = fixture(t);
+  f.m.model = 'gemini-fixture'; f.m.wireApi = 'anthropic';
+  const manager = new HarnessManager(f.dataDir, () => f.store.state, [], f.store.codexDir,
+    { home: path.join(f.dataDir, 'home'), env: {}, protocols: f.protocols });
+  const proxy = new ProxyConfig(f.dataDir, crypt, manager, f.store, new ConfigManager(f.store.codexDir, f.dataDir));
+  proxy.sync('codex');
+  const { Router } = require('../core/router.cjs');
+  const { codexModelId } = require('../core/models.cjs');
+  const calls = [];
+  const router = new Router({ getState: () => proxy.routingState('codex'), fetchUpstream: async (url, init) => {
+    calls.push({url, headers:init.headers}); return success('openai-responses');
+  }, log() {} });
+  t.after(()=>router.stop()); await router.start(0);
+  const applied = proxy.clients.codex.providers[0];
+  assert.equal(applied.models[0].wireApi, 'anthropic');
+  await f.protocols.ensure(f.p, f.m, { force: true, untilAvailable: true });
+  const response = await fetch(`http://127.0.0.1:${router.port}/clients/ASS/v1/responses`, {
+    method:'POST', headers:{authorization:'Bearer synthetic-client', 'content-type':'application/json'},
+    body:JSON.stringify({ model:codexModelId(f.p.id,f.m.model), input:'Reply OK', stream:true }),
+  });
+  assert.equal(response.status, 200); assert.match(await response.text(), /response.completed/);
+  assert.equal(calls[0].url, 'https://example.test/v1/responses');
+  assert.equal(calls[0].headers.authorization, 'Bearer '+applied.apiKey);
+  assert.equal(applied.models[0].wireApi, 'anthropic');
+  for (const edit of [{apiKey:'changed'}, {baseUrl:'https://changed.invalid'}, {extraHeaders:{'x-identity':'changed'}}]) {
+    const original = structuredClone(f.p); Object.assign(f.p, edit);
+    await f.protocols.ensure(f.p, f.m, { force:true, untilAvailable:true });
+    assert.equal(proxy.routingState('codex').providers[0].models[0].wireApi, 'anthropic');
+    Object.assign(f.p, original);
+  }
 });

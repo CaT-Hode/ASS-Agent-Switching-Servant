@@ -11,6 +11,7 @@ const { needsResponsesToolBridge, nativeDeepSeek } = require('./deepseek-compat.
 const { readJSON, readBytes } = require("./request-body.cjs");
 const { officialCodexHistory } = require("./response-history.cjs");
 const { withOutputLimit } = require('./output-tokens.cjs');
+const { woyaoGemini } = require('./woyao-compat.cjs');
 const { classifyFailure, diagnosticError, responseFailure } = require('./diagnostic-failure.cjs');
 const { CodexCompaction, requested: compactionRequested } = require('./codex-compaction.cjs');
 const { CodexReasoning } = require('./codex-reasoning.cjs');
@@ -377,7 +378,10 @@ class Router {
         } else headers.authorization = "Bearer " + route.provider.apiKey;
       }
       secrets.push(route.provider?.apiKey, headers.authorization?.replace(/^Bearer\s+/i, ''), headers['x-api-key']);
-      const portable = route.protocol === 'openai-responses' ? { body: route.body, omittedTools: [] } : portableRequest(route.body);
+      const mixedGeminiTools = woyaoGemini(route.provider, route.model) &&
+        route.body.tools?.some(tool => ['function', 'custom', 'namespace'].includes(tool.type));
+      const portable = route.protocol === 'openai-responses' && !mixedGeminiTools
+        ? { body: route.body, omittedTools: [] } : portableRequest(route.body);
       omittedTools = portable.omittedTools;
       if (omittedTools.length) res.setHeader('x-ass-unavailable-tools', omittedTools.join(', '));
       const nativeToolBridge = route.protocol === 'openai-responses' && needsResponsesToolBridge(route.provider, route.body, route.model);
@@ -385,7 +389,7 @@ class Router {
       const reasoningView = route.protocol === 'openai-responses' && nativeDeepSeek(route.provider) ? this.reasoning.view() : null;
       const request =
         route.protocol === "openai-responses"
-          ? bridge?.request || route.body
+          ? bridge?.request || portable.body
           : convertRequest(bridge.request, route.model, route.protocol);
       this.active++;
       this.controllers.add(controller);

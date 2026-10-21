@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const { _electron: electron } = require('playwright');
-test('main-process single/batch diagnostic reasons survive restart without changing native configuration', { timeout: 90000 }, async t => {
+test('main-process diagnostic reasons survive restart and quick checks repair applied routes', { timeout: 90000 }, async t => {
   const root = path.resolve(__dirname, '..'), data = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-diagnostic-main-'));
   const codex = path.join(data, 'test-home', '.codex'); fs.mkdirSync(codex, { recursive: true });
   const env = { ...process.env, ASS_TEST_DATA: data, ASS_TEST_CODEX: codex, ASS_TEST_PORT: '0' }; delete env.ELECTRON_RUN_AS_NODE;
@@ -61,5 +61,32 @@ test('main-process single/batch diagnostic reasons survive restart without chang
   assert.deepEqual(restored.diagnostics, results.diagnostics);
   assert.equal(restored.batch.failed, 4); assert.equal(restored.batch.restored, true);
   assert.equal(fs.existsSync(path.join(codex,'config.toml')), false);
+  const quick = await app.evaluate(async () => {
+    const t = global.assTest, calls = [], budgets = [];
+    t.store.updateProvider({ id:'quick', name:'Quick Gemini', enabled:true, baseUrl:'https://quick.invalid/v1', apiKey:'synthetic-quick-key',
+      models:[{model:'gemini-fixture', wireApi:'anthropic', enabled:true}] });
+    const proxy = t.connections.proxyConfig;
+    const plan = await t.connections.preview('codex',true);
+    await t.connections.apply({ticket:plan.ticket,mode:'safe',acknowledged:true});
+    const before = proxy.clients.codex.providers.find(p=>p.id==='quick').models[0].wireApi;
+    t.setFetch(async (url, init) => {
+      calls.push(new URL(url).pathname);
+      budgets.push(JSON.parse(init.body).max_output_tokens);
+      if (!url.endsWith('/responses')) throw Error('unused protocol must not delay a successful connection check');
+      return new Response('data: '+JSON.stringify({type:'response.completed', response:{output:[{type:'message',content:[{type:'output_text',text:'OK'}]}]}})+'\n\n');
+    });
+    const result = await t.diagnose('quick','gemini-fixture');
+    const response = await fetch(`http://127.0.0.1:${t.router.port}/clients/ASS/v1/responses`, {
+      method:'POST', headers:{authorization:'Bearer '+proxy.clients.codex.localToken,'content-type':'application/json'},
+      body:JSON.stringify({model:proxy.clients.codex.catalog.models.find(m=>m.slug.endsWith('::gemini-fixture')).slug,input:'Reply OK',stream:true}),
+    });
+    return {before, result, status:response.status, completed:(await response.text()).includes('response.completed'), calls, budgets,
+      unchangedSnapshot:proxy.clients.codex.providers.find(p=>p.id==='quick').models[0].wireApi};
+  });
+  assert.equal(quick.before,'anthropic'); assert.equal(quick.result.ok,true);
+  assert.equal(quick.status,200); assert.equal(quick.completed,true); assert.equal(quick.unchangedSnapshot,'anthropic');
+  assert.deepEqual(quick.calls,['/v1/responses','/v1/responses','/v1/responses']);
+  assert.deepEqual(quick.budgets,[512,512,131072]);
+  assert.ok(Number.isFinite(quick.result.protocolMs)); assert.ok(quick.result.ms>=quick.result.protocolMs);
   console.log('Main-process diagnostic QA evidence: ' + data);
 });

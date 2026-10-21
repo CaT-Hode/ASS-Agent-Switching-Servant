@@ -485,14 +485,17 @@ class ProxyConfig {
   routingState(id) {
     if (!this.supports(id)) return { ...this.store.state, providers: this.manager.effectiveProviders?.(id) || this.store.state.providers }; // Diagnostics use drafts.
     const plan = this.clients[id];
-    // A transport preference must also reach already-injected models. Retain
-    // the applied model/protocol/credential snapshot; only the network mode
-    // may follow an unchanged provider identity, never a replaced URL or key.
+    // Transport preferences and verified protocols reach already-injected
+    // models. Protocol evidence must match the applied endpoint, credential,
+    // headers and network; draft models and credentials stay unpublished.
     const providers = (plan?.providers || []).map(provider => {
       const current = this.store.state.providers.find(p => p.id === provider.id &&
         p.baseUrl === provider.baseUrl && p.apiKey === provider.apiKey);
-      return current && ["system", "direct", "direct-doh"].includes(current.network)
+      const routed = current && ["system", "direct", "direct-doh"].includes(current.network)
         ? { ...provider, network: current.network } : provider;
+      const protocols = this.manager?.options?.protocols;
+      return protocols ? { ...routed, models: routed.models.map(model => ({ ...model,
+        wireApi: protocols.select(routed, model, id) })) } : routed;
     });
     return { providers: this.error ? [] : providers, accountless: plan?.accountless === true,
       gatewayAuth: plan?.gatewayAuth === true, localToken: this.error ? undefined : plan?.localToken };

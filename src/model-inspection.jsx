@@ -49,8 +49,8 @@ export function ModelCheckButton({ provider, model, state, act, busy }) {
             (result.stale ? " · 配置已变化或目录待恢复" : "") +
             (result.saveError ? " · " + result.saveError : "") +
             " · 点击重新检测"
-          : protocolResult ? "协议已检测 · " + exactTime(protocolResult.time) + " · 点击重新检测连接与协议"
-          : (model.diagnosticProviderId ? "使用此模型的原生配置直连检测（小请求，可能计费）" : "检测此模型连接与支持的协议（小请求，可能计费）")
+          : protocolResult ? "协议已检测 · " + exactTime(protocolResult.time) + " · 点击重新确认可用协议与连接"
+          : (model.diagnosticProviderId ? "使用此模型的原生配置直连检测（小请求，可能计费）" : "确认可用协议并检测连接；成功后结束协议寻找（小请求，可能计费）")
       }
       disabled={
         !!busy ||
@@ -238,7 +238,7 @@ export function ModelCapabilities({ provider, model, state, act, busy }) {
       <p className="capability-warning">
         不会修改配置或执行工具。上下文上限、图像 / 音频 /
         视频输入只显示明确声明，不进行大请求盲测。原生 API 能力不等同于 Codex
-        跨协议工具兼容性。协议结果长期保存，接入不重复检查；点击闪电可重新检测。
+        跨协议工具兼容性。闪电找到可用协议即结束；自动检测能力会逐项检查全部协议。已接入模型按匹配凭据的成功检测结果选择路由。
       </p>
     </>
   );

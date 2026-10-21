@@ -55,11 +55,11 @@ function diagnosticHarness({ bodyStall = false } = {}) {
     Date, AbortController, AbortSignal: signals, require,
     connections: { busy: false }, nativeDiagnosticContext: () => null,
     store: { state: { providers: [provider] } }, diagnosticControllers: controllers,
-    diagnosticMetrics: () => ({ headers() {}, observe() {}, finish: () => ({}) }),
+    diagnosticMetrics: () => ({ headers() {}, observe() {}, finish: () => ({ ms: 0 }) }),
     diagnosticHistory: { fingerprint: () => 'synthetic', record: result => { saved.push(result); return true; } },
     modelKey, codexModelId: () => 'ASS_fixture::slow-fixture',
     PROBE_TIMEOUT_MS, DIAGNOSTIC_TIMEOUT_MS,
-    protocols: { ensure: async (p, m, { signal }) => { for (let i = 0; i < 3; i++) { calls.push('probe'); await pause(55000, signal); } }, select: () => 'anthropic' },
+    protocols: { ensure: async (p, m, { signal, untilAvailable }) => { assert.equal(untilAvailable, true); for (let i = 0; i < 3; i++) { calls.push('probe'); await pause(55000, signal); } }, select: () => 'anthropic' },
     router: { server: true, port: 1, clientToken: 'synthetic' }, servicePort: 1,
     fetch: async (url, init) => {
       calls.push('connection');
@@ -79,6 +79,7 @@ test('three slow protocol probes cannot consume the following connection check d
     await advance(t, 70000);
     const value = await result;
     assert.equal(value.ok, true); assert.equal(value.ms, 235000);
+    assert.equal(value.protocolMs, 165000);
     assert.equal(f.controllers.size, 0);
   }
   assert.deepEqual(f.calls, ['probe', 'probe', 'probe', 'connection', 'probe', 'probe', 'probe', 'connection']);

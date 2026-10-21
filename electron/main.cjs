@@ -616,7 +616,7 @@ async function diagnose(providerId, modelName, signal) {
     AbortSignal.timeout(official || native ? PROBE_TIMEOUT_MS : DIAGNOSTIC_TIMEOUT_MS),
   ]);
   diagnosticControllers.set(key, controller);
-  let result, failure;
+  let result, failure, protocolMs;
   const model = official ? name : codexModelId(providerId, name);
   const body = {
     model,
@@ -629,6 +629,7 @@ async function diagnose(providerId, modelName, signal) {
     ],
     stream: true,
     store: false,
+    max_output_tokens: 512,
     reasoning: {
       effort: official
         ? "low"
@@ -638,7 +639,8 @@ async function diagnose(providerId, modelName, signal) {
   try {
     requestSignal.throwIfAborted();
     if (!official && !native) {
-      await protocols.ensure(p, selected, { force: true, signal: requestSignal });
+      await protocols.ensure(p, selected, { force: true, untilAvailable: true, signal: requestSignal });
+      protocolMs = Date.now() - start;
       requestSignal = AbortSignal.any([requestSignal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]);
       metrics = diagnosticMetrics(protocols.select(p, selected, "codex"), "router");
     }
@@ -696,6 +698,8 @@ async function diagnose(providerId, modelName, signal) {
     diagnosticControllers.delete(key);
   }
   Object.assign(result, metrics.finish(result.ok));
+  if (protocolMs !== undefined) result.protocolMs = protocolMs;
+  result.ms = Date.now() - start;
   if (failure && !result.cancelled) Object.assign(result, failure);
   if (result.ok && !signal?.aborted && !controller.signal.aborted && native?.client && native?.account) {
     const current = nativeOfficialProvider(native.client, native.account);
@@ -733,12 +737,14 @@ async function prepareProtocols(scope) {
   const ids = connections.ids(scope);
   const selected = new Set(ids.flatMap(id => harnesses.injection(id).models.filter(m => m.included).map(m => modelKey(m.providerId, m.model))));
   await protocols.ensureProviders(store.state.providers.map(p => ({ ...p,
-    models: p.models.filter(m => selected.has(modelKey(p.id, m.model))) })));
+    models: p.models.filter(m => selected.has(modelKey(p.id, m.model))) })), { untilAvailable: true });
 }
 let protocolQueue = Promise.resolve();
 function queueProtocolChecks(id, name) {
-  protocolQueue = protocolQueue.then(() => protocols.ensureProviders(store.state.providers
-    .filter(p => !id || p.id === id).map(p => ({ ...p, models: p.models.filter(m => !name || m.model === name) }))))
+  protocolQueue = protocolQueue.then(() => protocols.ensureProviders(
+    store.state.providers.filter(p => !id || p.id === id)
+      .map(p => ({ ...p, models: p.models.filter(m => !name || m.model === name) })),
+    { untilAvailable: true }))
     .catch(() => { /* Preserve configuration; explicit injection/test reports failures. */ });
 }
 function readModelMetadata(id, refresh = false) {

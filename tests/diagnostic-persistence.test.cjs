@@ -13,7 +13,7 @@ test("native metadata temporarily missing on restart cannot erase observations; 
   const options = { dataDir, crypto, getContext: () => context };
   const history = new DiagnosticHistory(options);
   const result = { providerId: "native-test:p", model: "alpha", time: new Date().toISOString(), ms: 200, ok: true,
-    headersMs: 50, firstEventMs: 60, firstTextMs: 120, httpStatus: 200, phase: "complete", route: "native", inputTokens: 4, outputTokens: 2 };
+    headersMs: 50, firstEventMs: 60, firstTextMs: 120, protocolMs: 30, httpStatus: 200, phase: "complete", route: "native", inputTokens: 4, outputTokens: 2 };
   history.record(result, history.fingerprint(result.providerId, result.model));
   history.recordBatch({ running: true, startedAt: result.time, entries: [{ ...result, status: "passed" },
     { providerId: "p", model: "waiting", status: "running" }] });
@@ -23,6 +23,7 @@ test("native metadata temporarily missing on restart cannot erase observations; 
   context = previous;
   assert.equal(restarted.public()[key].stale, undefined);
   assert.equal(restarted.public()[key].firstTextMs, 120);
+  assert.equal(restarted.public()[key].protocolMs, 30);
   assert.equal(restarted.public()[key].httpStatus, 200);
   const batch = new DiagnosticBatch({}); batch.restore(restarted.batch);
   assert.equal(batch.snapshot().passed, 1); assert.equal(batch.snapshot().cancelled, 1);

@@ -270,7 +270,7 @@ async function nativeProbe(
     store: false,
     max_output_tokens: 512,
     instructions:
-      "This is a capability check. Reply briefly. Do not perform any external actions.",
+      "This is a capability check. Reply briefly. Do not perform any external actions. Request marker: " + nonce,
     input: tool
       ? `Call ass_probe_echo once with marker ${nonce}.`
       : "What is 19 times 23? Reply only with the result.",

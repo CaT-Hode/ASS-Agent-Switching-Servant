@@ -66,7 +66,8 @@ class ProtocolNegotiation {
   }
   select(p, m, harness) {
     const r = this.get(p, m), order = harness === "claude" ? ["anthropic", "openai-responses", "openai-chat"] : ORDER;
-    return order.find(protocol => r?.protocols[protocol]?.status === "passed") || m.wireApi;
+    return order.find(protocol => r?.protocols[protocol]?.status === "passed" && r.protocols[protocol].lastStatus !== "unknown") ||
+      order.find(protocol => r?.protocols[protocol]?.status === "passed") || m.wireApi;
   }
   providers(harness) {
     return this.getProviders().map(p => ({ ...p, models: p.models.map(m => ({ ...m, wireApi: this.select(p, m, harness) })) }));
@@ -78,7 +79,7 @@ class ProtocolNegotiation {
     })));
   }
   progress() { return Object.fromEntries(this.jobDetails); }
-  async ensure(p, m, { force = false, signal, progress = () => {} } = {}) {
+  async ensure(p, m, { force = false, untilAvailable = false, signal, progress = () => {} } = {}) {
     signal?.throwIfAborted();
     if (!p.enabled || !p.apiKey || !m.enabled) return;
     const key = modelKey(p.id, m.model), fp = identity(p, m), jobKey = key + fp;
@@ -88,8 +89,12 @@ class ProtocolNegotiation {
     if (!force && this.get(p, m)) return this.get(p, m);
     const job = (async () => {
       const report = { time: new Date(this.now()).toISOString(), protocols: {} };
-      // Each protocol needs its own evidence, even when another one succeeds.
-      for (const protocol of ORDER) {
+      // Connection checks need one working protocol. Full capability scans
+      // still collect independent evidence for every protocol.
+      const known = this.get(p, m), preferred = this.select(p, m, "codex");
+      const order = untilAvailable && known?.protocols[preferred]?.status === "passed"
+        ? [preferred, ...ORDER.filter(protocol => protocol !== preferred)] : ORDER;
+      for (const protocol of order) {
         signal?.throwIfAborted();
         this.jobDetails.set(key, protocol); this.onChange();
         progress(protocol);
@@ -99,7 +104,7 @@ class ProtocolNegotiation {
         this.record(p, m, { time: new Date(this.now()).toISOString(), protocols: { [protocol]: result } });
         // A credential may be accepted by one protocol but not another. Only
         // rate limiting suppresses further probes; do not hammer the provider.
-        if (result.httpStatus === 429) break;
+        if (result.httpStatus === 429 || untilAvailable && result.status === "passed") break;
       }
       return this.get(p, m);
     })();

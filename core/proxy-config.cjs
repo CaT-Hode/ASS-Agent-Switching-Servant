@@ -18,10 +18,19 @@ const read = (file) => fs.existsSync(file) ? fs.readFileSync(file) : null;
 function validateCodexPlan(plan) {
   if (!plan) return;
   const names = new Set(plan.providers.flatMap(p => p.models.map(m => codexModelId(p.id, m.model))));
+  // Official model ids are native metadata that Codex can rename or retire at
+  // any time (for example gpt-6.1-sol -> gpt-5.6-sol). A record written before
+  // such a rotation must stay loadable; the next explicit sync selects an
+  // available default. Injected ASS_...:: ids are still identity checks: a
+  // namespace that is not in the applied providers means the record drifted.
+  const defaultModel = plan.defaultModel;
+  const invalidDefault = defaultModel !== undefined && defaultModel !== null &&
+    (typeof defaultModel !== "object" || Array.isArray(defaultModel) ||
+      typeof defaultModel.model !== "string" || !defaultModel.model ||
+      (defaultModel.model.includes("::") && !names.has(defaultModel.model)));
   if (!Array.isArray(plan.catalog?.models) || plan.catalog.models.some(m =>
       typeof m.slug !== "string" || (m.slug.includes("::") && !names.has(m.slug))) ||
-      (plan.defaultModel && !names.has(plan.defaultModel.model) && (plan.accountless ||
-        !plan.catalog.models.some(m => m.slug === plan.defaultModel.model && !m.slug.includes('::')))))
+      invalidDefault)
     throw Error("Codex 已应用模型记录包含旧版或不明标识，未覆盖");
 }
 
@@ -150,6 +159,15 @@ class ProxyConfig {
     if (accountless && catalog) catalog.models = catalog.models.filter((m) => m.slug.includes("::"));
     const available = providers.flatMap((p) => p.models.filter((m) => m.enabled !== false).map((m) => ({ provider: p, model: m })));
     const official = id === 'codex' ? officialDefaultModels(this.manager, accountless) : [];
+    // Hidden native rows (reserve / internal review) stay selectable only when
+    // the user explicitly chose them; an automatic default never picks one.
+    const visibleOfficial = () => {
+      const native = id === 'codex' ? (this.store.officialModels || []) : [];
+      return official.filter(row => {
+        const entry = native.find(m => m.slug === row.model);
+        return !entry || entry.visibility !== 'hide';
+      });
+    };
     let requested = null;
     if (injection.defaultModel) {
       try {
@@ -157,8 +175,14 @@ class ProxyConfig {
         requested = providerId === 'official' && !accountless
           ? official.filter(m => m.model === model).map(m => ({ official: true, model: m }))[0]
           : available.find((row) => row.provider.id === providerId && row.model.model === model);
-        if (providerId === 'official' && !accountless && !requested) throw Error('官方默认模型不可用，请确认 Codex OAuth 登录并重新选择模型');
-      } catch (error) { if (error.message.startsWith('官方默认模型')) throw error; }
+        if (providerId === 'official' && !accountless && !requested) {
+          // Codex retires official model ids independently of ASS. Move the
+          // default to the highest-priority visible official model instead of
+          // failing the whole refresh until the user re-picks manually.
+          const pick = visibleOfficial()[0] || official[0];
+          if (pick) requested = { official: true, model: pick };
+        }
+      } catch { /* A malformed stored reference falls back like a retired one. */ }
     }
     const fallback = id === "codex" ? available.find((row) => row.model.model === "gpt-6-sol") : null;
     const selected = requested || fallback || available[0];

@@ -72,7 +72,7 @@ for(const stream of [false,true])test(`DeepSeek native Responses rejects malform
 test('DeepSeek Codex metadata follows the official tool protocol and preserves native subscription models',()=>{
   const native={slug:'gpt-fixture',context_window:500000,use_responses_lite:true,tool_mode:'direct',supports_parallel_tool_calls:false,input_modalities:['text'],unrelated:'native',base_instructions:'Native instructions'};
   const original=structuredClone(native),catalog=makeCatalog([native],[provider]);
-  assert.deepEqual(catalog.models[0],original);
+  for (const [key,value] of Object.entries(original)) assert.deepEqual(catalog.models[0][key],value,key);
   const entry=catalog.models.find(x=>x.slug.includes('::'));
   assert.equal(entry.use_responses_lite,false);assert.equal(entry.tool_mode,null);assert.equal(entry.apply_patch_tool_type,'freeform');assert.equal(entry.prefer_websockets,false);assert.equal(entry.supports_parallel_tool_calls,true);
   assert.equal(entry.context_window,900000);assert.equal(entry.default_reasoning_level,'max');

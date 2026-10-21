@@ -119,14 +119,28 @@ function inputMessages(body, kind) {
     ],
   };
 }
+function portableRequest(body) {
+  // Responses search executes on its server, so it cannot become a client
+  // function. Optional declarations may be omitted only with an explicit
+  // capability notice; a forced search remains an error.
+  const isSearch = tool => ['web_search', 'web_search_preview'].includes(tool?.type);
+  const omittedTools = [...new Set((body.tools || []).filter(isSearch).map(tool => tool.type))];
+  if (!omittedTools.length) return { body, omittedTools };
+  const tools = body.tools.filter(tool => !isSearch(tool));
+  if (isSearch(body.tool_choice) || body.tool_choice === 'required' && !tools.length)
+    throw Object.assign(Error('该接入不支持原生网页搜索；请使用支持搜索的 Responses 接入，或取消强制搜索'), { status: 400 });
+  const notice = 'Native web search is unavailable on this connection. Continue with the available tools. If the task requires web research, explain this limitation; do not claim to have searched the web.';
+  return { body: { ...body, tools, instructions: [body.instructions, notice].filter(Boolean).join('\n\n') }, omittedTools };
+}
 function convertRequest(body, model, protocol) {
+  body = portableRequest(body).body;
   if (body.previous_response_id)
     throw new Error("跨协议请求需要完整历史，不支持 previous_response_id");
   const tools = (body.tools || []).map((t) => {
     if (t.type !== "function")
-      throw new Error(
+      throw Object.assign(new Error(
         `该协议不支持 ${t.type} 工具，请关闭原生工具或改用 Responses 模型`,
-      );
+      ), { status: 400 });
     return protocol === "anthropic"
       ? {
           name: t.name,
@@ -435,4 +449,4 @@ async function* nativeResponsesEvents(stream, signal) {
   }
   if (!ended) throw Error('上游流提前断开，未收到结束事件');
 }
-module.exports = { convertRequest, translateStream, sseMessages, anthropicLimited, nativeResponsesEvents };
+module.exports = { convertRequest, translateStream, sseMessages, anthropicLimited, nativeResponsesEvents, portableRequest };

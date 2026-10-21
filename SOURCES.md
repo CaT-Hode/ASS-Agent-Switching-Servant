@@ -67,6 +67,11 @@ ASS 是独立实现，不是原产品的官方版本。界面不沿用旧产品�
 - [Pi AuthStorage 源码](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/auth-storage.ts)：`oauth` 与 `api_key` 记录，读取时不执行动态密钥命令。
 - 本机 `D:\deepseek-harness\packages\credentials\credentials-local\README.md` 与 `packages\llm\llm-pi-ai\src\auth.ts`：版本化 `.credentials.yaml`、`refs`、`records` 和 `llm-pi-ai/<provider>` grant 结构。只实现已确认格式，不把任意插件 grant 误判为 OAuth。
 
+## Codex CLI 目录与跨协议搜索兼容
+
+- 本机 npm CLI `0.146.1` 的 `plugin marketplace list --json` 实际报缺失 `base_instructions`，补齐后继续报缺失 `supports_parallel_tool_calls`。当前原生缓存有 9 条官方模型缺少这些旧 CLI 必填字段；按 ASS 目录基线补齐后，npm CLI 与桌面附带后端均能加载，原生值及 `model_messages` 保留。
+- 本机 `requests.jsonl` 中 WOYAO `gemini-4-argon` 在 Anthropic 协议转换前因 `web_search` 返回本地 502，上游状态为空；全局配置为 `web_search="live"`。`scripts/codex-gemini-search-qa.cjs` 以隔离原生 Codex、虚拟 OAuth 和本地模拟上游验证可选搜索声明的处理，真实云端调用为 0。该验证不证明 Gemini 上游提供原生网页搜索。
+
 ## Codex 图片工具接入
 
 - 本机 Codex Desktop `26.1013.4894.0` 附带后端 `0.163.0-alpha.10.2`：隔离 OAuth 和本地模拟服务实际捕获 `image_gen.imagegen` 请求模型接入地址的 `/v1/images/generations`，编辑时请求 `/v1/images/edits`，附带账户与 `x-codex-image-turn-id`。

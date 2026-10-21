@@ -6,6 +6,8 @@
 
 ASS（Agent-Switching-Servant）是你的 Windows 桌面 AI 路由与账户助手。把模型、API 凭据与官方授权放到一个独立窗口，切换客户端时不必反复搬配置。关闭窗口后继续在托盘运行。
 
+v0.4.6 修复 Gemini 等跨协议接入被可选原生搜索声明阻断的问题，并完善 CLI 目录加载与官方模型轮换兼容。详见 [v0.4.6](docs/RELEASE-v0.4.6.md)。可更新下次启动入口并保持当前 ASS 运行。
+
 v0.4.5 整合 Codex 第三方模型的远程压缩、DeepSeek 完成后隐藏思考、新旧模型目录兼容，以及慢模型的 90 秒协议检测；保留官方图片路由、预测绑定、用量归组和诊断改进。详见 [v0.4.5](docs/RELEASE-v0.4.5.md)。此前的图片生成／编辑路由见 [v0.4.4](docs/RELEASE-v0.4.4.md)，预测绑定与供应商 HTTPS DNS 见 [v0.4.3](docs/RELEASE-v0.4.3.md)。
 
 v0.3.40 将太阳光线旋转速度降为此前的三分之一，保留加强后的波纹。累计更新包含 Codex 专用 HTTPS 启动通道、统一桌面识别、全部注入刷新与主题滑动修复；主题资源已提炼为 `best-light-dark-switching`。详见 [v0.3.40](docs/release-v0.3.40.md)、[v0.3.39](docs/release-v0.3.39.md) 和 [v0.3.38](docs/release-v0.3.38.md)。本机可使用 `node scripts/local-release.cjs install --keep-running --json` 仅更新下次启动入口，不关闭当前进程或替换其正在使用的资源。

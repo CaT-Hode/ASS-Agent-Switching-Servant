@@ -1,6 +1,6 @@
 const http = require("node:http");
 const { endpoint, normalizeEffort, codexProviderId } = require("./models.cjs");
-const { convertRequest, translateStream, nativeResponsesEvents } = require("./adapters.cjs");
+const { convertRequest, translateStream, nativeResponsesEvents, portableRequest } = require("./adapters.cjs");
 const { SseMonitor } = require("./sse-monitor.cjs");
 const { readTaskJSON } = require('./task-outcome.cjs');
 const { forwardHarness, authorized } = require("./harness-route.cjs");
@@ -204,6 +204,7 @@ class Router {
     let upstream;
     let forwardingError = false;
     let compacting = false;
+    let omittedTools = [];
     const requestId = crypto.randomUUID();
     const secrets = [req.headers.authorization?.replace(/^Bearer\s+/i, '')].filter(Boolean);
     try {
@@ -376,8 +377,11 @@ class Router {
         } else headers.authorization = "Bearer " + route.provider.apiKey;
       }
       secrets.push(route.provider?.apiKey, headers.authorization?.replace(/^Bearer\s+/i, ''), headers['x-api-key']);
+      const portable = route.protocol === 'openai-responses' ? { body: route.body, omittedTools: [] } : portableRequest(route.body);
+      omittedTools = portable.omittedTools;
+      if (omittedTools.length) res.setHeader('x-ass-unavailable-tools', omittedTools.join(', '));
       const nativeToolBridge = route.protocol === 'openai-responses' && needsResponsesToolBridge(route.provider, route.body, route.model);
-      const bridge = route.protocol !== "openai-responses" || nativeToolBridge ? toolBridge(route.body) : null;
+      const bridge = route.protocol !== "openai-responses" || nativeToolBridge ? toolBridge(portable.body) : null;
       const reasoningView = route.protocol === 'openai-responses' && nativeDeepSeek(route.provider) ? this.reasoning.view() : null;
       const request =
         route.protocol === "openai-responses"
@@ -587,6 +591,7 @@ class Router {
         httpStatus, httpOk: httpStatus >= 200 && httpStatus < 300, taskOk: true,
         requestId, upstream,
         ...(compacting ? { operation: 'compaction' } : {}),
+        ...(omittedTools.length ? { omittedTools } : {}),
       });
     } catch (error) {
       const diagnostic = client === 'diagnostics'

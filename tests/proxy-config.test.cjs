@@ -46,6 +46,15 @@ function legacyWorkspaceRelay(f, baseline = null) {
   atomic(f.config.file, text); atomic(f.config.record, JSON.stringify(record));
 }
 
+function nativeCatalogModel(slug, { visibility = "list", priority = 1 } = {}) {
+  return { slug, display_name: slug, visibility, priority, default_reasoning_level: "medium",
+    supported_reasoning_levels: [{ effort: "low", description: "low" }, { effort: "medium", description: "medium" }] };
+}
+function writeNativeCatalog(f, models) {
+  atomic(path.join(f.codex, "models_cache.json"), JSON.stringify({ models }));
+  f.store.readCatalog();
+}
+
 test('missing Codex attachment recovers from encrypted applied snapshot after restart without applying drafts', t => {
   const f=fixture(t); f.proxy.sync('codex');
   const owned=JSON.parse(fs.readFileSync(f.config.record,'utf8'));
@@ -126,6 +135,8 @@ test('official catalog refresh changes native metadata only; drafts, bindings an
   assert.equal(f.proxy.refreshOfficialCatalog(),true);assert.equal(f.proxy.refreshOfficialCatalog(),false);
   assert.equal(f.proxy.clients.codex.catalog.models[0].context_window,500000);
   assert.equal(f.proxy.clients.codex.catalog.models[0].max_context_window,872000);
+  assert.equal(typeof f.proxy.clients.codex.catalog.models[0].base_instructions,'string');
+  assert.equal(f.proxy.clients.codex.catalog.models[0].supports_parallel_tool_calls,false);
   assert.deepEqual(f.proxy.clients.codex.providers,applied.providers);
   assert.deepEqual(f.proxy.clients.codex.catalog.models.filter(m=>m.slug.includes('::')),applied.catalog.models.filter(m=>m.slug.includes('::')));
   assert.equal(fs.readFileSync(f.config.file,'utf8'),native);assert.equal(fs.readFileSync(path.join(f.codex,'auth.json'),'utf8'),auth);
@@ -215,6 +226,32 @@ test('applied DeepSeek tool metadata repairs without syncing drafts or changing 
   const old=structuredClone(f.proxy.clients.codex);old.catalog.models.find(m=>m.slug===entry.slug).tool_mode='direct';
   f.proxy.persist({...f.proxy.clients,codex:old});atomic(f.config.catalog,'{}');
   assert.throws(()=>f.proxy.refreshOfficialCatalog(),/外部修改/);assert.equal(fs.readFileSync(f.config.catalog,'utf8'),'{}');
+});
+
+test('catalog compatibility refresh keeps accountless catalogs limited to injected models',t=>{
+  const f=fixture(t);f.proxy.sync('codex',true);
+  const before=structuredClone(f.proxy.clients.codex.catalog);
+  f.proxy.refreshOfficialCatalog();
+  assert.deepEqual(f.proxy.clients.codex.catalog,before);
+  assert.ok(f.proxy.clients.codex.catalog.models.every(m=>m.slug.includes('::')));
+});
+
+test('published catalogs missing CLI fields repair together with the applied snapshot on reload',t=>{
+  const f=fixture(t);f.proxy.sync('codex');
+  const applied=structuredClone(f.proxy.clients.codex),config=fs.readFileSync(f.config.file),auth=fs.readFileSync(path.join(f.codex,'auth.json'));
+  for(const row of applied.catalog.models.filter(m=>!m.slug.includes('::'))) {
+    delete row.base_instructions;delete row.supports_parallel_tool_calls;
+  }
+  f.proxy.persist({...f.proxy.clients,codex:applied});atomic(f.config.catalog,JSON.stringify(applied.catalog,null,2));
+  const reloaded=new ProxyConfig(f.data,crypt,f.manager,f.store,new ConfigManager(f.codex,f.data));
+  assert.equal(reloaded.error,'');assert.equal(reloaded.refreshOfficialCatalog(),true);
+  assert.equal(reloaded.refreshOfficialCatalog(),false);
+  reloaded.checkFiles('codex');
+  for(const row of reloaded.clients.codex.catalog.models) {
+    assert.equal(typeof row.base_instructions,'string');assert.equal(typeof row.supports_parallel_tool_calls,'boolean');
+  }
+  assert.deepEqual(reloaded.clients.codex.providers,applied.providers);
+  assert.deepEqual(fs.readFileSync(f.config.file),config);assert.deepEqual(fs.readFileSync(path.join(f.codex,'auth.json')),auth);
 });
 
 test('prediction compatibility is opt-in, preserves OAuth, survives repair and reverses cleanly',t=>{
@@ -404,6 +441,56 @@ test("old and unknown applied catalog or default IDs are rejected without applyi
       assert.deepEqual(reloaded.routingState("codex").providers, []);
       assert.deepEqual(files.map(file => fs.readFileSync(file, "utf8")), before);
     }
+  }
+});
+
+test("retired official default keeps the applied record loadable and the next sync selects a visible official model", t => {
+  const f = fixture(t), official = [nativeCatalogModel("gpt-reserve", { visibility: "hide", priority: 1 }),
+    nativeCatalogModel("gpt-5.6-sol", { priority: 2 })];
+  writeNativeCatalog(f, official);
+  f.manager.setInjection("codex", { excludedProviders: [], defaultModel: modelRef("official", "gpt-5.6-sol") });
+  f.proxy.sync("codex");
+  assert.equal(TOML.parse(fs.readFileSync(f.config.file, "utf8")).model, "gpt-5.6-sol");
+  // Codex retires the id and publishes a different visible default. The record
+  // still names the retired one; it must load instead of locking the app.
+  writeNativeCatalog(f, [official[0], nativeCatalogModel("gpt-5.6-terra", { priority: 3 })]);
+  const reloaded = new ProxyConfig(f.data, crypt, f.manager, f.store, new ConfigManager(f.codex, f.data));
+  assert.equal(reloaded.error, "");
+  assert.ok(reloaded.clients.codex);
+  assert.equal(reloaded.clients.codex.defaultModel.model, "gpt-5.6-sol");
+  assert.equal(reloaded.status("codex", true).error, "");
+  assert.equal(reloaded.status("codex", true).pending, true);
+  // Automatic fallback never picks a hidden native row.
+  assert.equal(reloaded.desired("codex").defaultModel.model, "gpt-5.6-terra");
+  reloaded.sync("codex");
+  assert.equal(TOML.parse(fs.readFileSync(f.config.file, "utf8")).model, "gpt-5.6-terra");
+  assert.equal(reloaded.status("codex", true).pending, false);
+  assert.equal(reloaded.status("codex", true).error, "");
+});
+
+test("a retired official Codex default no longer makes the shared Claude applied record unreadable", t => {
+  const f = fixture(t), official = [nativeCatalogModel("gpt-reserve", { visibility: "hide", priority: 1 }),
+    nativeCatalogModel("gpt-5.6-sol", { priority: 2 })];
+  writeNativeCatalog(f, official);
+  f.manager.setInjection("codex", { excludedProviders: [], defaultModel: modelRef("official", "gpt-5.6-sol") });
+  f.proxy.sync("codex");
+  f.proxy.sync("claude");
+  writeNativeCatalog(f, [official[0], nativeCatalogModel("gpt-5.6-terra", { priority: 3 })]);
+  const reloaded = new ProxyConfig(f.data, crypt, f.manager, f.store, new ConfigManager(f.codex, f.data));
+  assert.equal(reloaded.error, "");
+  assert.ok(reloaded.clients.codex && reloaded.clients.claude);
+  assert.equal(reloaded.status("claude", true).error, "");
+});
+
+test("malformed or unknown applied Codex defaults are still rejected", t => {
+  const f = fixture(t); f.proxy.sync("codex");
+  const base = structuredClone(f.proxy.clients);
+  for (const defaultModel of [{ model: "relay::one" }, { model: "" }, { effort: "high" }, "gpt-5.6-sol"]) {
+    const clients = structuredClone(base);
+    clients.codex.defaultModel = defaultModel;
+    f.proxy.persist(clients);
+    const reloaded = new ProxyConfig(f.data, crypt, f.manager, f.store, f.config);
+    assert.ok(reloaded.error, JSON.stringify(defaultModel));
   }
 });
 

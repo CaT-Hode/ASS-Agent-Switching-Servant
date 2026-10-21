@@ -72,10 +72,30 @@ test('injection preserves every native official model field despite stale ASS ov
   const stale = { 'gpt-6.1-sol': { model:'renamed', contextWindow:272000, efforts:['high'], defaultEffort:'high', enabled:false } };
   for (let i=0;i<2;i++) {
     const catalog = makeCatalog(official, providers, stale);
-    assert.deepEqual(catalog.models.filter(m=>!m.slug.includes('::')), official);
+    const native = catalog.models.filter(m=>!m.slug.includes('::'));
+    assert.equal(native.length, official.length);
+    for (const [key, value] of Object.entries(official[0])) assert.deepEqual(native[0][key], value, key);
     assert.equal(catalog.models.find(m=>m.slug.includes('::')).context_window, 900000);
     assert.equal(official[0].context_window, 500000);
   }
+});
+
+test('catalog fills CLI-required fields in new desktop caches without changing native values or source rows', () => {
+  const official = [{ slug: 'gpt-fixture', display_name: 'Native', model_messages: { instructions_template: 'native template' },
+    future_capability: { enabled: true } }, { slug: 'gpt-explicit', base_instructions: '', supports_parallel_tool_calls: true }];
+  const before = structuredClone(official);
+  const catalog = makeCatalog(official, parseImport(source));
+  for (const model of [...catalog.models, ...makeCatalog([], []).models]) {
+    assert.equal(typeof model.base_instructions, 'string', model.slug);
+    assert.equal(typeof model.supports_parallel_tool_calls, 'boolean', model.slug);
+  }
+  assert.ok(catalog.models[0].base_instructions);
+  assert.equal(catalog.models[0].supports_parallel_tool_calls, false);
+  assert.equal(catalog.models[1].base_instructions, '');
+  assert.equal(catalog.models[1].supports_parallel_tool_calls, true);
+  assert.deepEqual(catalog.models[0].model_messages, official[0].model_messages);
+  assert.deepEqual(catalog.models[0].future_capability, official[0].future_capability);
+  assert.deepEqual(official, before);
 });
 
 test('prediction structured output survives chat and Anthropic conversion without altering normal requests',()=>{
@@ -208,7 +228,7 @@ test("unsupported features fail explicitly rather than silently stripping input"
     ),
   );
   assert.throws(() =>
-    convertRequest({ tools: [{ type: "web_search" }] }, {}, "anthropic"),
+    convertRequest({ tools: [{ type: "web_search" }], tool_choice: {type:'web_search'} }, {}, "anthropic"),
   );
 });
 function sse(data) {

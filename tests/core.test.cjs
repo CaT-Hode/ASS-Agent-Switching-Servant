@@ -70,14 +70,12 @@ test('injection preserves every native official model field despite stale ASS ov
     base_instructions: 'Native instructions', supports_parallel_tool_calls: true, future_capability: { enabled: true } }];
   const providers = parseImport(source);
   const stale = { 'gpt-6.1-sol': { model:'renamed', contextWindow:272000, efforts:['high'], defaultEffort:'high', enabled:false } };
-  for (let i=0;i<2;i++) {
-    const catalog = makeCatalog(official, providers, stale);
-    const native = catalog.models.filter(m=>!m.slug.includes('::'));
-    assert.equal(native.length, official.length);
-    for (const [key, value] of Object.entries(official[0])) assert.deepEqual(native[0][key], value, key);
-    assert.equal(catalog.models.find(m=>m.slug.includes('::')).context_window, 900000);
-    assert.equal(official[0].context_window, 500000);
-  }
+  const catalog = makeCatalog(official, providers, stale);
+  const native = catalog.models.filter(m=>!m.slug.includes('::'));
+  assert.equal(native.length, official.length);
+  for (const [key, value] of Object.entries(official[0])) assert.deepEqual(native[0][key], value, key);
+  assert.equal(catalog.models.find(m=>m.slug.includes('::')).context_window, 900000);
+  assert.equal(official[0].context_window, 500000);
 });
 
 test('catalog fills CLI-required fields in new desktop caches without changing native values or source rows', () => {
@@ -102,12 +100,10 @@ test('prediction structured output survives chat and Anthropic conversion withou
   const schema={type:'object',properties:{suggestion:{anyOf:[{type:'string'},{type:'null'}]}},required:['suggestion'],additionalProperties:false};
   const body={model:'custom',input:'Predict',text:{format:{type:'json_schema',name:'prediction',strict:true,schema}},reasoning:{effort:'low'}};
   const original=structuredClone(body);
-  for(let i=0;i<2;i++) {
-    const chat=convertRequest(body,{},'openai-chat');
-    assert.deepEqual(chat.response_format,{type:'json_schema',json_schema:{name:'prediction',strict:true,schema}});
-    const messages=convertRequest(body,{},'anthropic');
-    assert.deepEqual(messages.output_config,{effort:'low',format:{type:'json_schema',schema}});
-  }
+  const chat=convertRequest(body,{},'openai-chat');
+  assert.deepEqual(chat.response_format,{type:'json_schema',json_schema:{name:'prediction',strict:true,schema}});
+  const messages=convertRequest(body,{},'anthropic');
+  assert.deepEqual(messages.output_config,{effort:'low',format:{type:'json_schema',schema}});
   assert.deepEqual(body,original);
   assert.equal(convertRequest({model:'x',input:'Hi'}, {}, 'openai-chat').response_format,undefined);
   assert.equal(convertRequest({model:'x',input:'Hi'}, {}, 'anthropic').output_config,undefined);

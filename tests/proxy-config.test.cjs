@@ -254,11 +254,19 @@ test('published catalogs missing CLI fields repair together with the applied sna
   assert.deepEqual(fs.readFileSync(f.config.file),config);assert.deepEqual(fs.readFileSync(path.join(f.codex,'auth.json')),auth);
 });
 
-test('prediction compatibility is opt-in, preserves OAuth, survives repair and reverses cleanly',t=>{
+test('ordinary OAuth injection preserves the native archive provider, including legacy compatibility drafts',t=>{
   const f=fixture(t),auth=fs.readFileSync(path.join(f.codex,'auth.json'),'utf8');
-  f.proxy.sync('codex');assert.equal(TOML.parse(fs.readFileSync(f.config.file,'utf8')).model_provider,'ASS');
-  f.manager.setInjection('codex',{excludedProviders:[],predictionCompatibility:true});
-  for(let i=0;i<2;i++) {
+  f.proxy.sync('codex');
+  const record=JSON.parse(fs.readFileSync(f.config.record,'utf8'));
+  const legacy=fs.readFileSync(f.config.file,'utf8').replace('model_provider = "openai"','model_provider = "ASS"');
+  record.blocks=legacy.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g);
+  atomic(f.config.file,legacy);atomic(f.config.record,JSON.stringify(record));
+  const {predictionCompatibility: oldFlag,...oldPlan}=f.proxy.clients.codex;
+  f.proxy.persist({...f.proxy.clients,codex:{...oldPlan,attachment:record}});
+  assert.equal(f.proxy.status('codex',true).pending,true);
+  assert.equal(fs.readFileSync(f.config.file,'utf8'),legacy,'legacy route stays untouched until explicit sync');
+  for(const predictionCompatibility of [undefined,true,false]) {
+    if(predictionCompatibility !== undefined) f.manager.setInjection('codex',{predictionCompatibility});
     f.proxy.sync('codex');
     const parsed=TOML.parse(fs.readFileSync(f.config.file,'utf8'));
     assert.equal(parsed.model_provider,'openai');assert.equal(parsed.openai_base_url,f.config.baseUrl);
@@ -269,8 +277,8 @@ test('prediction compatibility is opt-in, preserves OAuth, survives repair and r
   }
   f.proxy.sync('codex',true);assert.equal(f.proxy.clients.codex.predictionCompatibility,undefined);
   assert.equal(TOML.parse(fs.readFileSync(f.config.file,'utf8')).model_provider,'ASS');
-  f.manager.setInjection('codex',{predictionCompatibility:false});f.proxy.sync('codex',false);
-  assert.equal(TOML.parse(fs.readFileSync(f.config.file,'utf8')).model_provider,'ASS');
+  f.proxy.sync('codex',false);
+  assert.equal(TOML.parse(fs.readFileSync(f.config.file,'utf8')).model_provider,'openai');
   f.config.detach();assert.deepEqual(TOML.parse(fs.readFileSync(f.config.file,'utf8')),TOML.parse(f.original));
   assert.throws(()=>f.manager.setInjection('pi',{predictionCompatibility:true}),/无效/);
   assert.throws(()=>f.manager.setInjection('codex',{predictionCompatibility:'yes'}),/无效/);
@@ -577,7 +585,7 @@ test("leaving accountless mode keeps the shared ASS model until the connection i
 
 test('legacy OAuth-coupled injection becomes pending without writes and upgrades only on explicit sync', t => {
   const f = fixture(t); f.proxy.sync('codex');
-  const legacy = { ...f.proxy.clients.codex }; delete legacy.gatewayAuth; delete legacy.localToken;
+  const legacy = { ...f.proxy.clients.codex }; delete legacy.gatewayAuth; delete legacy.localToken; delete legacy.predictionCompatibility;
   const old = f.config.prepareAttach(legacy.defaultModel);
   atomic(f.config.record, JSON.stringify({ replaced: old.replaced, blocks: old.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g) }));
   atomic(f.config.file, old.text); f.proxy.persist({ codex: legacy });
@@ -598,11 +606,12 @@ test('legacy Codex bearer mode is pending for ordinary OAuth routing and sync re
   const f = fixture(t); f.proxy.sync('codex');
   const token = f.proxy.clients.codex.localToken;
   const current = fs.readFileSync(f.config.file, 'utf8');
-  const legacyProvider = current.replace(
+  const legacyProvider = current.replace('model_provider = "openai"','model_provider = "ASS"').replace(
     'requires_openai_auth = true\n',
     `requires_openai_auth = false\nexperimental_bearer_token = "${token}"\n`,
   );
   const record = JSON.parse(fs.readFileSync(f.config.record, 'utf8'));
+  record.blocks[0] = record.blocks[0].replace('model_provider = "openai"','model_provider = "ASS"');
   record.blocks[1] = record.blocks[1].replace(
     'requires_openai_auth = true\n',
     `requires_openai_auth = false\nexperimental_bearer_token = "${token}"\n`,

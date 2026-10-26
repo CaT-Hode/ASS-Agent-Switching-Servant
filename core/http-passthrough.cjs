@@ -90,11 +90,24 @@ function upstreamDiagnostics(response, secrets) {
 function summarizeUpstreamError(sample, status, contentType = '', secrets = []) {
   const text = redact(sample, secrets);
   let message = '上游返回 HTTP ' + status;
+  const values = [];
   try {
-    const value = JSON.parse(text);
-    message = String(value?.error?.message || value?.detail || message).slice(0, 500);
-    return { message, kind: 'json' };
+    values.push(JSON.parse(text));
   } catch {}
+  if (!values.length && /(?:^|[\r\n])data:/.test(text)) {
+    for (const frame of text.replace(/\r\n?/g, '\n').split('\n\n')) {
+      const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+      try { values.push(JSON.parse(data)); } catch {}
+    }
+  }
+  for (const value of values) {
+    const detail = value?.error || value?.response?.error || value?.detail;
+    const prose = typeof detail === 'string' ? detail : detail?.message || value?.message;
+    if (typeof prose !== 'string' || !prose) continue;
+    const param = typeof detail?.param === 'string' && detail.param ? `（${detail.param}）` : '';
+    return { message: redact(prose + param, secrets).slice(0, 500), kind: /(?:^|[\r\n])data:/.test(text) ? 'sse_error' : 'json' };
+  }
+  if (values.length) return { message, kind: 'json' };
   if (/text\/html/i.test(contentType) || /<!doctype\s+html|<html\b/i.test(text)) {
     const title = (/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1] || '')
       .replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);

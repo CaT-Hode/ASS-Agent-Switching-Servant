@@ -2,6 +2,7 @@ const http = require("node:http");
 const { endpoint, normalizeEffort, codexProviderId } = require("./models.cjs");
 const { convertRequest, translateStream, nativeResponsesEvents, portableRequest } = require("./adapters.cjs");
 const { SseMonitor } = require("./sse-monitor.cjs");
+const { RequestMetrics } = require('./request-metrics.cjs');
 const { readTaskJSON } = require('./task-outcome.cjs');
 const { forwardHarness, authorized } = require("./harness-route.cjs");
 const { providerSessionHeaders, protocolEndpoint } = require("./provider-transport.cjs");
@@ -11,7 +12,7 @@ const { needsResponsesToolBridge, nativeDeepSeek } = require('./deepseek-compat.
 const { readJSON, readBytes } = require("./request-body.cjs");
 const { officialCodexHistory } = require("./response-history.cjs");
 const { withOutputLimit } = require('./output-tokens.cjs');
-const { woyaoGemini } = require('./woyao-compat.cjs');
+const { woyaoGemini, mifyTeamGemini } = require('./gemini-compat.cjs');
 const { classifyFailure, diagnosticError, responseFailure } = require('./diagnostic-failure.cjs');
 const { CodexCompaction, requested: compactionRequested } = require('./codex-compaction.cjs');
 const { CodexReasoning } = require('./codex-reasoning.cjs');
@@ -171,6 +172,21 @@ class Router {
     return [...this.requests.values()].filter((r) => !id || r.client === id)
       .length;
   }
+  monitorRequest(req, details, metrics) {
+    const pending = this.requests.get(req);
+    if (pending) pending.monitor = { ...details, startedAt: new Date(metrics.began).toISOString(), metrics };
+    this.onActivity();
+  }
+  monitorSnapshot() {
+    return [...this.requests.values()].flatMap(pending => {
+      const record = pending.monitor;
+      if (!record || pending.controller.signal.aborted) return [];
+      const { metrics, ...details } = record;
+      return [{ ...details, time: record.startedAt, client: pending.client, inProgress: true,
+        phase: metrics.first !== null ? 'streaming' : record.httpStatus ? 'waiting-output' : 'waiting-upstream',
+        ms: Math.max(0, Date.now() - metrics.began), ...metrics.snapshot({ live: true }) }];
+    });
+  }
   async cancelClient(id) {
     if (!["codex", "claude", "opencode", "pi", "dsh"].includes(id)) throw Error("无效的请求终止范围");
     // The caller blocks new admissions first. Never abort another client's or
@@ -197,10 +213,19 @@ class Router {
   }
   async handle(req, res) {
     const began = Date.now();
+    const metrics = new RequestMetrics({ began });
+    let requestedModel = '';
     let route;
     let client;
     const controller = new AbortController();
     let timer;
+    const armTimeout = (idle = false) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => controller.abort(Object.assign(
+        new Error(idle ? '上游连续 5 分钟未返回数据，请重试' : '上游请求超过 5 分钟，请重试'),
+        { name: 'TimeoutError', code: idle ? 'upstream_idle_timeout' : 'upstream_timeout', status: 504 },
+      )), 300000);
+    };
     let httpStatus = null;
     let upstream;
     let forwardingError = false;
@@ -285,7 +310,7 @@ class Router {
         secrets.push(headers.authorization?.replace(/^Bearer\s+/i, ""));
         this.active++;
         this.controllers.add(controller);
-        timer = setTimeout(() => controller.abort(), 300000);
+        armTimeout();
         res.on("close", () => {
           if (!res.writableFinished) controller.abort();
         });
@@ -337,6 +362,7 @@ class Router {
       if (!/^Bearer\s+\S+$/i.test(req.headers.authorization || ""))
         throw Object.assign(new Error("需要 Codex 登录凭据"), { status: 401 });
       const body = this.reasoning.expand(this.compaction.expand(await readJSON(req)));
+      requestedModel = body.model;
       const state = this.getState(this.requests.get(req)?.client);
       const credential = req.headers.authorization.replace(/^Bearer\s+/i, "");
       const gatewayAuthenticated = state.gatewayAuth && authorized(credential, state.localToken);
@@ -352,6 +378,10 @@ class Router {
           throw Object.assign(Error("无账号模式仅允许使用已注入的模型；请新建对话并选择 ASS 模型"), { status: 403 });
       }
       route = routeFor(body, state, match[1] || "");
+      const pending = this.requests.get(req);
+      this.monitorRequest(req, { requestId, model: body.model, source: route.source, protocol: route.protocol,
+        providerId: route.official ? 'official' : route.provider.id,
+        ...(match[1] || compactionRequested(body) ? { operation: 'compaction' } : {}) }, metrics);
       compacting = !route.official && compactionRequested(body);
       if (compacting) route.body = this.compaction.prepare(route.body, route.model);
       if (route.official && req.headers.authorization.replace(/^Bearer\s+/i, "") === this.clientToken)
@@ -378,14 +408,18 @@ class Router {
         } else headers.authorization = "Bearer " + route.provider.apiKey;
       }
       secrets.push(route.provider?.apiKey, headers.authorization?.replace(/^Bearer\s+/i, ''), headers['x-api-key']);
-      const mixedGeminiTools = woyaoGemini(route.provider, route.model) &&
+      const unavailableSearch = mifyTeamGemini(route.provider, route.model) || woyaoGemini(route.provider, route.model) &&
         route.body.tools?.some(tool => ['function', 'custom', 'namespace'].includes(tool.type));
-      const portable = route.protocol === 'openai-responses' && !mixedGeminiTools
+      const portable = route.protocol === 'openai-responses' && !unavailableSearch
         ? { body: route.body, omittedTools: [] } : portableRequest(route.body);
       omittedTools = portable.omittedTools;
       if (omittedTools.length) res.setHeader('x-ass-unavailable-tools', omittedTools.join(', '));
-      const nativeToolBridge = route.protocol === 'openai-responses' && needsResponsesToolBridge(route.provider, route.body, route.model);
-      const bridge = route.protocol !== "openai-responses" || nativeToolBridge ? toolBridge(portable.body) : null;
+      // This gateway drops array-schema items before reaching Vertex. Keep the
+      // native function contract in a JSON string and restore it for Codex.
+      const encodeArrayArguments = mifyTeamGemini(route.provider, route.model) && route.model?.codexToolMode !== 'native';
+      const nativeToolBridge = route.protocol === 'openai-responses' &&
+        (encodeArrayArguments || needsResponsesToolBridge(route.provider, route.body, route.model));
+      const bridge = route.protocol !== "openai-responses" || nativeToolBridge ? toolBridge(portable.body, { encodeArrayArguments }) : null;
       const reasoningView = route.protocol === 'openai-responses' && nativeDeepSeek(route.provider) ? this.reasoning.view() : null;
       const request =
         route.protocol === "openai-responses"
@@ -393,11 +427,11 @@ class Router {
           : convertRequest(bridge.request, route.model, route.protocol);
       this.active++;
       this.controllers.add(controller);
-      timer = setTimeout(() => controller.abort(), 300000);
+      armTimeout(true);
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
       });
-      const response = await this.fetch(
+      const upstreamResponse = await this.fetch(
         route.url,
         {
           method: "POST",
@@ -409,7 +443,10 @@ class Router {
         },
         route.network,
       );
+      armTimeout(true);
+      const response = metrics.observe(upstreamResponse, controller.signal, () => armTimeout(true));
       httpStatus = response.status;
+      if (pending?.monitor) pending.monitor.httpStatus = httpStatus;
       upstream = upstreamDiagnostics(response, secrets);
       if (!response.ok) {
         if (client === 'diagnostics')
@@ -428,23 +465,10 @@ class Router {
           res.end();
           throw Object.assign(Error(summary.message), { status: response.status, code: 'upstream_http_error' });
         }
-        const raw = (await response.text()).slice(0, 4000);
-        let message = "上游返回 HTTP " + response.status;
-        try {
-          const parsed = JSON.parse(raw);
-          message = String(
-            parsed.error?.message || parsed.detail || message,
-          ).slice(0, 500);
-        } catch {
-          if (raw.includes("<html")) message += "（HTML 网关错误页）";
-        }
-        for (const key of [
-          route.provider?.apiKey,
-          req.headers.authorization?.replace(/^Bearer /i, ""),
-          headers.authorization?.replace(/^Bearer /i, ""),
-        ].filter(Boolean))
-          message = message.split(key).join("[REDACTED]");
-        throw Object.assign(new Error(message), { status: response.status });
+        const sample = await forwardErrorBody(response, () => {}, secrets);
+        const summary = summarizeUpstreamError(sample, response.status, response.headers.get('content-type'), secrets);
+        upstream.errorKind = summary.kind;
+        throw Object.assign(new Error(summary.message), { status: response.status, code: 'upstream_http_error' });
       }
       if (compacting) {
         const checkpoint = await this.compaction.collect(response, route.protocol, controller.signal, body.model);
@@ -594,15 +618,19 @@ class Router {
         ok: true,
         httpStatus, httpOk: httpStatus >= 200 && httpStatus < 300, taskOk: true,
         requestId, upstream,
+        client, protocol: route.protocol, providerId: route.official ? 'official' : route.provider.id,
+        startedAt: new Date(began).toISOString(),
+        ...metrics.snapshot(),
         ...(compacting ? { operation: 'compaction' } : {}),
         ...(omittedTools.length ? { omittedTools } : {}),
       });
     } catch (error) {
+      if (controller.signal.reason?.name === 'TimeoutError') error = controller.signal.reason;
       const diagnostic = client === 'diagnostics'
         ? classifyFailure(error, { httpStatus, layer: httpStatus ? 'upstream' : route ? 'network' : 'local' }) : null;
       const responseStatus = diagnostic?.httpStatus >= 400 ? diagnostic.httpStatus : error.status || 502;
-      let message = controller.signal.aborted
-        ? "请求已取消或超过 5 分钟"
+      let message = controller.signal.aborted && error.name !== 'TimeoutError'
+        ? "请求已取消"
         : error instanceof SyntaxError
           ? "请求或上游流中的 JSON 数据无效"
           : error.message;
@@ -614,7 +642,7 @@ class Router {
       } else if (res.headersSent) {
         if (!res.destroyed && !res.writableEnded) {
           res.write(
-            `event: error\ndata: ${JSON.stringify({ type: "error", error: { code: diagnostic?.failure.code || "stream_failed", message: diagnostic?.message || "上游流中断，请重试" } })}\n\n`,
+            `event: error\ndata: ${JSON.stringify({ type: "error", error: { code: diagnostic?.failure.code || (error.name === 'TimeoutError' ? error.code : "stream_failed"), message: diagnostic?.message || (error.name === 'TimeoutError' ? message : "上游流中断，请重试") } })}\n\n`,
           );
           res.end();
         }
@@ -633,13 +661,16 @@ class Router {
       this.log({
         time: new Date().toISOString(),
         source: route?.source || "本地",
-        model: route?.body.model || "",
+        model: requestedModel || route?.body.model || "",
         status: responseStatus,
         ms: Date.now() - began,
         ok: false,
         httpStatus, httpOk: httpStatus !== null && httpStatus >= 200 && httpStatus < 300, taskOk: false,
         error: message.slice(0, 500),
         requestId, upstream,
+        client, protocol: route?.protocol, providerId: route?.official ? 'official' : route?.provider?.id,
+        startedAt: new Date(began).toISOString(),
+        ...metrics.snapshot(),
         ...(diagnostic ? { diagnostic } : {}),
         ...(compacting ? { operation: 'compaction' } : {}),
       });

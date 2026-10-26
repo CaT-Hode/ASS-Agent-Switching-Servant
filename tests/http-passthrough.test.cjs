@@ -291,3 +291,16 @@ test('error redaction handles overlapping secret prefixes without losing surroun
   assert.equal(output, 'aaa [REDACTED] [REDACTED] 你好 [REDACTED] tail');
   assert.equal(sample, output);
 });
+
+test('third-party SSE errors retain the upstream message and parameter without exposing credentials',async t=>{
+  const provider=normalizeProvider({id:'fixture-sse',baseUrl:'https://fixture.invalid/v1',apiKey:'private-"fixture-key',models:[{model:'x',wireApi:'openai-responses'}]});
+  const detail=JSON.stringify({error:{code:'400',message:'Invalid request '+provider.apiKey,param:'404 NOT_FOUND'}}).replace('{"error":','{"error":\r\ndata:');
+  const {request,logs}=await start(t,{getState:()=>({providers:[provider]}),fetchUpstream:async()=>new Response(
+    ': heartbeat\r\n\r\ndata:'+detail+'\r\n\r\n',
+    {status:400,headers:{'content-type':'text/event-stream;charset=UTF-8'}})});
+  const response=await request({model:codexModelId(provider.id,'x')});
+  assert.equal(response.status,400);const body=await response.json();
+  assert.equal(body.error.code,'upstream_http_error');assert.match(body.error.message,/Invalid request/);assert.match(body.error.message,/404 NOT_FOUND/);
+  assert.ok(!body.error.message.includes(provider.apiKey));assert.ok(!logs[0].error.includes(provider.apiKey));
+  assert.equal(logs[0].upstream.errorKind,'sse_error');assert.equal(logs[0].taskOk,false);
+});

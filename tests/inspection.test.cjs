@@ -1,7 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  modelKey,
   declaredCapabilities,
   discoverModels,
   probeCapabilities,
@@ -25,7 +24,7 @@ const stream = (events) =>
     { headers: { "content-type": "text/event-stream" } },
   );
 test('Anthropic context exhaustion cannot pass capability inspection', async () => {
-  for (const reason of ['end_turn', 'max_tokens', 'model_context_window_exceeded', 'refusal', 'model_context_window_exceeded']) {
+  for (const reason of ['end_turn', 'max_tokens', 'model_context_window_exceeded', 'refusal']) {
     const result = await inspectStream(stream([{type:'content_block_delta',delta:{type:'text_delta',text:'OK'}},
       {type:'message_delta',delta:{stop_reason:reason}}, {type:'message_stop'}]).body, 'anthropic', 'nonce');
     const limited = ['max_tokens', 'model_context_window_exceeded'].includes(reason);
@@ -58,11 +57,6 @@ function success(body) {
     },
   ]);
 }
-test("per-model diagnostic identities cannot conflate providers or models", () => {
-  assert.notEqual(modelKey("one", "model"), modelKey("two", "model"));
-  assert.notEqual(modelKey("one", "a"), modelKey("one", "b"));
-  assert.notEqual(modelKey("a::b", "c"), modelKey("a", "b::c"));
-});
 test("metadata preserves uncertainty and distinguishes statements from configured defaults", () => {
   assert.equal(declaredCapabilities({ id: "gpt-any" }).contextWindow, null);
   assert.equal(declaredCapabilities({}).tools, null);

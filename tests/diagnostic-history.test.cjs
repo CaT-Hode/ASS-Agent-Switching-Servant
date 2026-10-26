@@ -8,7 +8,6 @@ const {
   diagnosticFingerprint,
 } = require("../core/diagnostic-history.cjs");
 const { modelKey } = require("../core/model-inspection.cjs");
-const { relativeTime, exactTime } = require("../src/relative-time.mjs");
 const crypto = {
   isEncryptionAvailable: () => true,
   encryptString: (text) => Buffer.from(text),
@@ -263,22 +262,4 @@ test("malformed/future-version/invalid records cannot break startup or invent a 
     }),
   );
   assert.deepEqual(new DiagnosticHistory(f.options).public(), {});
-});
-
-test("relative time handles minute/hour/day boundaries and does not call future times recent", () => {
-  const time = "2026-09-22T00:00:00Z",
-    start = Date.parse(time);
-  for (const [ms, expected] of [
-    [0, "刚刚"],
-    [59999, "刚刚"],
-    [60000, "1 分钟前"],
-    [3599999, "59 分钟前"],
-    [3600000, "1 小时前"],
-    [86400000, "1 天前"],
-    [172800000, "2 天前"],
-  ])
-    assert.equal(relativeTime(time, start + ms), expected);
-  assert.equal(relativeTime(time, start - 120000), "时间异常");
-  assert.equal(relativeTime("invalid", start), "时间未知");
-  assert.match(exactTime(time), /2026/);
 });

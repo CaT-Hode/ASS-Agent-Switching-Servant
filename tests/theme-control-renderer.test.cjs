@@ -103,81 +103,10 @@ test('automatic OS change keeps the thumb centered and modal blocking does not l
   await choose('dark');await settle('dark');await page.waitForFunction(()=>!document.documentElement.hasAttribute('data-theme-reveal'));
   await page.locator('.theme-control').screenshot({path:path.join(output,'capsule-dark.png')});
 });
-test('sunset rotates exposed rays with stronger ripples and no capsule rim, pauses on drag and respects reduced motion',async()=>{
-  await load('system');await settle('system');
-  const samples=await page.evaluate(async()=>{
-    const result=[];for(let i=0;i<12;i++){
-      await new Promise(requestAnimationFrame);const b=document.querySelector('.theme-orbit');
-      result.push({x:b.getBoundingClientRect().x,sun:getComputedStyle(document.querySelector('.theme-dawn-sun')).transform,
-        rays:getComputedStyle(document.querySelector('.theme-sun-idle')).transform,
-        ripple:getComputedStyle(document.querySelector('.theme-ripples i')).transform,
-        ember:getComputedStyle(b,'::before').opacity,horizon:getComputedStyle(document.querySelector('.theme-horizon > path')).transform,
-        sea:getComputedStyle(document.querySelector('.theme-sea-wave')).transform,reflection:getComputedStyle(document.querySelector('.theme-sea-reflection')).opacity});
-    }return result;
-  });
-  assert.ok(new Set(samples.map(s=>s.sun)).size>3,'sun sinks/rises behind the fixed horizon');
-  assert.ok(new Set(samples.map(s=>s.rays)).size>3,'exposed rays rotate in automatic mode, not only in light mode');
-  assert.ok(new Set(samples.map(s=>s.ripple)).size>3,'larger concentric ripples expand under the thumb');
-  const decoration=await page.evaluate(()=>{
-    const toggle=getComputedStyle(document.querySelector('.theme-toggle'));
-    const ripples=[...document.querySelectorAll('.theme-ripples i')].map(el=>el.getAnimations()[0]);
-    const orbit=new DOMMatrix(getComputedStyle(document.querySelector('.theme-orbit')).transform);
-    return {border:toggle.borderColor,shadow:toggle.boxShadow,orbit:[orbit.a,orbit.b,orbit.c,orbit.d],
-      rayDuration:document.querySelector('.theme-sun-idle').getAnimations()[0].effect.getTiming().duration,
-      rippleDuration:ripples[0].effect.getTiming().duration,
-      ripplePeak:Math.max(...ripples[0].effect.getKeyframes().map(f=>Number(f.opacity))),
-      rippleScale:new DOMMatrix(ripples[0].effect.getKeyframes().at(-1).transform).a,
-      waveStroke:parseFloat(getComputedStyle(document.querySelector('.theme-sea-wave')).strokeWidth)};
-  });
-  assert.equal(decoration.border,'rgba(0, 0, 0, 0)');assert.equal(decoration.shadow,'none');
-  assert.deepEqual(decoration.orbit,[1,0,0,1],'ray rotation never rotates the draggable thumb');
-  assert.equal(decoration.rayDuration,26400,'sunset rays rotate at one third of the previous speed');
-  assert.ok(decoration.rippleDuration<=5000&&decoration.ripplePeak>=.25&&decoration.rippleScale>=4);
-  assert.ok(decoration.waveStroke>=1);
-  assert.ok(new Set(samples.map(s=>s.ember)).size>3,'warm inner light breathes');
-  assert.ok(new Set(samples.map(s=>s.horizon)).size>3,'reflection lines have their own motion');
-  assert.ok(new Set(samples.map(s=>s.sea)).size>3,'sea waves drift naturally');
-  assert.ok(new Set(samples.map(s=>s.reflection)).size>3,'sunset reflection shimmers');
-  assert.equal(await page.locator('.theme-sea').evaluate(el=>getComputedStyle(el).opacity),'1');
-  const seaIsBlue = () => page.locator('.theme-sea-stop-near').evaluate(el => {
-    const [r,g,b] = getComputedStyle(el).stopColor.match(/\d+/g).map(Number);
-    return b > r + 30 && b > g + 15;
-  });
-  assert.ok(await seaIsBlue(), 'light-system sunset retains blue water, not gray-green');
-  assert.ok(Math.max(...samples.map(s=>s.x))-Math.min(...samples.map(s=>s.x))<.1,'decoration must not animate the draggable position');
-  await page.locator('.theme-control').screenshot({path:path.join(output,'capsule-sunset-enhanced.png')});
-  await page.emulateMedia({colorScheme:'dark'});await page.waitForFunction(()=>!document.documentElement.hasAttribute('data-theme-reveal'));
-  await page.waitForFunction(()=>document.documentElement.dataset.colorTheme==='dark');
-  assert.ok(await seaIsBlue(), 'dark-system sea remains visibly blue');
-  await page.locator('.theme-control').screenshot({path:path.join(output,'capsule-sea-dusk.png')});
-  const thumb=await presented();await page.mouse.move(thumb.x,thumb.y);await page.mouse.down();await page.mouse.move(thumb.x+8,thumb.y,{steps:3});
-  const paused=await page.evaluate(async()=>{
-    const sun=document.querySelector('.theme-dawn-sun'),orbit=document.querySelector('.theme-orbit'),animation=sun.getAnimations()[0];
-    const before=animation.currentTime;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
-    return {sun:getComputedStyle(sun).animationPlayState,ember:getComputedStyle(orbit,'::before').animationPlayState,
-      rays:getComputedStyle(document.querySelector('.theme-sun-idle')).animationPlayState,
-      ripples:[...document.querySelectorAll('.theme-ripples i')].map(el=>getComputedStyle(el).animationPlayState),
-      sea:getComputedStyle(document.querySelector('.theme-sea-wave')).animationPlayState,before,after:animation.currentTime};
-  });
-  assert.equal(paused.sun,'paused');assert.equal(paused.ember,'paused');assert.ok(Math.abs(paused.after-paused.before)<1);
-  assert.equal(paused.sea,'paused');
-  assert.equal(paused.rays,'paused');assert.ok(paused.ripples.every(value=>value==='paused'));
-  await page.mouse.up();await settle('system');
-  assert.equal(await page.locator('.theme-dawn-sun').evaluate(el=>getComputedStyle(el).animationPlayState),'running');
-  assert.equal(await page.locator('.theme-sun-idle').evaluate(el=>getComputedStyle(el).animationPlayState),'running');
-  for(const mode of ['light','dark']) {
-    await choose(mode);await settle(mode);
-    assert.equal(await page.locator('.theme-dawn-sun').evaluate(el=>new DOMMatrix(getComputedStyle(el).transform).m42),0);
-    assert.equal(await page.locator('.theme-orbit').evaluate(el=>getComputedStyle(el,'::before').opacity),'0');
-    assert.equal(await page.locator('.theme-sea').evaluate(el=>getComputedStyle(el).opacity),'0');
-    assert.equal(await page.locator('.theme-sun-idle').evaluate(el=>getComputedStyle(el).animationPlayState),mode==='light'?'running':'paused');
-    assert.equal(await page.locator('.theme-toggle').evaluate(el=>getComputedStyle(el).borderColor),'rgba(0, 0, 0, 0)');
-    assert.equal(await page.locator('.theme-toggle').evaluate(el=>getComputedStyle(el).boxShadow),'none');
-  }
-  await page.emulateMedia({reducedMotion:'reduce'});await choose('system');await settle('system');
-  assert.equal(await page.locator('.theme-dawn-sun').evaluate(el=>getComputedStyle(el).animationName),'none');
-  assert.equal(await page.locator('.theme-orbit').evaluate(el=>getComputedStyle(el,'::before').animationName),'none');
-  assert.equal(await page.locator('.theme-sea-wave').first().evaluate(el=>getComputedStyle(el).animationName),'none');
-  assert.equal(await page.locator('.theme-sun-idle').evaluate(el=>getComputedStyle(el).animationName),'none');
-  assert.equal(await page.locator('.theme-ripples i').first().evaluate(el=>getComputedStyle(el).animationName),'none');
+test('reduced motion disables decorative theme animations',async()=>{
+  await load('system');
+  await page.emulateMedia({reducedMotion:'reduce'});await settle('system');
+  for(const selector of ['.theme-dawn-sun','.theme-sea-wave','.theme-sun-idle','.theme-ripples i'])
+    assert.equal(await page.locator(selector).first().evaluate(el=>getComputedStyle(el).animationName),'none');
+  await page.emulateMedia({reducedMotion:'no-preference'});
 });

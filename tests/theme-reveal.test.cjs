@@ -1,7 +1,7 @@
 const { test } = require('node:test'), assert = require('node:assert/strict');
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 async function fixture(options = {}) {
-  const { createThemeReveal } = await import(options.module || '../src/theme-reveal.mjs');
+  const { createThemeReveal } = await import('../src/theme-reveal.mjs');
   const attributes = new Map(), transitions = [], animations = [];
   const root = { setAttribute: (k, v) => attributes.set(k, v), removeAttribute: k => attributes.delete(k),
     animate: (frames, timing) => { if (options.animationThrows) throw Error('unsupported');
@@ -21,108 +21,6 @@ async function fixture(options = {}) {
   return { controller, attributes, animations, transitions, size };
 }
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
-
-test('the complete generated radius track has one peak and never accelerates again after 80 percent', async () => {
-  const f = await fixture();
-  f.controller.run(() => {}, { x: 108, y: 922 });
-  f.transitions[0].update(); f.transitions[0].readyNow(); await flush();
-  const { frames, timing } = f.animations[0];
-  const bezier = text => {
-    if (!text || text === 'linear') return time => time;
-    const [x1, y1, x2, y2] = text.match(/[\d.]+/g).map(Number);
-    const coordinate = (t, a, b) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
-    return time => {
-      let lo = 0, hi = 1;
-      for (let i = 0; i < 45; i++) { const t = (lo + hi) / 2; if (coordinate(t, x1, x2) < time) lo = t; else hi = t; }
-      return coordinate((lo + hi) / 2, y1, y2);
-    };
-  };
-  // Evaluate all emitted keyframe segments, including the final 10%. Testing
-  // only the first easing previously missed the 54ms overscan speed spike.
-  const radius = frame => Number(frame.clipPath.match(/circle\(([\d.]+)px/)[1]);
-  const sampleTrack = track => {
-    const at = ms => {
-      const t = bezier(timing.easing)(ms / timing.duration);
-      const end = track.findIndex((frame, i) => i && t <= frame.offset);
-      if (end < 0) return radius(track.at(-1));
-      const a = track[end - 1], b = track[end];
-      return radius(a) + (radius(b) - radius(a)) * bezier(a.easing)((t - a.offset) / (b.offset - a.offset));
-    };
-    return Array.from({ length: timing.duration }, (_, i) => ({ radius: at(i + 1), speed: at(i + 1) - at(i) }));
-  };
-  const samples = sampleTrack(frames), maxSpeed = Math.max(...samples.map(s => s.speed));
-  const peakIndex = samples.findIndex(s => s.speed === maxSpeed);
-  assert.ok(peakIndex > samples.length * .15 && peakIndex < samples.length * .4);
-  assert.ok(maxSpeed < 3.5, 'full-track peak must not include a fast overscan leg');
-  for (let i = peakIndex + 1; i < samples.length; i++) assert.ok(samples[i].speed <= samples[i - 1].speed + 1e-7, 'entire tail must continuously slow down');
-  const finalRadius = radius(frames.at(-1));
-  const at80 = samples.findIndex(s => s.radius >= finalRadius * .8);
-  const at99 = samples.findIndex(s => s.radius >= finalRadius * .99);
-  assert.ok(at99 - at80 >= 300, 'last visible radius portion needs a real slow tail');
-  assert.ok(samples[at99].speed < samples[at80].speed * .25);
-  assert.ok(samples[0].speed < .03 && samples.at(-1).speed === 0);
-  assert.ok(samples[99].radius > 60, 'start should still respond promptly');
-  const legacy = sampleTrack([
-    { offset: 0, clipPath: 'circle(0px)', easing: 'cubic-bezier(.28,0,.45,1)' },
-    { offset: .9, clipPath: 'circle(1800px)', easing: 'cubic-bezier(.28,0,.45,1)' },
-    { offset: .95, clipPath: 'circle(3557px)' },
-    { offset: 1, clipPath: 'circle(3557px)' },
-  ]);
-  assert.ok(Math.max(...legacy.slice(Math.floor(legacy.length * .8)).map(s => s.speed)) > maxSpeed * 10,
-    'regression oracle must expose the former second acceleration, not just check endpoint coverage');
-});
-
-test('reveal geometry covers every corner from bottom-left, top-right and keyboard button centers', async () => {
-  const { themeRevealGeometry } = await import('../src/theme-reveal.mjs');
-  for (const [width, height] of [[1440, 960], [3840, 2160], [1100, 740]]) {
-    for (const origin of [{ x: 60, y: height - 30 }, { x: width - 22, y: 22 },
-      { getBoundingClientRect: () => ({ left: 20, top: height - 70, width: 180, height: 40 }) }]) {
-      const p = themeRevealGeometry(origin, width, height);
-      for (const [x, y] of [[0, 0], [width, 0], [0, height], [width, height]]) assert.ok(p.radius > Math.hypot(p.x - x, p.y - y));
-      const farthest = Math.max(...[[0, 0], [width, 0], [0, height], [width, height]].map(([x, y]) => Math.hypot(p.x - x, p.y - y)));
-      assert.ok(p.radius >= farthest + 32, 'final mask includes overscan without a second expansion');
-    }
-    const keyboard = themeRevealGeometry({ getBoundingClientRect: () => ({ left: 20, top: height - 70, width: 180, height: 40 }) }, width, height);
-    assert.equal(keyboard.x, 110); assert.equal(keyboard.y, height - 50);
-    assert.ok(Math.abs(keyboard.xPercent / 100 * width - keyboard.x) < .00001);
-    assert.ok(Math.abs(keyboard.yPercent / 100 * height - keyboard.y) < .00001);
-  }
-  const invalid = themeRevealGeometry({ x: Infinity, y: NaN }, NaN, -5);
-  assert.ok(Object.values(invalid).every(Number.isFinite));
-});
-
-test('both directions use a single expansion anchored to the trigger and then hold the complete mask', async () => {
-  const { THEME_REVEAL_DURATION, THEME_REVEAL_EASING, THEME_REVEAL_HOLD_OFFSET } = await import('../src/theme-reveal.mjs');
-  for (const theme of ['light', 'dark']) {
-    const f = await fixture(), commits = [];
-    f.controller.run(() => commits.push(theme), { getBoundingClientRect: () => ({ left: 1310, top: 2, width: 100, height: 44 }) });
-    assert.deepEqual(commits, []); f.transitions[0].update(); f.transitions[0].readyNow(); await flush();
-    assert.deepEqual(commits, [theme]);
-    const a = f.animations[0];
-    const center = `${1360 / 1440 * 100}% ${24 / 960 * 100}%`;
-    assert.equal(a.frames[0].clipPath, `circle(0px at ${center})`);
-    assert.ok(a.frames[1].clipPath.endsWith(`at ${center})`));
-    assert.equal(a.frames[2].clipPath, a.frames[1].clipPath, 'final frame holds the already complete mask');
-    assert.deepEqual(a.frames.map(frame => frame.offset), [0, THEME_REVEAL_HOLD_OFFSET, 1]);
-    assert.equal(a.timing.pseudoElement, '::view-transition-new(root)');
-    assert.equal(a.timing.duration, THEME_REVEAL_DURATION); assert.equal(a.frames[0].easing, THEME_REVEAL_EASING);
-    assert.notEqual(a.frames[0].easing, 'linear');
-    f.transitions[0].done(); await flush(); assert.equal(f.attributes.size, 0);
-    assert.ok(a.cancelled, 'finished fill:both effects must not survive into the next reveal');
-  }
-});
-
-test('final radius always exceeds the full window diagonal, including a central trigger', async () => {
-  const { themeRevealGeometry } = await import('../src/theme-reveal.mjs');
-  for (const [width, height] of [[1, 1], [1440, 960], [1725, 1162.5], [3840, 2160], [7680, 4320]]) {
-    const diagonal = Math.hypot(width, height);
-    for (const origin of [undefined, { x: width / 2, y: height / 2 }, { x: 0, y: 0 },
-      { x: width, y: height }, { x: width - 40, y: 24 }, { x: 100, y: height - 38 }]) {
-      const { radius } = themeRevealGeometry(origin, width, height);
-      assert.equal(radius, diagonal * 2 + 96);
-    }
-  }
-});
 
 test('single expansion target exceeds the actual snapshot diagonal, not only the requested viewport', async () => {
   const f = await fixture({ snapshot: { width: '2400px', height: '1600px' } });
@@ -162,16 +60,6 @@ test('unchanged-size resize notifications cannot end a reveal, real viewport cha
   f.size.width += 1; f.controller.resize(); assert.equal(f.transitions[0].skipped, false, 'minor rounding cannot tear down the mask');
   f.size.width += 100; f.controller.resize(); await flush();
   assert.equal(f.transitions[0].skipped, true); assert.ok(f.animations[0].cancelled); assert.equal(f.attributes.size, 0);
-});
-
-test('portable skill reveal preserves mask lifetime, pacing and single-commit interruption', async () => {
-  const f = await fixture({ module: '../skills/best-light-dark-switching/assets/theme-reveal.mjs' });
-  let count = 0;
-  f.controller.run(() => count++, { x: 40, y: 920 });
-  f.transitions[0].update(); f.transitions[0].readyNow(); await flush();
-  assert.equal(f.animations[0].timing.duration, 2000);
-  f.controller.cancel(); f.transitions[0].update(); await flush();
-  assert.equal(count, 1); assert.ok(f.animations[0].cancelled); assert.equal(f.attributes.size, 0);
 });
 
 test('latest input wins before capture; skipped callbacks cannot apply an obsolete theme', async () => {

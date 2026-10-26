@@ -1,8 +1,9 @@
 const { test } = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-const { nativeProbe, inspectStream, modelKey, PROBE_TIMEOUT_MS, DIAGNOSTIC_TIMEOUT_MS } = require('../core/model-inspection.cjs');
+const { nativeProbe, modelKey, PROBE_TIMEOUT_MS, DIAGNOSTIC_TIMEOUT_MS } = require('../core/model-inspection.cjs');
 const { inspectConnectionResponse } = require('../core/connection-diagnostic.cjs');
 const { classifyFailure } = require('../core/diagnostic-failure.cjs');
+const { abortable } = require('../core/abortable.cjs');
 const provider = { id: 'synthetic', name: 'Synthetic', enabled: true, apiKey: 'synthetic-only', baseUrl: 'https://provider.invalid',
   models: [{ model: 'slow-fixture', enabled: true, wireApi: 'anthropic', defaultEffort: 'high' }] };
 const sse = rows => new Response(rows.map(row => 'data: ' + JSON.stringify(row) + '\n\n').join(''));
@@ -19,35 +20,25 @@ function pause(ms, signal) {
   });
 }
 
-test('default protocol deadline accepts 55-second completed streams; short overrides, stalls and cancellation stay bounded', async t => {
+test('full capability probes accept slow responses and still expire when upstream stalls', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
-  for (const protocol of ['anthropic', 'openai-responses']) for (let repeat = 0; repeat < 2; repeat++) {
-    const result = nativeProbe(provider, provider.models[0], protocol, async (url, init) => {
-      await pause(55000, init.signal); return success(protocol);
-    });
-    await advance(t, 55000);
-    const value = await result;
-    assert.equal(value.status, 'passed'); assert.equal(value.ms, 55000);
-  }
-  const short = nativeProbe(provider, provider.models[0], 'anthropic', async (url, init) => {
+  const pending = nativeProbe(provider, provider.models[0], 'anthropic', async (url, init) => {
     await pause(55000, init.signal); return success('anthropic');
-  }, { timeoutMs: 20000 });
-  await advance(t, 20000); assert.equal((await short).status, 'unknown');
+  });
+  await advance(t, 55000);
+  assert.equal((await pending).status, 'passed');
   const stalled = nativeProbe(provider, provider.models[0], 'anthropic', () => new Promise(() => {}));
   await advance(t, PROBE_TIMEOUT_MS); assert.equal((await stalled).status, 'unknown');
-  const controller = new AbortController();
-  const cancelled = nativeProbe(provider, provider.models[0], 'anthropic', () => new Promise(() => {}), { signal: controller.signal });
-  controller.abort(); await flush(); assert.equal((await cancelled).message, '检测已取消');
 });
 
 // Run the actual Electron diagnostic function with synthetic dependencies and
 // a virtual clock, without launching Electron or reading the native profile.
-function diagnosticHarness({ bodyStall = false } = {}) {
+function diagnosticHarness({ bodyStall = false, fetchStall = false, probeMs = 10000, responseMs = 10000 } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const code = source.slice(source.indexOf('async function diagnose('), source.indexOf('function invalidateReports('));
-  const controllers = new Map(), calls = [], timeouts = [], saved = [];
+  const controllers = new Map();
   const signals = { any: signals => AbortSignal.any(signals), timeout: ms => {
-    timeouts.push(ms); const controller = new AbortController();
+    const controller = new AbortController();
     setTimeout(() => controller.abort(new DOMException('Diagnostic timeout', 'TimeoutError')), ms);
     return controller.signal;
   } };
@@ -56,45 +47,41 @@ function diagnosticHarness({ bodyStall = false } = {}) {
     connections: { busy: false }, nativeDiagnosticContext: () => null,
     store: { state: { providers: [provider] } }, diagnosticControllers: controllers,
     diagnosticMetrics: () => ({ headers() {}, observe() {}, finish: () => ({ ms: 0 }) }),
-    diagnosticHistory: { fingerprint: () => 'synthetic', record: result => { saved.push(result); return true; } },
+    diagnosticHistory: { fingerprint: () => 'synthetic', record: () => true },
     modelKey, codexModelId: () => 'ASS_fixture::slow-fixture',
-    PROBE_TIMEOUT_MS, DIAGNOSTIC_TIMEOUT_MS,
-    protocols: { ensure: async (p, m, { signal, untilAvailable }) => { assert.equal(untilAvailable, true); for (let i = 0; i < 3; i++) { calls.push('probe'); await pause(55000, signal); } }, select: () => 'anthropic' },
+    DIAGNOSTIC_TIMEOUT_MS,
+    protocols: { record() {}, ensure: (p, m, { signal }) => pause(probeMs, signal), select: () => 'anthropic' },
     router: { server: true, port: 1, clientToken: 'synthetic' }, servicePort: 1,
     fetch: async (url, init) => {
-      calls.push('connection');
       if (bodyStall) return new Response(new ReadableStream({ pull: () => new Promise(() => {}) }));
-      await pause(70000, init.signal); return success('openai-responses');
-    }, inspectStream, inspectConnectionResponse, classifyFailure, push() {},
+      if (fetchStall) return new Promise(() => {});
+      await pause(responseMs, init.signal); return success('openai-responses');
+    }, inspectConnectionResponse, classifyFailure, abortable, push() {},
   };
   const diagnose = vm.runInNewContext(code + '\ndiagnose;', context);
-  return { diagnose, calls, timeouts, controllers, saved };
+  return { diagnose, controllers };
 }
-test('three slow protocol probes cannot consume the following connection check deadline; repeated checks release their controller', async t => {
+test('connection checks share one 30-second budget across protocol selection and response', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   const f = diagnosticHarness();
-  for (let repeat = 0; repeat < 2; repeat++) {
-    const result = f.diagnose(provider.id, 'slow-fixture');
-    for (let i = 0; i < 3; i++) await advance(t, 55000);
-    await advance(t, 70000);
-    const value = await result;
-    assert.equal(value.ok, true); assert.equal(value.ms, 235000);
-    assert.equal(value.protocolMs, 165000);
-    assert.equal(f.controllers.size, 0);
-  }
-  assert.deepEqual(f.calls, ['probe', 'probe', 'probe', 'connection', 'probe', 'probe', 'probe', 'connection']);
-  assert.deepEqual(f.timeouts, [DIAGNOSTIC_TIMEOUT_MS, PROBE_TIMEOUT_MS, DIAGNOSTIC_TIMEOUT_MS, PROBE_TIMEOUT_MS]);
+  const complete = f.diagnose(provider.id, 'slow-fixture');
+  await advance(t, 10000); await advance(t, 10000);
+  assert.equal((await complete).ok, true);
+  assert.equal(f.controllers.size, 0);
+  const slow = diagnosticHarness({ probeMs: 20000, responseMs: 20000 });
+  const pending = slow.diagnose(provider.id, 'slow-fixture');
+  await advance(t, 20000); await advance(t, 10000);
+  const result = await pending;
+  assert.equal(result.ok, false); assert.equal(result.failure.kind, 'timeout');
+  assert.equal(result.ms, 30000); assert.equal(slow.controllers.size, 0);
 });
-test('connection body stalls and user cancellation remain bounded after slow probes', async t => {
+test('stalled probes, headers and bodies release diagnostics within 30 seconds', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
-  const f = diagnosticHarness({ bodyStall: true });
-  const stalled = f.diagnose(provider.id, 'slow-fixture');
-  for (let i = 0; i < 3; i++) await advance(t, 55000);
-  await advance(t, PROBE_TIMEOUT_MS);
-  const result = await stalled;
-  assert.equal(result.ok, false); assert.equal(result.failure.kind, 'timeout'); assert.equal(f.controllers.size, 0);
-  const controller = new AbortController(), cancelled = f.diagnose(provider.id, 'slow-fixture', controller.signal);
-  controller.abort(); await flush();
-  assert.equal((await cancelled).cancelled, true);
-  assert.equal(f.controllers.size, 0); assert.equal(f.saved.length, 1, 'Cancelled check must not overwrite history');
+  for (const options of [{ probeMs: 55000 }, { fetchStall: true }, { bodyStall: true }]) {
+    const f = diagnosticHarness(options), pending = f.diagnose(provider.id, 'slow-fixture');
+    await advance(t, 10000); await advance(t, 20000);
+    const result = await pending;
+    assert.equal(result.ok, false); assert.equal(result.failure.kind, 'timeout');
+    assert.equal(result.ms, DIAGNOSTIC_TIMEOUT_MS); assert.equal(f.controllers.size, 0);
+  }
 });

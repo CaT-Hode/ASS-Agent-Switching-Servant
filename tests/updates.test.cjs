@@ -39,8 +39,9 @@ function release(
     ...rest,
   };
 }
-function fixture(options = {}) {
+function fixture(t, options = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ass-updates-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   return new UpdateChecker({
     dataDir,
     currentVersion: "0.1.2",
@@ -89,7 +90,7 @@ test("canonical GitHub release URLs remain usable after the repository rename", 
   const page = "https://github.com/CaT-Hode/ASS-Agent-Switching-Servant/releases/tag/v0.3.0";
   const download = "https://github.com/CaT-Hode/ASS-Agent-Switching-Servant/releases/download/v0.3.0/ASS-v0.3.0-win32-x64.zip";
   const checksum = "https://github.com/CaT-Hode/ASS-Agent-Switching-Servant/releases/download/v0.3.0/SHA256SUMS.txt";
-  const checker = fixture({
+  const checker = fixture(t, {
     fetchRelease: async (url) => {
       assert.equal(url, "https://api.github.com/repos/CaT-Hode/ASS-Agent-Switching-Servant/releases?per_page=100");
       return Response.json([{
@@ -101,7 +102,6 @@ test("canonical GitHub release URLs remain usable after the repository rename", 
       }]);
     },
   });
-  t.after(() => fs.rmSync(path.dirname(checker.file), { recursive: true, force: true }));
   assert.equal((await checker.check()).available, true);
   assert.equal(checker.openUrl("release"), page);
   assert.equal(checker.openUrl("download"), download);
@@ -116,8 +116,7 @@ test('single EXE installer takes precedence and survives update cache reload wit
   const name = 'ASS-v0.3.1-win32-x64-setup.exe', url = `${RELEASES_URL}/download/v0.3.1/${name}`;
   raw.assets.push({ name, state: 'uploaded', size: 123456, browser_download_url: url, digest: 'sha256:' + 'b'.repeat(64) });
   assert.equal(safeRelease(raw).download.name, name);
-  const checker = fixture({ fetchRelease: async () => Response.json([raw]) });
-  t.after(() => fs.rmSync(path.dirname(checker.file), { recursive: true, force: true }));
+  const checker = fixture(t, { fetchRelease: async () => Response.json([raw]) });
   await checker.check(); assert.equal(checker.openUrl('download'), url);
   const restored = new UpdateChecker({ dataDir: path.dirname(checker.file), currentVersion: '0.3.0' });
   assert.equal(restored.openUrl('download'), url); assert.equal(restored.snapshot().latest.download.sha256, 'b'.repeat(64));
@@ -136,9 +135,9 @@ test("preview channel applies GitHub flags and semantic prerelease tags, not rel
   assert.equal(pickRelease(releases, true).version, "1.0.0-rc.1");
   assert.equal(pickRelease([safeRelease(release())], false), null);
 });
-test("checks have no authorization, do not follow redirects, and cache ETag responses", async () => {
+test("checks have no authorization, do not follow redirects, and cache ETag responses", async t => {
   let calls = 0;
-  const checker = fixture({
+  const checker = fixture(t, {
     fetchRelease: async (url, init) => {
       assert.equal(url, API_URL);
       assert.equal(init.credentials, "omit");
@@ -173,10 +172,10 @@ test("checks have no authorization, do not follow redirects, and cache ETag resp
   loaded.preferences({ includePreview: false });
   assert.equal(loaded.snapshot().available, false);
 });
-test("automatic checks honor six-hour interval and disabled preference; manual checks remain available", async () => {
+test("automatic checks honor six-hour interval and disabled preference; manual checks remain available", async t => {
   let clock = 100000000,
     calls = 0;
-  const checker = fixture({
+  const checker = fixture(t, {
     now: () => clock,
     fetchRelease: async () => {
       calls++;
@@ -203,10 +202,10 @@ test("automatic checks honor six-hour interval and disabled preference; manual c
   });
   assert.equal(loaded.snapshot().automatic, false);
 });
-test("concurrent checks share one request and cancellation cannot revive an old notification", async () => {
+test("concurrent checks share one request and cancellation cannot revive an old notification", async t => {
   let resolve,
     calls = 0;
-  const checker = fixture({
+  const checker = fixture(t, {
     fetchRelease: () => {
       calls++;
       return new Promise((r) => {
@@ -224,9 +223,9 @@ test("concurrent checks share one request and cancellation cannot revive an old 
   assert.equal(checker.snapshot().available, false);
   assert.notEqual(checker.snapshot().status, "checking");
 });
-test("network failure retains only cached metadata and applies retry backoff", async () => {
+test("network failure retains only cached metadata and applies retry backoff", async t => {
   let clock = 10000000;
-  const checker = fixture({ now: () => clock });
+  const checker = fixture(t, { now: () => clock });
   await checker.check();
   checker.fetchRelease = async () => {
     throw Error("secret upstream detail");
@@ -237,10 +236,10 @@ test("network failure retains only cached metadata and applies retry backoff", a
   assert.equal(checker.snapshot().nextAutomaticAt, clock + ERROR_INTERVAL);
   assert.ok(!checker.snapshot().message.includes("secret"));
 });
-test("GitHub rate-limit headers gate manual and scheduled retries", async () => {
+test("GitHub rate-limit headers gate manual and scheduled retries", async t => {
   let clock = 10000000,
     calls = 0;
-  const checker = fixture({
+  const checker = fixture(t, {
     now: () => clock,
     fetchRelease: async () => {
       calls++;
@@ -257,7 +256,7 @@ test("GitHub rate-limit headers gate manual and scheduled retries", async () => 
   clock += 3600000;
   await checker.check();
   assert.equal(calls, 2);
-  const longLimit = fixture({
+  const longLimit = fixture(t, {
     now: () => clock,
     fetchRelease: async () =>
       new Response(null, { status: 429, headers: { "retry-after": "172800" } }),
@@ -271,16 +270,16 @@ test("GitHub rate-limit headers gate manual and scheduled retries", async () => 
   });
   assert.equal(reloaded.snapshot().retryAt, clock + 172800000);
 });
-test("malformed and oversized API bodies fail closed without executable release content", async () => {
+test("malformed and oversized API bodies fail closed without executable release content", async t => {
   for (const body of [
     { message: "not releases" },
     [{ tag_name: "bad-version" }],
   ]) {
-    const checker = fixture({ fetchRelease: async () => Response.json(body) });
+    const checker = fixture(t, { fetchRelease: async () => Response.json(body) });
     await checker.check();
     assert.equal(checker.snapshot().status, "error");
   }
-  const checker = fixture({
+  const checker = fixture(t, {
     fetchRelease: async () => new Response(" ".repeat(8 * 1024 * 1024 + 1)),
   });
   await checker.check();
@@ -288,7 +287,7 @@ test("malformed and oversized API bodies fail closed without executable release 
   assert.throws(() => checker.openUrl("download"));
   assert.throws(() => checker.openUrl("https://evil.example"));
 });
-test("startup timer schedules a non-blocking check, timer stop cancels it", async () => {
+test("startup timer schedules a non-blocking check, timer stop cancels it", async t => {
   const pending = new Map();
   let id = 0,
     calls = 0;
@@ -300,7 +299,7 @@ test("startup timer schedules a non-blocking check, timer stop cancels it", asyn
     },
     clearTimeout: (key) => pending.delete(key),
   };
-  const checker = fixture({
+  const checker = fixture(t, {
     timers,
     fetchRelease: async () => {
       calls++;
@@ -326,8 +325,8 @@ test("startup timer schedules a non-blocking check, timer stop cancels it", asyn
   checker.stop();
   assert.equal(pending.size, 0);
 });
-test("no downgrade, no missing Windows package download, and new releases notify after dismissal", async () => {
-  const checker = fixture({ currentVersion: "0.2.0" });
+test("no downgrade, no missing Windows package download, and new releases notify after dismissal", async t => {
+  const checker = fixture(t, { currentVersion: "0.2.0" });
   await checker.check();
   assert.equal(checker.snapshot().available, false);
   assert.throws(() => checker.openUrl("download"));

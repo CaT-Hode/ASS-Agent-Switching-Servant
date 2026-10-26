@@ -93,6 +93,8 @@ ASS 是独立实现，不是原产品的官方版本。界面不沿用旧产品�
 
 ## 视觉
 
+请求监控的信息布局参考 [ccflare](https://github.com/snipeship/ccflare) README 中的 dashboard 截图：顶部指标、请求趋势和分组表现；参考 [ccusage](https://github.com/ccusage/ccusage/tree/main/apps/ccusage) 将输入、输出、缓存读取和写入分列。界面与采集逻辑由 ASS 独立实现，没有引入上述工具的代码、依赖或账户信息。模型展示继续复用 ASS 的 `usageModelName`，仅按最后一级归并。
+
 ASS logo 为本项目原创设计。基线 `public/ass-logo-reference.svg` 依据用户指定的 `docs/assets/ass-reference-flat.png` 逐瓣描摹。0.2.17 的最终 `public/ass-logo.svg` 逐字保留八片实际花瓣路径，仅修改中心：从真实根部及八条空隙宽度导向边构造法向偏移外沿，内孔为正圆，不用旋转复制或重新绘制花瓣。参考图来源、轮廓覆盖指标、导出清单与仅开发期使用的描摹工具边界见 [Logo 记录](docs/LOGO.md)。PNG、程序和 Windows ICO 均由最终 SVG 统一导出。其他图标使用 Lucide。系统字体与交互针对横向桌面窗口设计。
 
 图像编辑提示词保留于 [logo 编辑记录](docs/LOGO.md)。

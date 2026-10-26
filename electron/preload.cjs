@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 const allowed = [
   "window-action",
   "snapshot",
+  "request-monitor",
   "ui-preferences",
   "usage-refresh",
   "supplier-refresh",

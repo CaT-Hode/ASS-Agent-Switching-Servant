@@ -196,9 +196,11 @@ class ProxyConfig {
     return {
       providers,
       defaultModel,
-      ...(id === 'codex' && !accountless && injection.predictionCompatibility ? { predictionCompatibility: true } : {}),
-      // Desktop's account-wide quota gate ignores the selected provider. Use
-      // native custom-provider auth; preserve auth.json for official requests.
+      // Codex's archive page filters by the default provider. Keep OAuth
+      // injection on OpenAI so native archives stay visible. The persisted
+      // compatibility flag also keeps older applied plans distinguishable.
+      ...(id === 'codex' && !accountless ? { predictionCompatibility: true } : {}),
+      // Only explicit accountless mode selects custom-provider bearer auth.
       ...(id === 'codex' || accountless ? {
         ...(accountless ? { accountless: true } : { gatewayAuth: true }),
         localToken: this.clients[id]?.localToken || (this.modeTokens[id] ||= require("node:crypto").randomBytes(32).toString("hex")),
@@ -495,7 +497,7 @@ class ProxyConfig {
         ? { ...provider, network: current.network } : provider;
       const protocols = this.manager?.options?.protocols;
       return protocols ? { ...routed, models: routed.models.map(model => ({ ...model,
-        wireApi: protocols.select(routed, model, id) })) } : routed;
+        wireApi: model.protocolOverride || protocols.select(routed, model, id) })) } : routed;
     });
     return { providers: this.error ? [] : providers, accountless: plan?.accountless === true,
       gatewayAuth: plan?.gatewayAuth === true, localToken: this.error ? undefined : plan?.localToken };

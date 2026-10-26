@@ -31,7 +31,6 @@ const {
   declaredCapabilities,
   probeCapabilities,
   discoverModels,
-  PROBE_TIMEOUT_MS,
   DIAGNOSTIC_TIMEOUT_MS,
 } = require("../core/model-inspection.cjs");
 const { ModelDirectory } = require("../core/model-directory.cjs");
@@ -46,6 +45,7 @@ const {
 const { diagnosticMetrics } = require("../core/diagnostic-metrics.cjs");
 const { classifyFailure } = require("../core/diagnostic-failure.cjs");
 const { inspectConnectionResponse } = require("../core/connection-diagnostic.cjs");
+const { abortable } = require("../core/abortable.cjs");
 const { ScopedDns } = require("../core/scoped-dns.cjs");
 const {
   OFFICIAL_SERVICES,
@@ -68,6 +68,8 @@ const { launchCodexDesktop, openCodexDesktop } = require('../core/codex-desktop-
 let codexWorkspaceRelay;
 const { Preferences } = require("../core/preferences.cjs");
 const { UsageHistory } = require("../core/usage-history.cjs");
+const { RequestHistory } = require('../core/request-history.cjs');
+let requestHistory;
 const accountTransactions = require("../core/account-transactions.cjs");
 const { modelSources, nativeModels } = require("../core/model-inventory.cjs");
 const { nativeOfficialProvider: resolveNativeOfficialProvider } = require("../core/native-official.cjs");
@@ -241,12 +243,7 @@ function diagnosticContext(id, name) {
 function log(record) {
   recent.unshift(record);
   recent = recent.slice(0, 100);
-  try {
-    const p = path.join(store.dataDir, "requests.jsonl");
-    if (fs.existsSync(p) && fs.statSync(p).size > 2 * 1024 * 1024)
-      fs.renameSync(p, p + ".previous");
-    fs.appendFileSync(p, JSON.stringify(record) + "\n");
-  } catch {}
+  requestHistory.append(record);
   push();
 }
 function accountProvider(id) {
@@ -542,6 +539,7 @@ function buildSnapshot() {
     authReady: authReady(),
     encrypted: safeStorage.isEncryptionAvailable(),
     recent,
+    requestRevision: requestHistory.revision,
     diagnostics: diagnosticHistory.public(),
     diagnosticHistoryError: diagnosticHistory.error,
     diagnosticBatch: diagnosticBatch.snapshot(),
@@ -610,10 +608,10 @@ async function diagnose(providerId, modelName, signal) {
   if (diagnosticControllers.has(key)) throw Error("此模型正在检测");
   const fingerprint = native ? diagnosticFingerprint(native) : diagnosticHistory.fingerprint(providerId, name);
   const controller = new AbortController();
-  let requestSignal = AbortSignal.any([
+  const requestSignal = AbortSignal.any([
     controller.signal,
     ...(signal ? [signal] : []),
-    AbortSignal.timeout(official || native ? PROBE_TIMEOUT_MS : DIAGNOSTIC_TIMEOUT_MS),
+    AbortSignal.timeout(DIAGNOSTIC_TIMEOUT_MS),
   ]);
   diagnosticControllers.set(key, controller);
   let result, failure, protocolMs;
@@ -637,47 +635,49 @@ async function diagnose(providerId, modelName, signal) {
     },
   };
   try {
-    requestSignal.throwIfAborted();
-    if (!official && !native) {
-      await protocols.ensure(p, selected, { force: true, untilAvailable: true, signal: requestSignal });
-      protocolMs = Date.now() - start;
-      requestSignal = AbortSignal.any([requestSignal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]);
-      metrics = diagnosticMetrics(protocols.select(p, selected, "codex"), "router");
-    }
-    if (native) {
-      const checked = await checkNativeConnection(native, upstream, requestSignal, metrics);
-      result = { providerId, model: name, ok: true, ms: Date.now() - start,
-        time: new Date().toISOString(), ...checked };
-    } else {
-    if (!router.server) await router.start(servicePort);
-    const headers = official
-      ? readAuth()
-      : { authorization: "Bearer ass-local-diagnostic" };
-    const r = await fetch(
-      `http://127.0.0.1:${router.port}/diagnostics/v1/responses`,
-      {
-        method: "POST",
-        headers: {
-          ...headers,
-          "content-type": "application/json",
-          "x-ass-probe-token": router.clientToken,
-          "session_id": "ass-diagnostic-" + require("node:crypto").randomUUID(),
-          "user-agent": "ASS/model-diagnostics",
+    push();
+    result = await abortable((async () => {
+      requestSignal.throwIfAborted();
+      if (!official && !native) {
+        await protocols.ensure(p, selected, { force: true, untilAvailable: true, signal: requestSignal });
+        protocolMs = Date.now() - start;
+        requestSignal.throwIfAborted();
+        metrics = diagnosticMetrics(protocols.select(p, selected, "codex"), "router");
+      }
+      if (native) {
+        const checked = await checkNativeConnection(native, upstream, requestSignal, metrics);
+        return { providerId, model: name, ok: true, ms: Date.now() - start,
+          time: new Date().toISOString(), ...checked };
+      }
+      if (!router.server) await router.start(servicePort);
+      const headers = official
+        ? readAuth()
+        : { authorization: "Bearer ass-local-diagnostic" };
+      const r = await fetch(
+        `http://127.0.0.1:${router.port}/diagnostics/v1/responses`,
+        {
+          method: "POST",
+          headers: {
+            ...headers,
+            "content-type": "application/json",
+            "x-ass-probe-token": router.clientToken,
+            "session_id": "ass-diagnostic-" + require("node:crypto").randomUUID(),
+            "user-agent": "ASS/model-diagnostics",
+          },
+          body: JSON.stringify(body),
+          signal: requestSignal,
         },
-        body: JSON.stringify(body),
-        signal: requestSignal,
-      },
-    );
-    await inspectConnectionResponse(r, 'openai-responses', metrics, { relay: true, signal: requestSignal });
-    result = {
-      providerId,
-      ok: true,
-      ms: Date.now() - start,
-      time: new Date().toISOString(),
-      model: name,
-      message: "连接成功 · 完整流式响应",
-    };
-    }
+      );
+      await inspectConnectionResponse(r, 'openai-responses', metrics, { relay: true, signal: requestSignal });
+      return {
+        providerId,
+        ok: true,
+        ms: Date.now() - start,
+        time: new Date().toISOString(),
+        model: name,
+        message: "连接成功 · 完整流式响应",
+      };
+    })(), requestSignal);
   } catch (error) {
     failure = classifyFailure(error, { httpStatus: metrics.finish(false).httpStatus });
     result = {
@@ -690,7 +690,7 @@ async function diagnose(providerId, modelName, signal) {
         signal?.aborted || controller.signal.aborted
           ? "已取消"
           : error.name === "TimeoutError"
-            ? "请求超时（90 秒）"
+            ? "请求超时（30 秒）"
             : failure.message,
       cancelled: !!signal?.aborted || controller.signal.aborted,
     };
@@ -701,6 +701,10 @@ async function diagnose(providerId, modelName, signal) {
   if (protocolMs !== undefined) result.protocolMs = protocolMs;
   result.ms = Date.now() - start;
   if (failure && !result.cancelled) Object.assign(result, failure);
+  if (protocolMs !== undefined && !result.cancelled)
+    protocols.record(p, selected, { time: result.time, protocols: {
+      [result.protocol]: { status: result.ok ? "passed" : "unknown", httpStatus: result.httpStatus, ms: result.ms },
+    } });
   if (result.ok && !signal?.aborted && !controller.signal.aborted && native?.client && native?.account) {
     const current = nativeOfficialProvider(native.client, native.account);
     if (current?.apiKey === native.provider.apiKey &&
@@ -718,6 +722,10 @@ async function diagnose(providerId, modelName, signal) {
   }
   push();
   return result;
+}
+function cancelDiagnostic(providerId, modelName) {
+  if (providerId && modelName) diagnosticControllers.get(modelKey(providerId, modelName))?.abort();
+  else diagnosticBatch.cancel();
 }
 function invalidateReports(id, metadata = true) {
   diagnosticBatch.cancel();
@@ -985,6 +993,7 @@ else {
       await systemSession.setProxy({ mode: "system" });
       await directSession.setProxy({ mode: "direct" });
       store = new Store(dataDir, codexDir, safeStorage);
+      requestHistory = new RequestHistory(dataDir);
       protocols = new ProtocolNegotiation({ dataDir, crypto: safeStorage,
         getProviders: () => store.state.providers, fetcher: upstream, onChange: () => { if (connections) push(); } });
       diagnosticHistory = new DiagnosticHistory({
@@ -1183,6 +1192,11 @@ else {
         catch (error) { startupError = [startupError,'Codex 官方服务中转未恢复：'+error.message].filter(Boolean).join('；'); }
       }
       register("snapshot", () => snapshot());
+      register('request-monitor', revision => {
+        const history = requestHistory.snapshot();
+        return { ...history, rows: revision === history.revision ? undefined : history.rows,
+          active: router.monitorSnapshot(), now: Date.now() };
+      });
       register("window-action", (action) => {
         require('../core/window-controls.cjs').windowAction(window, action);
         return publishWindowState();
@@ -1687,7 +1701,7 @@ else {
           throw Error("请等待当前检测或接入切换完成");
         return diagnosticBatch.start();
       });
-      register("diagnose-cancel", () => diagnosticBatch.cancel());
+      register("diagnose-cancel", cancelDiagnostic);
       register("models-discover", readModelMetadata);
       register("capabilities-probe", async (id, name) => {
         if (connections.busy) throw Error("正在切换接入，请稍后检测");
@@ -1826,6 +1840,7 @@ else {
             testFetch = value;
           },
           diagnose,
+          cancelDiagnostic,
           diagnosticHistory,
           diagnosticBatch,
           readModelMetadata,

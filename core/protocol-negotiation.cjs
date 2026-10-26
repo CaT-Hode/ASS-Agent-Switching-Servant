@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { atomic } = require("./config.cjs");
-const { nativeProbe, modelKey } = require("./model-inspection.cjs");
+const { nativeProbe, modelKey, DIAGNOSTIC_TIMEOUT_MS } = require("./model-inspection.cjs");
 const { abortable } = require("./abortable.cjs");
 const ORDER = ["openai-responses", "anthropic", "openai-chat"];
 function identity(p, m) {
@@ -87,29 +87,31 @@ class ProtocolNegotiation {
     // A check is user-owned history, not a time-expiring network cache. This
     // also honors v0.1.28 records; unknown/denied results need a manual retry.
     if (!force && this.get(p, m)) return this.get(p, m);
+    const controller = new AbortController();
+    const probeSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]);
+    const timer = untilAvailable ? setTimeout(() => controller.abort(new DOMException("Connection check timeout", "TimeoutError")), DIAGNOSTIC_TIMEOUT_MS) : undefined;
     const job = (async () => {
-      const report = { time: new Date(this.now()).toISOString(), protocols: {} };
       // Connection checks need one working protocol. Full capability scans
       // still collect independent evidence for every protocol.
       const known = this.get(p, m), preferred = this.select(p, m, "codex");
       const order = untilAvailable && known?.protocols[preferred]?.status === "passed"
         ? [preferred, ...ORDER.filter(protocol => protocol !== preferred)] : ORDER;
       for (const protocol of order) {
-        signal?.throwIfAborted();
+        probeSignal.throwIfAborted();
         this.jobDetails.set(key, protocol); this.onChange();
         progress(protocol);
-        const result = await nativeProbe(p, m, protocol, this.fetcher, { signal });
-        signal?.throwIfAborted();
-        report.protocols[protocol] = result;
+        const result = await nativeProbe(p, m, protocol, this.fetcher, { signal: probeSignal,
+          ...(untilAvailable ? { connection: true, effort: m.defaultEffort || "medium" } : {}) });
+        if (probeSignal.aborted && probeSignal.reason?.name !== "TimeoutError") probeSignal.throwIfAborted();
         this.record(p, m, { time: new Date(this.now()).toISOString(), protocols: { [protocol]: result } });
         // A credential may be accepted by one protocol but not another. Only
         // rate limiting suppresses further probes; do not hammer the provider.
-        if (result.httpStatus === 429 || untilAvailable && result.status === "passed") break;
+        if (probeSignal.aborted || result.httpStatus === 429 || untilAvailable && result.status === "passed") break;
       }
       return this.get(p, m);
     })();
     this.jobs.set(jobKey, job);
-    try { return await job; } finally { this.jobs.delete(jobKey); this.jobDetails.delete(key); this.onChange(); }
+    try { return await job; } finally { clearTimeout(timer); this.jobs.delete(jobKey); this.jobDetails.delete(key); this.onChange(); }
   }
   async ensureProviders(providers, { onProgress = () => {}, signal, ...options } = {}) {
     const rows = providers.filter(p => p.enabled && p.apiKey).flatMap(p => p.models.filter(m => m.enabled).map(m => [p, m]));

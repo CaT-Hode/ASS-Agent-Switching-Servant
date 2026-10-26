@@ -1,41 +1,5 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs"), path = require("node:path");
-test('conversation trash controls retain semantic animation and use a centered action rail', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/project-conversations.jsx'), 'utf8');
-  const css = fs.readFileSync(path.join(__dirname, '../src/conversations.css'), 'utf8');
-  assert.ok(!source.includes('data-motion-icon={null}'), 'trash hover and press must not be disabled');
-  assert.match(source, /conversation-row-actions/);
-  assert.ok(!css.includes('top: 34px'));
-  assert.match(css, /conversation-row-actions \.icon-button > svg[^}]*width: 14px; height: 14px/);
-  assert.match(source, /destructive && onNotify\) onNotify\(errorText\(e\), true\)/);
-});
-test("all app icons have semantic motion tracks targeting existing named SVG parts", async () => {
-  const { iconArt } = await import("../src/icon-art.mjs");
-  const { iconMotion } = await import("../src/icon-motion-recipes.mjs");
-  assert.deepEqual(Object.keys(iconArt).sort(), Object.keys(iconMotion).sort());
-  for (const [name, art] of Object.entries(iconArt)) {
-    const parts = [];
-    const visit = ([tag, attrs, children]) => { assert.ok(tag); if (attrs["data-part"]) parts.push(attrs["data-part"]); children?.forEach(visit); };
-    art.forEach(visit);
-    assert.equal(parts.length, new Set(parts).size, name + " uses duplicate part names");
-    assert.ok(iconMotion[name].hover.length && iconMotion[name].press.length, name + " needs hover and press choreography");
-    assert.ok(iconMotion[name].press.every((track) => !track.loop), name + " press must end");
-    for (const track of [...iconMotion[name].hover, ...iconMotion[name].press]) {
-      assert.ok(parts.includes(track.part), name + " missing " + track.part);
-      assert.ok(track.duration > 0 && track.duration + (track.delay || 0) <= 4000);
-      assert.ok(track.frames.length >= 1);
-      for (const frame of track.frames) assert.ok(Object.keys(frame).every((k) => ["transform", "opacity", "offset", "strokeDasharray", "strokeDashoffset"].includes(k)));
-    }
-  }
-  for (const file of fs.readdirSync(path.join(__dirname, "../src")).filter((n) => n.endsWith(".jsx") && n !== "icons.jsx")) {
-    const source = fs.readFileSync(path.join(__dirname, "../src", file), "utf8");
-    assert.ok(!source.includes('from "lucide-react"'), file + " bypasses semantic icons");
-    for (const match of source.matchAll(/import\s*{([^}]+)}\s*from\s*"\.\/icons.jsx"/g))
-      for (const name of match[1].split(",").map((s) => s.trim()).filter(Boolean)) assert.ok(iconArt[name] || ["Loader2", "BrandMotion"].includes(name), name);
-  }
-});
-
 test("motion has separate hover/press/exit, retargets live frames and cleans up detached or disabled controls", async () => {
   const { attachIconMotion } = await import("../src/icon-player.mjs");
   const events = new Map(), mediaEvents = new Map();

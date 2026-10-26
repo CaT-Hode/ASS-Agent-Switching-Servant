@@ -83,6 +83,42 @@ test('Codex tool choices reject invalid references and roll back a failed save b
   assert.throws(()=>f.create(),/未覆盖 clients.json/);
   assert.equal(JSON.parse(fs.readFileSync(f.manager.file)).injections.codex.codexToolModes[ref],'invalid');
 });
+test('model protocols persist per harness, reach native injection, follow renames and reset to auto', t => {
+  const f=fixture(t),ref=modelRef('work','one'),renamed=modelRef('work','renamed'),source=structuredClone(f.providers);
+  f.manager.setInjection('codex',{modelProtocol:{ref,protocol:'anthropic'}});
+  f.manager.setInjection('pi',{modelProtocol:{ref,protocol:'openai-responses'}});
+  assert.equal(f.create().injection('codex').models[0].protocol,'anthropic');
+  assert.equal(f.create().injection('codex').models[0].protocolOverride,'anthropic');
+  assert.equal(f.manager.injection('claude').models[0].protocol,'openai-chat');
+  const native=new NativeConfig(f.data,{isEncryptionAvailable:()=>true,encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()},f.manager);
+  native.sync('pi');
+  const target=locations('pi',f.manager),models=JSON.parse(fs.readFileSync(target.config));
+  assert.ok(Object.values(models.providers).some(p=>p.api==='openai-responses'&&p.models.some(m=>m.id==='one')));
+  f.manager.reconcileModel('work','one','renamed');
+  assert.equal(f.manager.state.injections.codex.modelProtocols[renamed],'anthropic');
+  assert.equal(f.manager.state.injections.pi.modelProtocols[renamed],'openai-responses');
+  f.manager.reconcileModel('work','renamed',null);
+  assert.equal(f.manager.state.injections.codex.modelProtocols,undefined);
+  f.manager.setInjection('pi',{modelProtocol:{ref,protocol:'openai-responses'}});
+  f.manager.setInjection('pi',{modelProtocol:{ref,protocol:'auto'}});
+  assert.equal(f.create().injection('pi').models[0].protocol,'openai-chat');
+  assert.equal(f.create().state.injections.pi.modelProtocols,undefined);
+  assert.deepEqual(f.providers,source,'shared provider configuration stays unchanged');
+});
+test('model protocol edits validate their references and roll back failed persistence', t => {
+  const f=fixture(t),ref=modelRef('work','one');f.manager.save();
+  const before=fs.readFileSync(f.manager.file),state=structuredClone(f.manager.state);
+  for(const change of [null,{ref,protocol:'invalid'},{ref:modelRef('work','missing'),protocol:'anthropic'},
+      {ref:modelRef('official','gpt-fixture'),protocol:'openai-responses'},{ref,protocol:'anthropic',extra:true}])
+    assert.throws(()=>f.manager.setInjection('codex',{modelProtocol:change}),/模型协议设置无效/);
+  const save=f.manager.save.bind(f.manager);f.manager.save=()=>{throw Error('synthetic disk failure')};
+  assert.throws(()=>f.manager.setInjection('codex',{modelProtocol:{ref,protocol:'anthropic'}}),/disk failure/);
+  assert.deepEqual(f.manager.state,state);assert.deepEqual(fs.readFileSync(f.manager.file),before);
+  f.manager.save=save;f.manager.setInjection('codex',{modelProtocol:{ref,protocol:'anthropic'}});
+  const invalid=JSON.parse(fs.readFileSync(f.manager.file));invalid.injections.codex.modelProtocols[ref]='invalid';
+  fs.writeFileSync(f.manager.file,JSON.stringify(invalid));
+  assert.throws(()=>f.create(),/未覆盖 clients.json/);
+});
 test('fresh empty native injection refuses enable; previously applied all-off restores keys and survives restart', t => {
   const f=fixture(t), crypt={isEncryptionAvailable:()=>true,encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()};
   const n=new NativeConfig(f.data,crypt,f.manager);

@@ -13,14 +13,11 @@ const { claims } = require("./account-info.cjs");
 const zcodeCatalog = require("./zcode-catalog.cjs");
 const zcodeInfo = require("./zcode-account-info.cjs");
 const { providerSessionHeaders } = require("./provider-transport.cjs");
-const { builtinApi } = require("./native-api-defaults.cjs");
+const { builtinApi, nativeProtocols: protocols } = require("./native-api-defaults.cjs");
 const { memoRead } = require("./read-scope.cjs");
 const { inspectConnectionResponse } = require("./connection-diagnostic.cjs");
 const object = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 const secret = (v) => typeof v === "string" && v.trim() && v.length <= 65536 && !/[\r\n\0]/.test(v) ? v.trim() : "";
-const protocols = { kimi: "openai-chat", openai: "openai-chat", openai_legacy: "openai-chat",
-  openai_responses: "openai-responses", anthropic: "anthropic", "openai-completions": "openai-chat",
-  "openai-chat-completions": "openai-chat", "openai-responses": "openai-responses", "anthropic-messages": "anthropic" };
 function read(file, format = "json") {
   return memoRead(read, [file, format], () => readUncached(file, format));
 }

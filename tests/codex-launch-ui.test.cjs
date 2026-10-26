@@ -164,6 +164,7 @@ test('Codex launch: disconnected/accountless modes do not promise official repai
   await page.evaluate(() => window.setConnection({enabled:true,accountless:true,accountlessAvailable:false}));
   assert.ok(await launch().isDisabled());
   await page.getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await page.locator('.codex-desktop-launch').waitFor({ state: 'detached' });
   assert.equal(await page.locator('.codex-desktop-launch').count(), 0);
   assert.ok(await page.getByRole('button', { name: '打开 Claude Code 桌面端', exact: true }).isVisible());
 });

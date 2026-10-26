@@ -11,8 +11,14 @@ const BUILTINS = {
   "kimi-coding": ["https://api.kimi.com/coding/v1", "anthropic", "KIMI_API_KEY"],
 };
 const aliases = { "DEEPSEEK_API_KEY": "deepseek", "deepseek-official": "deepseek", "opencode-zen": "opencode" };
+const nativeProtocols = {
+  kimi: "openai-chat", openai: "openai-chat", openai_legacy: "openai-chat",
+  openai_responses: "openai-responses", anthropic: "anthropic",
+  "openai-completions": "openai-chat", "openai-chat-completions": "openai-chat",
+  "openai-responses": "openai-responses", "anthropic-messages": "anthropic",
+};
 function builtinApi(id) {
   const row = BUILTINS[aliases[id] || id];
   return row ? { baseUrl: row[0], protocol: row[1], envKey: row[2] } : {};
 }
-module.exports = { builtinApi, BUILTINS };
+module.exports = { builtinApi, BUILTINS, nativeProtocols };

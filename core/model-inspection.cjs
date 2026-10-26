@@ -1,12 +1,12 @@
 const crypto = require("node:crypto");
-const { endpoint, EFFORTS, PROTOCOLS } = require("./models.cjs");
+const { endpoint, EFFORTS } = require("./models.cjs");
 const { convertRequest, sseMessages, anthropicLimited } = require("./adapters.cjs");
 const { protocolEndpoint, providerSessionHeaders } = require("./provider-transport.cjs");
 const { abortable } = require("./abortable.cjs");
-// A completed stream can take well over 20 seconds even for a small request.
-// Keep each protocol bounded, independently of the following connection check.
+// Full capability scans allow slow generations; connection checks have one
+// short budget covering protocol selection and the final request together.
 const PROBE_TIMEOUT_MS = 90000;
-const DIAGNOSTIC_TIMEOUT_MS = (PROTOCOLS.length + 1) * PROBE_TIMEOUT_MS;
+const DIAGNOSTIC_TIMEOUT_MS = 30000;
 const modelKey = (provider, model) => JSON.stringify([provider, model]);
 const strings = (value) =>
   Array.isArray(value)
@@ -260,7 +260,7 @@ async function nativeProbe(
   model,
   protocol,
   fetchUpstream,
-  { effort, tool = false, signal, timeoutMs = PROBE_TIMEOUT_MS } = {},
+  { effort, tool = false, connection = false, signal, timeoutMs = PROBE_TIMEOUT_MS } = {},
 ) {
   const nonce = crypto.randomBytes(8).toString("hex"),
     started = Date.now();
@@ -269,9 +269,9 @@ async function nativeProbe(
     stream: true,
     store: false,
     max_output_tokens: 512,
-    instructions:
-      "This is a capability check. Reply briefly. Do not perform any external actions. Request marker: " + nonce,
-    input: tool
+    instructions: connection ? "Reply concisely."
+      : "This is a capability check. Reply briefly. Do not perform any external actions. Request marker: " + nonce,
+    input: connection ? [{ role: "user", content: [{ type: "input_text", text: "Reply exactly OK." }] }] : tool
       ? `Call ass_probe_echo once with marker ${nonce}.`
       : "What is 19 times 23? Reply only with the result.",
     ...(effort ? { reasoning: { effort } } : {}),

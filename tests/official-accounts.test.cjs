@@ -58,8 +58,9 @@ test("versioned compatibility API prefixes do not get an extra v1", () => {
     "https://api.anthropic.com/v1/messages",
   );
 });
-test("native-only keys are encrypted at rest, redacted in public snapshots and can rotate", () => {
+test("native-only keys are encrypted at rest, redacted in public snapshots and can rotate", t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ass-vault-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const key = crypto.randomBytes(32);
   const codec = {
     isEncryptionAvailable: () => true,

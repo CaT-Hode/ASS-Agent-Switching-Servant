@@ -1,4 +1,4 @@
-import React, { useState, useEffect, lazy, Suspense } from "react";
+import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Network,
@@ -17,6 +17,7 @@ import {
   Play,
   Square,
   MessagesSquare,
+  Zap,
 } from "./icons.jsx";
 import "./style.css";
 import "./controls.css";
@@ -32,6 +33,8 @@ import { modelKey, ModelCheckButton } from "./model-inspection.jsx";
 import { DiagnosticTime } from "./diagnostic-time.jsx";
 import { Overview } from "./overview.jsx";
 import { latestSnapshot } from "./state-snapshot.mjs";
+import { transitionUI, Presence } from './surface-motion.jsx';
+import { usageModelName } from './usage-view.mjs';
 import { ThemeControl, applyTheme } from "./theme.jsx";
 import { InteractiveBrand } from "./interactive-brand.jsx";
 import { AssLogo } from "./ass-logo.jsx";
@@ -41,6 +44,7 @@ import "./theme.css";
 import "./motion.css";
 const api = window.ass;
 const Conversations = lazy(() => import("./conversations.jsx").then((m) => ({ default: m.Conversations })));
+const RequestMonitor = lazy(() => import('./request-monitor.jsx').then(module => ({ default: module.RequestMonitor })));
 const date = (value) =>
   new Date(value).toLocaleTimeString("zh-CN", { hour12: false });
 function Button({
@@ -100,7 +104,7 @@ function RequestTable({ rows }) {
           <div className="request-row" key={r.time + i}>
             <span className="muted mono">{date(r.time)}</span>
             <span className="ellipsis" title={r.model}>
-              {r.model.split("::").at(-1)}
+              {usageModelName(r.model)}
             </span>
             <span className="muted">{r.source}</span>
             <span className={r.ok ? "success" : "danger"} title={r.diagnostic?.failure ?
@@ -131,7 +135,7 @@ function Diagnostics({ state, providers, act, busy }) {
             模型连接测试 <span className="count">{available}</span>
           </h2>
           <p className="muted">
-            测试可能产生 API 费用。
+            每个模型最多测试 30 秒，可单独取消。测试可能产生 API 费用。
           </p>
         </div>
         {batch?.running ? (
@@ -292,6 +296,7 @@ function App() {
   const [connectionRequest, setConnectionRequest] = useState(null);
   const [providerDetail, setProviderDetail] = useState(null);
   const [conversationTarget, setConversationTarget] = useState(null);
+  const viewTarget = useRef('overview');
   function remember(input) {
     api
       .call("ui-preferences", input)
@@ -300,8 +305,10 @@ function App() {
       );
   }
   function setView(next) {
-    setProviderDetail(null);
-    setViewLocal(next);
+    if (viewTarget.current !== next || providerDetail) {
+      viewTarget.current = next;
+      transitionUI(() => { setProviderDetail(null); setViewLocal(next); });
+    }
     remember({ view: next });
   }
   function setClientTarget(next) {
@@ -313,8 +320,9 @@ function App() {
   }
   function openProvider(id) {
     setProviderTarget(id);
-    setView("providers");
-    setProviderDetail(id);
+    viewTarget.current = 'providers';
+    transitionUI(() => { setViewLocal('providers'); setProviderDetail(id); });
+    remember({ view: 'providers' });
   }
   useEffect(
     () =>
@@ -348,8 +356,8 @@ function App() {
       return () => clearTimeout(id);
     }
   }, [toast]);
-  async function act(key, fn, success) {
-    setBusy(key);
+  async function act(key, fn, success, blocking = true) {
+    if (blocking) setBusy(key);
     try {
       const r = await fn();
       if (r?.ok === false) setToast({ error: true, message: r.message });
@@ -359,7 +367,8 @@ function App() {
           message: `已导入 ${r.providers} 个供应商、${r.models} 个模型`,
         });
       const next = await api.call("snapshot");
-      setState((current) => latestSnapshot(current, next));
+      if (key === 'usage-options') transitionUI(() => setState(current => latestSnapshot(current, next)));
+      else setState((current) => latestSnapshot(current, next));
       return r;
     } catch (e) {
       setToast({
@@ -370,7 +379,7 @@ function App() {
         ),
       });
     } finally {
-      setBusy("");
+      if (blocking) setBusy("");
     }
   }
   if (!api)
@@ -399,6 +408,7 @@ function App() {
   ];
   const title = {
     overview: "路由总览",
+    monitor: '请求监控',
     providers: "供应商与模型",
     clients: "客户端与账户",
     conversations: "对话管理",
@@ -436,6 +446,7 @@ function App() {
         <nav aria-label="主导航">
           {[
             ["overview", LayoutGrid, "路由总览"],
+            ['monitor', Zap, '请求监控'],
             ["providers", Boxes, "供应商与模型"],
             ["clients", Monitor, "客户端与账户"],
             ["conversations", MessagesSquare, "对话管理"],
@@ -492,19 +503,21 @@ function App() {
             onView={() => setView("updates")}
           />
         )}
-        {view === "overview" ? (
+        <div className="page-content">{view === "overview" ? (
           <Overview
             {...{ state, act, setView, setClientTarget }}
           />
+        ) : view === 'monitor' ? (
+          <Suspense fallback={<div className="empty"><Loader2 className="spin" /><p>读取请求监控…</p></div>}><RequestMonitor state={state} /></Suspense>
         ) : view === "providers" ? (
           <Providers
             {...{ state, providers, act, busy }}
             activeProvider={providerDetail}
             onOpenProvider={(id) => {
               setProviderTarget(id);
-              setProviderDetail(id);
+              transitionUI(() => setProviderDetail(id));
             }}
-            onBack={() => setProviderDetail(null)}
+            onBack={() => transitionUI(() => setProviderDetail(null))}
           />
         ) : view === "clients" ? (
           <Clients
@@ -525,7 +538,7 @@ function App() {
           <Updates {...{ state, act, busy }} />
         ) : (
           <Diagnostics {...{ state, providers, act, busy }} />
-        )}
+        )}</div>
       </main>
       {connectionRequest && (
         <ConnectionDialog
@@ -541,6 +554,7 @@ function App() {
           }}
         />
       )}
+      <Presence show={!!toast}>
       {toast && (
         <div role="status" aria-live={toast.error ? "assertive" : "polite"} aria-atomic="true" className={"toast " + (toast.error ? "error" : "")}>
           {toast.error ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
@@ -550,6 +564,7 @@ function App() {
           </button>
         </div>
       )}
+      </Presence>
     </div>
   );
 }

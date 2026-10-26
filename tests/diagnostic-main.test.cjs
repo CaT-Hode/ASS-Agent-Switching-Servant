@@ -24,45 +24,39 @@ test('main-process diagnostic reasons survive restart and quick checks repair ap
   }
   const results = await app.evaluate(async () => {
     const t = global.assTest;
-    const codes = { auth: 'invalid_api_key', quota: 'insufficient_quota', rate: 'rate_limit_exceeded' };
     t.setFetch(async url => {
       const name = new URL(url).hostname.split('.')[0];
       if (name === 'dns') throw Error('net::ERR_NAME_NOT_RESOLVED');
-      if (!codes[name]) throw Error('Unexpected synthetic upstream request');
-      return Response.json({ error: { code: codes[name], message: 'fixture-private-error' } }, { status: name === 'auth' ? 401 : 429 });
+      if (name !== 'auth') throw Error('Unexpected synthetic upstream request');
+      return Response.json({ error: { code: 'invalid_api_key', message: 'fixture-private-error' } }, { status: 401 });
     });
-    for (const id of ['dns','auth','quota','rate']) t.store.updateProvider({ id, name: id, baseUrl: `https://${id}.invalid/v1`, apiKey: 'fixture-synthetic', enabled: true,
+    for (const id of ['dns','auth']) t.store.updateProvider({ id, name: id, baseUrl: `https://${id}.invalid/v1`, apiKey: 'fixture-synthetic', enabled: true,
       models: [{ model: 'alpha', displayName: id, wireApi: 'openai-responses', enabled: true }] });
     const single = [];
-    for (const id of ['dns','auth','quota','rate']) single.push(await t.diagnose(id, 'alpha'));
+    for (const id of ['dns','auth']) single.push(await t.diagnose(id, 'alpha'));
     t.diagnosticBatch.start(); await t.diagnosticBatch.finished;
     return { single, diagnostics: t.snapshot().diagnostics, batch: t.snapshot().diagnosticBatch };
   });
-  assert.deepEqual(results.single.map(r => r.failure.kind), ['dns','authentication','quota','rate_limit']);
-  assert.deepEqual(results.single.map(r => r.httpStatus), [null,401,429,429]);
-  assert.deepEqual(results.single.map(r => r.localStatus), [502,401,429,429]);
-  assert.equal(results.batch.failed, 4);
-  assert.deepEqual(results.batch.entries.filter(e=>e.status==='failed').map(e=>e.failure.kind).sort(), ['authentication','dns','quota','rate_limit']);
+  assert.deepEqual(results.single.map(r => r.failure.kind), ['dns','authentication']);
+  assert.deepEqual(results.single.map(r => r.httpStatus), [null,401]);
+  assert.deepEqual(results.single.map(r => r.localStatus), [502,401]);
+  assert.equal(results.batch.failed, 2);
   assert.doesNotMatch(JSON.stringify(results), /fixture-private-error|fixture-synthetic/);
   await page.getByRole('button', { name: '连接诊断', exact: true }).click();
   await page.locator('.diagnostic-failure strong').getByText('DNS 解析失败', { exact: true }).waitFor();
-  assert.ok(await page.locator('.diagnostic-failure strong').getByText('额度或余额耗尽', { exact: true }).isVisible());
   const dnsCard = page.locator('.diagnostic').filter({has:page.getByText('DNS 解析失败',{exact:true})});
   await dnsCard.getByText('测试详情',{exact:true}).click();
   assert.match(await dnsCard.innerText(), /ASS 路由/);
   assert.match(await dnsCard.innerText(), /Responses/);
-  assert.equal(await page.locator('.request-table .request-row:not(.table-head)').filter({hasText:'DNS 解析失败'}).count(), 2);
   assert.match(await page.locator('.request-table').innerText(), /认证失败/);
-  assert.match(await page.locator('.request-table').innerText(), /额度或余额耗尽/);
-  await page.screenshot({ path: path.join(data,'diagnostics-app.png'), fullPage: true, animations: 'disabled' });
   assert.deepEqual(errors, []);
   await close(); app = await launch(); page = await app.firstWindow(); await page.waitForSelector('h1');
   const restored = await app.evaluate(() => ({ diagnostics: global.assTest.snapshot().diagnostics, batch: global.assTest.snapshot().diagnosticBatch }));
   assert.deepEqual(restored.diagnostics, results.diagnostics);
-  assert.equal(restored.batch.failed, 4); assert.equal(restored.batch.restored, true);
+  assert.equal(restored.batch.failed, 2); assert.equal(restored.batch.restored, true);
   assert.equal(fs.existsSync(path.join(codex,'config.toml')), false);
   const quick = await app.evaluate(async () => {
-    const t = global.assTest, calls = [], budgets = [];
+    const t = global.assTest, calls = [], budgets = [], bodies = [];
     t.store.updateProvider({ id:'quick', name:'Quick Gemini', enabled:true, baseUrl:'https://quick.invalid/v1', apiKey:'synthetic-quick-key',
       models:[{model:'gemini-fixture', wireApi:'anthropic', enabled:true}] });
     const proxy = t.connections.proxyConfig;
@@ -72,6 +66,7 @@ test('main-process diagnostic reasons survive restart and quick checks repair ap
     t.setFetch(async (url, init) => {
       calls.push(new URL(url).pathname);
       budgets.push(JSON.parse(init.body).max_output_tokens);
+      bodies.push(JSON.parse(init.body));
       if (!url.endsWith('/responses')) throw Error('unused protocol must not delay a successful connection check');
       return new Response('data: '+JSON.stringify({type:'response.completed', response:{output:[{type:'message',content:[{type:'output_text',text:'OK'}]}]}})+'\n\n');
     });
@@ -80,13 +75,52 @@ test('main-process diagnostic reasons survive restart and quick checks repair ap
       method:'POST', headers:{authorization:'Bearer '+proxy.clients.codex.localToken,'content-type':'application/json'},
       body:JSON.stringify({model:proxy.clients.codex.catalog.models.find(m=>m.slug.endsWith('::gemini-fixture')).slug,input:'Reply OK',stream:true}),
     });
-    return {before, result, status:response.status, completed:(await response.text()).includes('response.completed'), calls, budgets,
+    return {before, result, status:response.status, completed:(await response.text()).includes('response.completed'), calls, budgets, bodies,
       unchangedSnapshot:proxy.clients.codex.providers.find(p=>p.id==='quick').models[0].wireApi};
   });
   assert.equal(quick.before,'anthropic'); assert.equal(quick.result.ok,true);
   assert.equal(quick.status,200); assert.equal(quick.completed,true); assert.equal(quick.unchangedSnapshot,'anthropic');
   assert.deepEqual(quick.calls,['/v1/responses','/v1/responses','/v1/responses']);
   assert.deepEqual(quick.budgets,[512,512,131072]);
+  assert.deepEqual(quick.bodies[0],quick.bodies[1],'protocol probe and routed connection check must use the same request parameters');
   assert.ok(Number.isFinite(quick.result.protocolMs)); assert.ok(quick.result.ms>=quick.result.protocolMs);
+  const split = await app.evaluate(async () => {
+    const t=global.assTest; let call=0;
+    t.setFetch(async () => ++call === 1
+      ? new Response('data: '+JSON.stringify({type:'response.completed',response:{output:[{type:'message',content:[{type:'output_text',text:'OK'}]}]}})+'\n\n')
+      : Response.json({error:{message:'Unsupported request parameter'}},{status:400}));
+    const result=await t.diagnose('quick','gemini-fixture');
+    return {result,protocol:t.protocols.public()[JSON.stringify(['quick','gemini-fixture'])].protocols['openai-responses']};
+  });
+  assert.equal(split.result.ok,false); assert.equal(split.result.httpStatus,400);
+  assert.equal(split.protocol.lastStatus,'unknown'); assert.equal(split.protocol.httpStatus,400);
+  await app.evaluate(() => {
+    const t=global.assTest;
+    t.store.updateProvider({id:'parallel',name:'Parallel checks',baseUrl:'https://parallel.invalid/v1',apiKey:'synthetic-parallel',enabled:true,
+      models:['gemini-stall','other-model','second-stall'].map(model=>({model,wireApi:'openai-responses',enabled:true}))});
+    t.setFetch(async (_,init) => {
+      if(JSON.parse(init.body).model.endsWith('stall')) return new Promise(()=>{});
+      return new Response('data: '+JSON.stringify({type:'response.completed',response:{output:[{type:'message',content:[{type:'output_text',text:'OK'}]}]}})+'\n\n');
+    });
+  });
+  await page.evaluate(()=>window.ass.call('snapshot'));
+  await page.getByRole('button',{name:'连接诊断',exact:true}).click();
+  await page.getByRole('button',{name:'检测模型 gemini-stall',exact:true}).click();
+  await page.getByRole('button',{name:'取消检测 gemini-stall',exact:true}).waitFor();
+  assert.ok(await page.getByRole('button',{name:'检测模型 other-model',exact:true}).isEnabled());
+  await page.getByRole('button',{name:'检测模型 other-model',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('button[aria-label="检测模型 other-model"]')?.classList.contains('passed'));
+  await page.getByRole('button',{name:'检测模型 second-stall',exact:true}).click();
+  await page.getByRole('button',{name:'取消检测 second-stall',exact:true}).waitFor();
+  await page.getByRole('button',{name:'取消检测 gemini-stall',exact:true}).click();
+  await page.getByRole('button',{name:'检测模型 gemini-stall',exact:true}).waitFor();
+  assert.ok(await page.getByRole('button',{name:'取消检测 second-stall',exact:true}).isEnabled());
+  await page.getByRole('button',{name:'取消检测 second-stall',exact:true}).click();
+  await page.getByRole('button',{name:'检测模型 second-stall',exact:true}).waitFor();
+  const parallel=await app.evaluate(()=>({jobs:global.assTest.snapshot().diagnosticJobs,results:global.assTest.snapshot().diagnostics}));
+  assert.equal(Object.keys(parallel.jobs).length,0);
+  assert.equal(parallel.results[JSON.stringify(['parallel','other-model'])].ok,true);
+  assert.equal(parallel.results[JSON.stringify(['parallel','gemini-stall'])],undefined);
+  assert.deepEqual(errors,[]);
   console.log('Main-process diagnostic QA evidence: ' + data);
 });

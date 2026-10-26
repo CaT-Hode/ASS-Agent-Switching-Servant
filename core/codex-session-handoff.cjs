@@ -112,7 +112,7 @@ class CodexSessionHandoff {
   assertPredictionRoute() {
     const status = this.config.status();
     if (!status.attached || status.provider !== 'openai' || status.authMode !== 'oauth')
-      throw Error('请先开启提示词预测兼容并同步普通 OAuth 接入；无账号模式不能修复预测');
+      throw Error('请先更新并同步普通 OAuth 接入；无账号模式不能修复预测');
     this.config.preflightDetach(); // Validate the saved ownership record, without detaching.
   }
   async restorePrediction() {

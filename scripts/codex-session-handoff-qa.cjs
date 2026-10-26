@@ -11,6 +11,7 @@ const binaries = path.join(process.env.LOCALAPPDATA,'OpenAI','Codex','bin');
 const executable = process.env.ASS_QA_CODEX_BIN || fs.readdirSync(binaries).map(d=>path.join(binaries,d,'codex.exe')).find(f=>fs.existsSync(f));
 const requests = []; let processHandle, sequence=0;
 const prediction = process.env.ASS_QA_PREDICTION === '1';
+const archives = process.env.ASS_QA_ARCHIVES === '1';
 const oauth = prediction || process.env.ASS_QA_OAUTH === '1';
 function launch() {
   const env={...process.env,CODEX_HOME:codex,OPENAI_API_KEY:'synthetic-local-key'};
@@ -56,6 +57,44 @@ server.on('upgrade',(_,socket)=>socket.end('HTTP/1.1 426 Upgrade Required\r\nCon
   atomic(path.join(codex,'models_cache.json'),JSON.stringify({models:nativeModels}));
   const provider=normalizeProvider({id:'fixture',baseUrl:'https://example.test/v1',apiKey:'synthetic',models:[{model:'mimo',wireApi:'openai-responses'}]});
   const config=new ConfigManager(codex,data,port);atomic(config.catalog,JSON.stringify(makeCatalog(nativeModels,[provider])));
+  if(archives) {
+    const {DatabaseSync}=require('node:sqlite'),{createHash}=require('node:crypto');
+    const {zstdCompressSync}=require('node:zlib');
+    let client=launch();
+    const initialize=async()=>{await client.rpc('initialize',{clientInfo:{name:'ass_archive_qa',version:'1'},capabilities:{experimentalApi:true}});client.notify('initialized',{});};
+    const listed=async(modelProviders=null)=>(await client.rpc('thread/list',{archived:true,modelProviders,useStateDbOnly:true,limit:100})).data.map(t=>t.id).sort();
+    await initialize(); const ids=[];
+    for(let i=0;i<3;i++) {
+      const started=await client.rpc('thread/start',{cwd:out,approvalPolicy:'never',sandbox:'read-only'});
+      const id=started.thread.id;ids.push(id);
+      const turn=await client.rpc('turn/start',{threadId:id,input:[{type:'text',text:'archive fixture '+i}]});await client.completed(turn.turn.id);
+      await client.rpc('thread/archive',{threadId:id});
+    }
+    await client.close();
+    const database=path.join(codex,fs.readdirSync(codex).find(f=>/^state_\d+\.sqlite$/.test(f))),db=new DatabaseSync(database);
+    const rows=db.prepare('SELECT id,rollout_path FROM threads WHERE archived=1').all();
+    const legacy=rows.find(r=>r.id===ids[2]);
+    const text=fs.readFileSync(legacy.rollout_path,'utf8'),end=text.indexOf('\n'),meta=JSON.parse(text.slice(0,end));
+    meta.payload.model_provider='aimai1';fs.writeFileSync(legacy.rollout_path,JSON.stringify(meta)+text.slice(end));
+    db.prepare('UPDATE threads SET model_provider=? WHERE id=?').run('aimai1',legacy.id);db.close();
+    const compressed=rows.find(r=>r.id===ids[1]);
+    fs.writeFileSync(compressed.rollout_path+'.zst',zstdCompressSync(fs.readFileSync(compressed.rollout_path)));fs.unlinkSync(compressed.rollout_path);
+    const hashFiles=()=>rows.map(r=>{const file=fs.existsSync(r.rollout_path)?r.rollout_path:r.rollout_path+'.zst';return createHash('sha256').update(fs.readFileSync(file)).digest('hex');});
+    const originalHashes=hashFiles();
+    client=launch();await initialize();const before=await listed();assert.deepEqual(before,ids.slice(0,2).sort());assert.equal((await listed([])).length,3);await client.close();
+    const {Store}=require('../core/store.cjs'),{HarnessManager}=require('../core/harnesses.cjs'),{ProxyConfig}=require('../core/proxy-config.cjs');
+    const store=new Store(data,codex,crypt);store.updateProvider({...provider,baseUrl:`http://127.0.0.1:${port}/v1`});
+    const manager=new HarnessManager(data,()=>store.state,store.officialModels,codex,{home:out,env:{},launchEnv:{PATH:''}});
+    const proxy=new ProxyConfig(data,crypt,manager,store,config);manager.options.proxyConfig=proxy;
+    proxy.sync('codex');assert.equal(config.status().provider,'openai');
+    client=launch();await initialize();assert.deepEqual(await listed(),before);assert.equal((await listed([])).length,3);
+    const started=await client.rpc('thread/start',{cwd:out,approvalPolicy:'never',sandbox:'read-only'});
+    const turn=await client.rpc('turn/start',{threadId:started.thread.id,input:[{type:'text',text:'injected model fixture'}]});await client.completed(turn.turn.id);
+    assert.equal(requests.at(-1).model,proxy.clients.codex.defaultModel.model);await client.close();
+    config.detach();client=launch();await initialize();assert.deepEqual(await listed(),before);await client.close();
+    assert.deepEqual(hashFiles(),originalHashes);
+    console.log(JSON.stringify({passed:true,nativeArchives:before.length,compressedArchives:1,legacyProviderPreserved:true,injectedModelRouted:true,archiveBytesUnchanged:true,realCloudCalls:0,out}));return;
+  }
   config.attach({model:codexModelId(provider.id,'mimo'),effort:'medium'});
   let client=launch();await client.rpc('initialize',{clientInfo:{name:'ass_resume_qa',version:'1'},capabilities:{experimentalApi:true}});client.notify('initialized',{});
   const started=await client.rpc('thread/start',{cwd:out,approvalPolicy:'never',sandbox:'read-only'});const id=started.thread.id;

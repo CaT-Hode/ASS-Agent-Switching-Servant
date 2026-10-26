@@ -5,7 +5,7 @@ const crypto = require("node:crypto");
 const { spawn, execFile } = require("node:child_process");
 const { atomic } = require("./config.cjs");
 const { DIRECT, locations, providerId } = require("./native-config.cjs");
-const { makeCatalog, codexModelId } = require("./models.cjs");
+const { makeCatalog, codexModelId, PROTOCOLS } = require("./models.cjs");
 const { apiProfile } = require("./account-info.cjs");
 const additional = require("./additional-harnesses.cjs");
 const additionalOAuth = require("./additional-oauth.cjs");
@@ -82,6 +82,8 @@ const APIS = {
   "openai-chat": "openai-completions",
   anthropic: "anthropic-messages",
 };
+const validModelProtocols = (protocols) => protocols && typeof protocols === 'object' && !Array.isArray(protocols) &&
+  Object.keys(protocols).length <= 5000 && Object.entries(protocols).every(([ref, protocol]) => validToolRef(ref) && PROTOCOLS.includes(protocol));
 const json = (file) => {
   try {
     if (!fs.existsSync(file)) return {};
@@ -101,6 +103,7 @@ const json = (file) => {
       if (!object(config) || !strings(config.excludedProviders || config.excluded || []) ||
           (config.predictionCompatibility !== undefined && (harness !== 'codex' || typeof config.predictionCompatibility !== 'boolean')) ||
           (config.codexToolModes !== undefined && (harness !== 'codex' || !validToolModes(config.codexToolModes))) ||
+          (config.modelProtocols !== undefined && !validModelProtocols(config.modelProtocols)) ||
           (config.defaultModel !== undefined && config.defaultModel !== null && typeof config.defaultModel !== "string")) throw Error();
     if (value.profiles !== undefined && (!Array.isArray(value.profiles) || value.profiles.some((p) => !p || !/^[a-f0-9]{24}$/.test(p.id) || !SPECS.some((s) => s.id === p.harness)))) throw Error();
     return value;
@@ -906,11 +909,17 @@ class HarnessManager {
   }
   nativeApis(harness) { return this.nativeApiProfilesByHarness[harness] || []; }
   effectiveProviders(harness) {
-    return this.options.protocols?.providers(harness) || this.getState().providers;
+    const providers = this.options.protocols?.providers(harness) || this.getState().providers;
+    const overrides = this.state.injections[harness]?.modelProtocols;
+    if (!overrides) return providers;
+    return providers.map(p => ({ ...p, models: p.models.map(m => {
+      const protocol = overrides[modelRef(p.id, m.model)];
+      return protocol ? { ...m, wireApi: protocol, protocolOverride: protocol } : m;
+    }) }));
   }
   setInjection(harness, changes) {
     if (this.spec(harness).injectionUnsupported) throw Error("此客户端尚未支持供应商接入");
-    if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).some((k) => !["excludedProviders", "defaultModel", 'predictionCompatibility', 'codexToolMode'].includes(k)))
+    if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).some((k) => !["excludedProviders", "defaultModel", 'predictionCompatibility', 'codexToolMode', 'modelProtocol'].includes(k)))
       throw Error("接入范围请按供应商设置");
     if (Object.hasOwn(changes, 'predictionCompatibility') && (harness !== 'codex' || typeof changes.predictionCompatibility !== 'boolean'))
       throw Error('提示词预测兼容设置无效');
@@ -919,8 +928,21 @@ class HarnessManager {
     if (Object.hasOwn(changes, "defaultModel") && changes.defaultModel !== null &&
         (typeof changes.defaultModel !== "string" || changes.defaultModel.length > 500))
       throw Error("默认模型引用无效");
-    const { codexToolMode, ...settings } = changes;
+    const { codexToolMode, modelProtocol, ...settings } = changes;
     const next = { ...this.state.injections[harness], ...settings };
+    if (Object.hasOwn(changes, 'modelProtocol')) {
+      if (!modelProtocol || typeof modelProtocol !== 'object' || Array.isArray(modelProtocol) ||
+          Object.keys(modelProtocol).some(k => !['ref', 'protocol'].includes(k)) ||
+          !validToolRef(modelProtocol.ref) || !['auto', ...PROTOCOLS].includes(modelProtocol.protocol) ||
+          !this.getState().providers.some(p => p.models.some(m => modelRef(p.id, m.model) === modelProtocol.ref)))
+        throw Error('模型协议设置无效，请重新选择模型');
+      const protocols = { ...next.modelProtocols };
+      if (modelProtocol.protocol === 'auto') delete protocols[modelProtocol.ref];
+      else protocols[modelProtocol.ref] = modelProtocol.protocol;
+      if (!validModelProtocols(protocols)) throw Error('模型协议设置超过上限或包含无效值');
+      if (Object.keys(protocols).length) next.modelProtocols = protocols;
+      else delete next.modelProtocols;
+    }
     if (Object.hasOwn(changes, 'codexToolMode')) {
       if (harness !== 'codex' || !codexToolMode || typeof codexToolMode !== 'object' || Array.isArray(codexToolMode) ||
           Object.keys(codexToolMode).some(k => !['ref', 'mode'].includes(k)) ||
@@ -984,11 +1006,12 @@ class HarnessManager {
     for (const settings of Object.values(this.state.injections)) {
       if (settings.defaultModel === previousRef) settings.defaultModel = nextRef;
       if (settings.excluded) settings.excluded = settings.excluded.flatMap((ref) => ref !== previousRef ? [ref] : nextRef ? [nextRef] : []);
-      if (settings.codexToolModes && Object.hasOwn(settings.codexToolModes, previousRef)) {
-        const mode = settings.codexToolModes[previousRef];
-        delete settings.codexToolModes[previousRef];
-        if (nextRef) settings.codexToolModes[nextRef] = mode;
-        if (!Object.keys(settings.codexToolModes).length) delete settings.codexToolModes;
+      for (const key of ['codexToolModes', 'modelProtocols']) {
+        if (!settings[key] || !Object.hasOwn(settings[key], previousRef)) continue;
+        const value = settings[key][previousRef];
+        delete settings[key][previousRef];
+        if (nextRef) settings[key][nextRef] = value;
+        if (!Object.keys(settings[key]).length) delete settings[key];
       }
     }
     try {
@@ -1303,7 +1326,7 @@ class HarnessManager {
     const config = routeConfig(harness, p, m, dir, token,
       // An API-only model window must not advertise subscription models: its
       // local route token is not a ChatGPT credential and must never fall back.
-      makeCatalog([], this.getState().providers.map((provider) => ({ ...provider,
+      makeCatalog([], this.effectiveProviders(harness).map((provider) => ({ ...provider,
         models: provider.models.filter((model) => this.injection(harness).models.some((row) => row.included && row.ref === modelRef(provider.id, model.model))),
       })), {}), this.options.port || 25819);
     if (harness === "codex") {

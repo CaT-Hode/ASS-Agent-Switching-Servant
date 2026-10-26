@@ -19,6 +19,7 @@ import {
   MessagesSquare,
 } from "./icons.jsx";
 import { Modal } from "./editors.jsx";
+import { transitionUI } from './surface-motion.jsx';
 import {
   AddAccount,
   NativeKeyAccounts,
@@ -323,7 +324,7 @@ export function Clients({
   const recognized = detectedClients(state);
   const otherClients = state.harnesses.clients.filter((c) => !recognized.some((r) => r.id === c.id));
   const selectClient = (id) => {
-    setSelected(id); onSelectClient?.(id); setNotice(""); setLaunchNotice(""); setCandidates(null);
+    transitionUI(() => { setSelected(id); onSelectClient?.(id); setNotice(""); setLaunchNotice(""); setCandidates(null); });
     if (panelRef.current?.getBoundingClientRect().top < 0)
       requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: "start", behavior: "instant" }));
   };

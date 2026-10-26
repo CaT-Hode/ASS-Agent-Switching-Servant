@@ -61,24 +61,22 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
         {codexModels.length > 0 && <optgroup label="已注入模型">{codexModels.map((m) => <option key={m.ref} value={m.ref}>{m.providerName} / {m.name || m.model}</option>)}</optgroup>}
       </select>
     </label>}
-    {client.id === 'codex' && <div className="accountless-control">
-      <div><strong>提示词预测兼容（实验）</strong><small>更新接入并重新加载 Codex 后，新对话采用预测通道。旧对话需单独修复；仍需官方功能开放与模型支持。</small></div>
-      <button type="button" role="switch" className="provider-injection-switch" aria-label="提示词预测兼容"
-        aria-checked={injection.predictionCompatibility === true} disabled={!!busy || state.connections.busy || connection?.accountless || !officialModels.length}
-        onClick={() => act('prediction-compatibility', () => api.call('client-injection', client.id, {
-          excludedProviders: [...excluded], predictionCompatibility: !injection.predictionCompatibility,
-        }))}><i /></button>
-    </div>}
-    {client.id === 'codex' && injection.predictionCompatibility && !connection?.accountless &&
+    {client.id === 'codex' && !connection?.accountless && <p className="codex-tool-mode-hint">
+      普通接入保留原生归档与提示词预测通道。更新接入并重新加载 Codex 后生效；预测仍需官方功能开放与模型支持。
+    </p>}
+    {client.id === 'codex' && !connection?.accountless &&
       (connection?.resumeRecovery?.predictionCount > 0 || connection?.resumeRecovery?.pending) && <div className="accountless-control">
       <div><strong>旧对话预测待修复{connection.resumeRecovery.predictionCount > 0 ? ` · ${connection.resumeRecovery.predictionCount} 个` : ''}</strong>
         <small>任务结束后正常退出 Codex，再点修复；或在更新接入时确认重启。保留原模型与聊天内容，ASS 保持运行。</small></div>
       <button className="button" disabled={!!busy || state.connections.busy || !connection.predictionCompatibility || !connection.applied}
-        title={!connection.predictionCompatibility || !connection.applied ? '请先更新接入以应用预测兼容' : '仅修复旧对话的预测通道；请先正常退出 Codex'}
+        title={!connection.predictionCompatibility || !connection.applied ? '请先更新接入以应用原生兼容' : '仅修复旧对话的预测通道；请先正常退出 Codex'}
         onClick={() => act('prediction-repair', () => api.call('codex-prediction-repair'))}>修复旧对话预测</button>
     </div>}
     {client.id === 'codex' && injection.models.some(m => m.protocol === 'openai-responses') && <p className="codex-tool-mode-hint">
       展开供应商，在模型菜单中设置工具兼容。工具调用变成普通文字时可切换“兼容模式”；更改后同步接入生效。
+    </p>}
+    {!client.injectionUnsupported && groups.size > 0 && <p className="codex-tool-mode-hint">
+      可为每个模型选择接口协议，仅影响此客户端；自动模式按检测结果选择。更改后同步接入生效。
     </p>}
     {client.injectionUnsupported ? <p className="client-support-note">{client.injectionUnsupported}</p> :
       groups.size ? <div className="client-provider-list">{[...groups].map(([id, models]) => {
@@ -90,9 +88,23 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
           <details>
             <summary><span className="client-provider-logo" aria-hidden="true">{brand ? <img src={"./providers/" + brand + ".svg"} alt="" /> : <Layers3 size={21} data-motion-icon={undefined} />}</span>
               <strong>{models[0].providerName}</strong><small>{compatible.length} 个模型</small><ChevronRight className="provider-disclosure" size={16} /></summary>
-            <div className="client-provider-models">{models.map((m) => <div key={m.ref} className={[(m.issue ? "unavailable" : ""), (client.id === 'codex' && m.protocol === 'openai-responses' ? 'has-tool-mode' : '')].join(' ')}>
-              <span title={m.model}>{m.name || m.model}<small>{m.name !== m.model ? m.model : ""}</small></span>
-              <small>{m.issue || m.adapter || protocols[m.protocol] || m.protocol}</small>
+            <div className="client-provider-models">{models.map((m) => <div key={m.ref} className={m.issue ? "unavailable" : ""}>
+              <span title={m.model}>{m.name || m.model}<small>{m.name !== m.model ? m.model : ""}</small>
+                <small>{m.issue || m.adapter || protocols[m.protocol] || m.protocol}</small></span>
+              <div className="client-model-controls">
+              <label className="model-protocol">
+                <span>接口协议</span>
+                <select aria-label={`${m.providerName} / ${m.name || m.model} 接口协议`}
+                  value={m.protocolOverride || 'auto'} disabled={!!busy || state.connections.busy}
+                  onChange={e => { const protocol = e.target.value;
+                    act('model-protocol', () => api.call('client-injection', client.id, {
+                      modelProtocol: { ref: m.ref, protocol },
+                    }));
+                  }}>
+                  <option value="auto">{!m.protocolOverride || m.protocolOverride === 'auto' ? `自动（${protocols[m.protocol] || m.protocol}）` : '自动选择'}</option>
+                  {Object.entries(protocols).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
               {client.id === 'codex' && m.protocol === 'openai-responses' && <label className="codex-tool-mode">
                 <span>Codex 工具兼容</span>
                 <select aria-label={`${m.providerName} / ${m.name || m.model} Codex 工具兼容`}
@@ -108,6 +120,7 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
                   <option value="native">原生格式</option>
                 </select>
               </label>}
+              </div>
             </div>)}</div>
           </details>
           <button type="button" role="switch" className="provider-injection-switch" aria-label={models[0].providerName + " 供应商接入"}

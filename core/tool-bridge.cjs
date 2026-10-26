@@ -1,7 +1,24 @@
 const { createHash } = require("node:crypto");
+function customInput(args) {
+  let parsed;
+  try { parsed = JSON.parse(args); } catch { throw Error("上游自定义工具输入不是完整 JSON"); }
+  if (typeof parsed.input !== "string") throw Error("上游自定义工具缺少 input 字符串");
+  return parsed.input;
+}
+function hasArraySchema(schema) {
+  return !!schema && typeof schema === 'object' &&
+    (schema.type === 'array' || Array.isArray(schema.type) && schema.type.includes('array') || Object.values(schema).some(hasArraySchema));
+}
+function functionInput(args) {
+  const input = customInput(args);
+  let value;
+  try { value = JSON.parse(input); } catch { throw Error('上游函数工具参数不是有效 JSON 对象'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('上游函数工具参数不是有效 JSON 对象');
+  return input;
+}
 // Convert client-executed custom/namespace tools to JSON functions. The proxy
 // never executes them; restore the exact client tool identity on the way back.
-function toolBridge(body) {
+function toolBridge(body, { encodeArrayArguments = false } = {}) {
   const mapping = new Map(), names = new Map(), unqualified = new Map(), tools = [];
   const key = (namespace, name) => JSON.stringify([namespace || "", name]);
   const aliasKey = (name, custom) => JSON.stringify([name, custom]);
@@ -14,15 +31,18 @@ function toolBridge(body) {
     }
     if (!["custom", "function"].includes(tool.type)) { tools.push(tool); return; }
     const original = { name: tool.name, ...(namespace ? { namespace } : {}), custom: tool.type === "custom" };
+    if (!original.custom && encodeArrayArguments && hasArraySchema(tool.parameters)) original.jsonArguments = true;
     const wireName = wireNameFor(namespace, tool.name, original.custom);
     if (mapping.has(wireName)) throw Object.assign(Error("重复工具定义"), { status: 400 });
     mapping.set(wireName, original); names.set(key(namespace, tool.name), wireName);
     const alias = aliasKey(tool.name, original.custom);
     unqualified.set(alias, unqualified.has(alias) ? null : wireName);
-    tools.push(original.custom ? { type: "function", name: wireName,
-      description: [tool.description, "Pass the complete raw tool input as the input string.",
+    tools.push(original.custom || original.jsonArguments ? { type: "function", name: wireName,
+      description: [tool.description, original.custom ? "Pass the complete raw tool input as the input string."
+        : "Pass the complete JSON object of tool arguments as the input string. Arguments JSON schema: " + JSON.stringify(tool.parameters),
         tool.format?.syntax ? "Input syntax: " + tool.format.syntax : "", tool.format?.definition || ""].filter(Boolean).join("\n"),
-      parameters: { type: "object", properties: { input: { type: "string" } }, required: ["input"], additionalProperties: false } }
+      parameters: { type: "object", properties: { input: { type: "string" } }, required: ["input"], additionalProperties: false },
+      ...(original.jsonArguments && tool.strict !== undefined ? { strict: tool.strict } : {}) }
       : { ...tool, name: wireName });
   }
   for (const tool of body.tools || []) add(tool, tool.namespace);
@@ -43,7 +63,8 @@ function toolBridge(body) {
     name ||= wireNameFor(item.namespace, item.name, custom);
     const { namespace, input, ...rest } = item;
     return { ...rest, type: "function_call", name,
-      arguments: custom ? JSON.stringify({ input }) : item.arguments };
+      arguments: custom ? JSON.stringify({ input }) : mapping.get(name)?.jsonArguments
+        ? JSON.stringify({ input: item.arguments || '{}' }) : item.arguments };
   }
   const choice = body.tool_choice;
   const request = { ...body, ...(body.tools ? { tools } : {}),
@@ -53,15 +74,10 @@ function toolBridge(body) {
   function item(value) {
     const original = value?.type === "function_call" && mapping.get(value.name);
     if (!original) return value;
-    const { custom, ...identity } = original;
-    if (!custom) return { ...value, ...identity };
-    let input = "";
-    if (value.arguments) {
-      let parsed;
-      try { parsed = JSON.parse(value.arguments); } catch { throw Error("上游自定义工具输入不是完整 JSON"); }
-      if (typeof parsed.input !== "string") throw Error("上游自定义工具缺少 input 字符串");
-      input = parsed.input;
-    }
+    const { custom, jsonArguments, ...identity } = original;
+    if (!custom && !jsonArguments) return { ...value, ...identity };
+    const input = value.arguments ? (jsonArguments ? functionInput(value.arguments) : customInput(value.arguments)) : "";
+    if (jsonArguments) return { ...value, ...identity, arguments: input };
     const { arguments: args, ...rest } = value;
     return { ...rest, ...identity, type: "custom_tool_call", input };
   }
@@ -69,20 +85,21 @@ function toolBridge(body) {
     return { ...value, ...(Array.isArray(value.output) ? { output: value.output.map(item) } : {}) };
   }
   async function* restore(events) {
-    const customs = new Set(), argumentsById = new Map(); let sequence = 0;
+    const encoded = new Map(), argumentsById = new Map(); let sequence = 0;
     const output = event => ({ ...event, sequence_number: sequence++ });
     for await (const e of events) {
-      if (e.type === "response.output_item.added" && mapping.get(e.item?.name)?.custom) customs.add(e.item.id);
-      if (customs.has(e.item_id) && e.type === "response.function_call_arguments.delta") {
+      const original = e.type === 'response.output_item.added' && mapping.get(e.item?.name);
+      if (original && (original.custom || original.jsonArguments)) encoded.set(e.item.id, original);
+      if (encoded.has(e.item_id) && e.type === "response.function_call_arguments.delta") {
         argumentsById.set(e.item_id, (argumentsById.get(e.item_id) || "") + e.delta); continue;
       }
-      if (customs.has(e.item_id) && e.type === "response.function_call_arguments.done") {
+      if (encoded.has(e.item_id) && e.type === "response.function_call_arguments.done") {
         const raw = e.arguments || argumentsById.get(e.item_id) || "{}";
-        let parsed; try { parsed = JSON.parse(raw); } catch { throw Error("上游自定义工具输入不是完整 JSON"); }
-        if (typeof parsed.input !== "string") throw Error("上游自定义工具缺少 input 字符串");
+        const jsonArguments = encoded.get(e.item_id).jsonArguments;
+        const input = jsonArguments ? functionInput(raw) : customInput(raw);
         const { arguments: args, ...rest } = e;
-        yield output({ ...rest, type: "response.custom_tool_call_input.delta", delta: parsed.input });
-        yield output({ ...rest, type: "response.custom_tool_call_input.done", input: parsed.input }); continue;
+        yield output({ ...rest, type: jsonArguments ? 'response.function_call_arguments.delta' : "response.custom_tool_call_input.delta", delta: input });
+        yield output({ ...rest, ...(jsonArguments ? { arguments: input } : { type: 'response.custom_tool_call_input.done', input }) }); continue;
       }
       yield output({ ...e, ...(e.item ? { item: item(e.item) } : {}),
         ...(e.response ? { response: response(e.response) } : {}) });

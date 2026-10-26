@@ -7,6 +7,7 @@ const TOML = require("@iarna/toml");
 const { safePath } = require("./native-fields.cjs");
 const { text, claims } = require("./account-info.cjs");
 const { EFFORTS } = require("./models.cjs");
+const { nativeProtocols: protocols } = require("./native-api-defaults.cjs");
 const zcode = require("./zcode-config.cjs");
 const zcodeCatalog = require("./zcode-catalog.cjs");
 const antigravity = require("./antigravity-status.cjs");
@@ -17,18 +18,11 @@ const SPECS = [
   { id: "zcode", name: "ZCode", command: "zcode" },
   // Kept only so older persisted state and encrypted OAuth history remain
   // readable. Retired clients are never scanned or exposed by Harnesses.
-  { id: "antigravity", name: "Antigravity", command: "agy", retired: true },
-].map((s) => ({ ...s, oauth: ["kimi", "zcode", "antigravity"].includes(s.id), nativeLoginOnly: true,
-  injectionUnsupported: ["kimi", "zcode"].includes(s.id) ? undefined : s.id === "antigravity"
-    ? "此客户端已停止支持。"
-    : "此版本仅识别原生账户与模型；账户切换与配置接入尚未适配。" }));
+  { id: "antigravity", name: "Antigravity", command: "agy", retired: true, injectionUnsupported: "此客户端已停止支持。" },
+].map((s) => ({ ...s, oauth: true, nativeLoginOnly: true }));
 const object = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 const has = (v) => typeof v === "string" && !!v.trim();
 const hash = (v) => createHash("sha256").update(v).digest("hex").slice(0, 20);
-const protocols = { kimi: "openai-chat", openai: "openai-chat", openai_legacy: "openai-chat",
-  openai_responses: "openai-responses", anthropic: "anthropic",
-  "openai-chat-completions": "openai-chat", "openai-responses": "openai-responses",
-  "anthropic-messages": "anthropic" };
 
 function read(file, format = "json") {
   try {

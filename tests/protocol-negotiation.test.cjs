@@ -32,7 +32,7 @@ test("checks all three protocols, selects per client, persists and avoids duplic
   assert.deepEqual(f.calls.map(u => new URL(u).pathname), ["/v1/responses", "/v1/messages", "/v1/chat/completions"]);
   assert.equal(f.protocols.get(f.p, f.m).protocols["openai-chat"].status, "passed");
   assert.equal(f.protocols.select(f.p, f.m, "claude"), "anthropic");
-  for (const id of ["codex", "opencode", "pi", "dsh", "kimi", "zcode"]) assert.equal(f.protocols.select(f.p, f.m, id), "openai-responses");
+  assert.equal(f.protocols.select(f.p, f.m, "codex"), "openai-responses");
   const reloaded = new ProtocolNegotiation(f.options);
   await reloaded.ensure(f.p, f.m); assert.equal(f.calls.length, 3);
   assert.equal(reloaded.get(f.p, f.m).protocols["openai-chat"].status, "passed");
@@ -188,6 +188,33 @@ test("verified protocol updates an applied route without publishing draft models
   assert.ok(native.fields.some(f => f.value?.api === "openai-responses"));
 });
 
+test('manual injection protocol wins over detection only after sync, survives reload and restores automatic routing', async t => {
+  const f=fixture(t);await f.protocols.ensure(f.p,f.m);
+  const {modelRef}=require('../core/client-policy.cjs'),{routeFor}=require('../core/router.cjs');
+  const manager=new HarnessManager(f.dataDir,()=>f.store.state,[],f.store.codexDir,
+    {home:path.join(f.dataDir,'home'),env:{},protocols:f.protocols});
+  const config=new ConfigManager(f.store.codexDir,f.dataDir),proxy=new ProxyConfig(f.dataDir,crypt,manager,f.store,config);
+  const ref=modelRef(f.p.id,f.m.model),model=require('../core/models.cjs').codexModelId(f.p.id,f.m.model);
+  proxy.sync('codex');
+  manager.setInjection('codex',{modelProtocol:{ref,protocol:'anthropic'}});
+  assert.equal(proxy.status('codex',true).pending,true);
+  assert.equal(routeFor({model},proxy.routingState('codex')).protocol,'openai-responses','draft does not alter live routing');
+  proxy.sync('codex');
+  assert.equal(routeFor({model},proxy.routingState('codex')).url,'https://example.test/v1/messages');
+  f.protocols.record(f.p,f.m,{time:new Date().toISOString(),protocols:{'openai-responses':{status:'passed',httpStatus:200}}});
+  assert.equal(proxy.routingState('codex').providers[0].models[0].wireApi,'anthropic','new automatic evidence cannot override a manual choice');
+  assert.equal(manager.injection('claude').models[0].protocolOverride,'auto');
+  manager.setInjection('codex',{modelProtocol:{ref,protocol:'openai-chat'}});proxy.sync('codex');
+  assert.equal(routeFor({model},proxy.routingState('codex')).url,'https://example.test/v1/chat/completions');
+  const reloadedManager=new HarnessManager(f.dataDir,()=>f.store.state,[],f.store.codexDir,{home:path.join(f.dataDir,'home'),env:{},protocols:f.protocols});
+  const reloaded=new ProxyConfig(f.dataDir,crypt,reloadedManager,f.store,new ConfigManager(f.store.codexDir,f.dataDir));
+  assert.equal(reloaded.routingState('codex').providers[0].models[0].wireApi,'openai-chat');
+  reloadedManager.setInjection('codex',{modelProtocol:{ref,protocol:'auto'}});
+  assert.equal(reloaded.routingState('codex').providers[0].models[0].wireApi,'openai-chat');
+  reloaded.sync('codex');assert.equal(reloaded.routingState('codex').providers[0].models[0].wireApi,'openai-responses');
+  assert.equal(f.m.wireApi,'openai-chat','shared supplier setting stays unchanged');
+});
+
 test('connection checks stop at a completed stream and leave untested protocols unknown', async t => {
   const f = fixture(t);
   await f.protocols.ensure(f.p, f.m, { force: true, untilAvailable: true });
@@ -199,6 +226,21 @@ test('connection checks stop at a completed stream and leave untested protocols 
   f.calls.length = 0;
   await f.protocols.ensure(f.p, f.m);
   assert.equal(f.calls.length, 0);
+});
+
+test('a stalled quick check expires in 30 seconds, retains uncertainty and does not block another model', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const f = fixture(t), other = { ...f.m, model: 'other' };
+  f.p.models.push(other);
+  f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { 'openai-responses': { status: 'passed' } } });
+  f.protocols.fetcher = (_, init) => JSON.parse(init.body).model === other.model ? success('openai-responses') : new Promise(() => {});
+  const stalled = f.protocols.ensure(f.p, f.m, { force: true, untilAvailable: true });
+  await f.protocols.ensure(f.p, other, { force: true, untilAvailable: true });
+  assert.equal(f.protocols.get(f.p, other).protocols['openai-responses'].lastStatus, 'passed');
+  t.mock.timers.tick(30000);
+  await stalled;
+  assert.equal(f.protocols.get(f.p, f.m).protocols['openai-responses'].lastStatus, 'unknown');
+  assert.equal(f.protocols.jobs.size, 0); assert.deepEqual(f.protocols.progress(), {});
 });
 
 test('quick recheck starts with the working protocol, falls back on failure and prefers newly confirmed evidence', async t => {

@@ -1,5 +1,6 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { transitionUI } from './surface-motion.jsx';
 import { Folder, Search, Loader2, MessagesSquare, Play, RefreshCw, ShieldCheck, ChevronRight, RotateCcw, Pin, Monitor, Trash2, X } from './icons.jsx';
 import { useConversationColumns } from './conversation-columns.jsx';
 import { detectedClients } from './usage-view.mjs';
@@ -107,7 +108,7 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
       if (!name.includes('resume') && name !== 'conversations-open-desktop') setRevision((n) => n + 1);
     } catch (e) { if (destructive && onNotify) onNotify(errorText(e), true); else setError(errorText(e)); } finally { setBusy(''); }
   }
-  function choose(p) { setProject(p); setSelected(null); setOffset(0); setBefore(0); setNotice(''); setError('');
+  function choose(p) { transitionUI(() => { setProject(p); setSelected(null); setOffset(0); setBefore(0); setNotice(''); setError(''); });
     api.call('ui-preferences', { conversations: { project: p.id, scope: 'projects' } }).catch((e) => setError(errorText(e))); }
   const targets = project?.targets || available.map((c) => c.id);
   useEffect(() => { setTarget(view); }, [view]);

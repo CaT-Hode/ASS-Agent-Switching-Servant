@@ -60,6 +60,7 @@ class Preferences {
         key === "view" &&
         ![
           "overview",
+          "monitor",
           "providers",
           "clients",
           "conversations",

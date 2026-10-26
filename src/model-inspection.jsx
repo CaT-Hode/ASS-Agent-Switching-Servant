@@ -23,12 +23,23 @@ const statusText = {
 };
 const declaration = (v) =>
   v === true ? "声明支持" : v === false ? "声明不支持" : "未声明";
+function connectionReport(report, diagnostic) {
+  const previous = report?.protocols?.[diagnostic?.protocol];
+  if (!previous || diagnostic.ok !== false || diagnostic.stale ||
+      !(Date.parse(diagnostic.time) >= Date.parse(previous.time))) return report;
+  return { ...report, protocols: { ...report.protocols, [diagnostic.protocol]: {
+    ...previous, lastStatus: "unknown", time: diagnostic.time, httpStatus: diagnostic.httpStatus, ms: diagnostic.ms,
+  } } };
+}
 export function ModelCheckButton({ provider, model, state, act, busy }) {
+  const [pending, setPending] = useState(false);
   const providerId = model.diagnosticProviderId || provider.id;
   const key = modelKey(providerId, model.model),
-    result = state.diagnostics[key], protocolResult = state.protocolResults?.[key];
-  const running = busy === "diag-" + key || state.diagnosticJobs?.[key] || state.protocolJobs?.[key];
-  const protocolPassed = Object.values(protocolResult?.protocols || {}).some(p => p.status === "passed");
+    result = state.diagnostics[key], protocolResult = connectionReport(state.protocolResults?.[key], result);
+  const checking = pending || busy === "diag-" + key || state.diagnosticJobs?.[key];
+  const protocolChecking = state.protocolJobs?.[key];
+  const running = checking || protocolChecking;
+  const protocolPassed = Object.values(protocolResult?.protocols || {}).some(p => p.status === "passed" && p.lastStatus !== "unknown");
   return (
     <button
       type="button"
@@ -36,9 +47,11 @@ export function ModelCheckButton({ provider, model, state, act, busy }) {
         "model-icon check-model " +
         (result ? (result.stale ? "stale" : result.ok ? "passed" : "failed") : protocolResult ? (protocolPassed ? "passed" : "stale") : "")
       }
-      aria-label={"检测模型 " + model.model}
+      aria-label={(checking ? "取消检测 " : "检测模型 ") + model.model}
       title={
-        result
+        checking ? "取消此模型的连接测试，其他模型继续测试"
+        : protocolChecking ? "正在确认此模型的可用协议（最多 30 秒）"
+        : result
           ? result.message +
             (result.failure?.code ? ` · ${result.failure.code}` : "") +
             (result.httpStatus ? ` · 上游 HTTP ${result.httpStatus}` : result.failure ? " · 未收到上游 HTTP" : "") +
@@ -53,17 +66,23 @@ export function ModelCheckButton({ provider, model, state, act, busy }) {
           : (model.diagnosticProviderId ? "使用此模型的原生配置直连检测（小请求，可能计费）" : "确认可用协议并检测连接；成功后结束协议寻找（小请求，可能计费）")
       }
       disabled={
-        !!busy ||
-        state.diagnosticBatch?.running ||
-        running ||
+        !!busy && !checking ||
+        state.diagnosticBatch?.running && !checking ||
+        protocolChecking && !checking ||
         model.enabled === false ||
         provider.enabled === false
       }
-      onClick={() =>
-        act("diag-" + key, () => api.call("diagnose", providerId, model.model))
-      }
+      onClick={async () => {
+        if (checking) {
+          await act("diag-cancel-" + key, () => api.call("diagnose-cancel", providerId, model.model), undefined, false);
+          return;
+        }
+        setPending(true);
+        try { await act("diag-" + key, () => api.call("diagnose", providerId, model.model), undefined, false); }
+        finally { setPending(false); }
+      }}
     >
-      {running ? (
+      {checking ? <Square size={15} /> : running ? (
         <Loader2 size={17} className="spin" />
       ) : (
         <Zap size={17} fill={result || protocolResult ? "currentColor" : "none"} />
@@ -73,15 +92,16 @@ export function ModelCheckButton({ provider, model, state, act, busy }) {
 }
 export function ModelProtocolBadges({ provider, model, state }) {
   if (provider.id === "official" || model.diagnosticProviderId) return null;
-  const key = modelKey(provider.id, model.model), report = state.protocolResults?.[key], checking = state.protocolJobs?.[key];
+  const key = modelKey(provider.id, model.model), report = connectionReport(state.protocolResults?.[key], state.diagnostics?.[key]), checking = state.protocolJobs?.[key];
   const names = { "openai-responses": "Responses", anthropic: "Messages", "openai-chat": "Chat" };
   return <span className="model-protocol-badges" aria-label={model.model + " 协议支持"}>
     {Object.entries(names).map(([protocol, name]) => {
-      const result = report?.protocols?.[protocol], status = checking === protocol ? "checking" : result?.status || "untested";
-      const label = { passed: "支持", unsupported: "不支持", unknown: "未确认", untested: "未检测", checking: "检测中" }[status];
+      const result = report?.protocols?.[protocol];
       const retained = result?.status === "passed" && result.lastStatus === "unknown";
+      const status = checking === protocol ? "checking" : retained ? "unknown" : result?.status || "untested";
+      const label = { passed: "支持", unsupported: "不支持", unknown: "未确认", untested: "未检测", checking: "检测中" }[status];
       return <span key={protocol} data-status={status} aria-label={name + "：" + label}
-        title={`${name}：${label}${retained ? "（保留上次成功，本次未确认）" : ""}${result?.time ? " · " + exactTime(result.time) : ""}${result?.httpStatus ? " · HTTP " + result.httpStatus : ""}${Number.isFinite(result?.ms) ? " · " + result.ms + " ms" : ""}`}>
+        title={`${name}：${label}${retained ? "（曾通过，本次未确认）" : ""}${result?.time ? " · " + exactTime(result.time) : ""}${result?.httpStatus ? " · HTTP " + result.httpStatus : ""}${Number.isFinite(result?.ms) ? " · " + result.ms + " ms" : ""}`}>
         {name}<i aria-hidden="true">{status === "passed" ? "✓" : status === "unsupported" ? "×" : status === "checking" ? "…" : "?"}</i>
       </span>;
     })}
@@ -123,7 +143,7 @@ export function ModelCapabilities({ provider, model, state, act, busy }) {
   const declared = directory?.models.find(
     (m) => m.model === model.model,
   )?.declared;
-  const capabilityReport = state.capabilities?.[key], protocolReport = state.protocolResults?.[key];
+  const capabilityReport = state.capabilities?.[key], protocolReport = connectionReport(state.protocolResults?.[key], state.diagnostics?.[key]);
   const report = capabilityReport ? { ...capabilityReport, ...(protocolReport ? { protocols: protocolReport.protocols } : {}) } : protocolReport,
     progress = state.capabilityJobs?.[key];
   return (
@@ -202,10 +222,10 @@ export function ModelCapabilities({ provider, model, state, act, busy }) {
               <div key={protocol}>
                 <span>{protocol}</span>
                 <strong>
-                  {result.status === "unsupported" ? "此接口不支持" : statusText[result.status]}
+                  {result.status === "unsupported" ? "此接口不支持" : statusText[result.lastStatus === "unknown" ? "unknown" : result.status]}
                   {result.httpStatus ? " · HTTP " + result.httpStatus : ""}
                   {Number.isFinite(result.ms) ? " · " + result.ms + " ms" : ""}
-                  {result.status === "passed" && result.lastStatus === "unknown" ? " · 保留上次成功" : ""}
+                  {result.status === "passed" && result.lastStatus === "unknown" ? " · 曾通过，本次未确认" : ""}
                 </strong>
               </div>
             ))}

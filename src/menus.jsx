@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, MoreHorizontal } from "./icons.jsx";
+import { Presence } from './surface-motion.jsx';
 
 export function ActionMenu({ label, items, disabled = false, text }) {
   const [open, setOpen] = useState(false),
@@ -47,7 +48,7 @@ export function ActionMenu({ label, items, disabled = false, text }) {
           <MoreHorizontal size={18} />
         )}
       </button>
-      {open && (
+      <Presence show={open} offset="translateY(-4px) scale(.98)">{open && (
         <div
           className="action-menu-panel"
           id={id}
@@ -97,7 +98,7 @@ export function ActionMenu({ label, items, disabled = false, text }) {
             </button>
           ))}
         </div>
-      )}
+      )}</Presence>
     </div>
   );
 }

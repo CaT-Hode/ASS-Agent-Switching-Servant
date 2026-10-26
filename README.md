@@ -6,15 +6,7 @@
 
 ASS（Agent-Switching-Servant）是你的 Windows 桌面 AI 路由与账户助手。把模型、API 凭据与官方授权放到一个独立窗口，切换客户端时不必反复搬配置。关闭窗口后继续在托盘运行。
 
-v0.4.7 修复检测成功后实际路由仍使用旧协议的问题，连接测试找到可用协议即结束，并区分协议确认与模型响应耗时。包含 WOYAO Gemini 原生搜索混用兼容；该通道的新请求仍出现供应商直连超时，恢复状态与验证边界见 [v0.4.7](docs/RELEASE-v0.4.7.md)。可更新下次启动入口并保持当前 ASS 运行。此前的搜索兼容与 CLI 目录修复见 [v0.4.6](docs/RELEASE-v0.4.6.md)。
-
-v0.4.5 整合 Codex 第三方模型的远程压缩、DeepSeek 完成后隐藏思考、新旧模型目录兼容，以及慢模型的 90 秒协议检测；保留官方图片路由、预测绑定、用量归组和诊断改进。详见 [v0.4.5](docs/RELEASE-v0.4.5.md)。此前的图片生成／编辑路由见 [v0.4.4](docs/RELEASE-v0.4.4.md)，预测绑定与供应商 HTTPS DNS 见 [v0.4.3](docs/RELEASE-v0.4.3.md)。
-
-v0.3.40 将太阳光线旋转速度降为此前的三分之一，保留加强后的波纹。累计更新包含 Codex 专用 HTTPS 启动通道、统一桌面识别、全部注入刷新与主题滑动修复；主题资源已提炼为 `best-light-dark-switching`。详见 [v0.3.40](docs/release-v0.3.40.md)、[v0.3.39](docs/release-v0.3.39.md) 和 [v0.3.38](docs/release-v0.3.38.md)。本机可使用 `node scripts/local-release.cjs install --keep-running --json` 仅更新下次启动入口，不关闭当前进程或替换其正在使用的资源。
-
-v0.3.26 修复 Codex 订阅额度耗尽时连带禁止第三方模型发送新消息，采用本机网关认证并保留原有 OAuth。详见 [v0.3.26 发布说明](docs/release-v0.3.26.md)。客户端同步与续聊恢复见 [v0.3.25](docs/release-v0.3.25.md)，统一 128K 默认输出见 [v0.3.24](docs/release-v0.3.24.md)，关于页 SVG 动画见 [v0.3.23](docs/release-v0.3.23.md)，从当前实现提炼的可复用主题见 [best-light-dark-switching skill](skills/best-light-dark-switching/SKILL.md)。
-
-v0.3.5 的 Codex 跨供应商历史思考项及运行中归档删除修复继续保留。删除仅二级确认，不再新增恢复备份。详见 [v0.3.5 发布说明](docs/release-v0.3.5.md)。
+v0.4.17 修复 TPS 虚高，统一使用包含等待与推理时间的全程吞吐，实时首秒先采样，旧历史重新计算，见 [v0.4.17](docs/RELEASE-v0.4.17.md)。监控搜索框样式见 [v0.4.16](docs/RELEASE-v0.4.16.md)，进行中请求每秒更新与界面动画见 [v0.4.15](docs/RELEASE-v0.4.15.md)，监控基础功能与模型最后一级归并见 [v0.4.14](docs/RELEASE-v0.4.14.md)，客户端逐模型协议选择见 [v0.4.13](docs/RELEASE-v0.4.13.md)，Gemini 工具兼容见 [v0.4.12](docs/RELEASE-v0.4.12.md)，流式超时见 [v0.4.11](docs/RELEASE-v0.4.11.md)，OAuth 归档修复见 [v0.4.10](docs/RELEASE-v0.4.10.md)。
 
 ## 能做什么
 
@@ -22,7 +14,7 @@ v0.3.5 的 Codex 跨供应商历史思考项及运行中归档删除修复继续
 - 导入包含 `providers` 的旧版路由 JSON，保留供应商 ID、模型协议及显式上下文设置。
 - 在“供应商与模型”导出可重新导入的供应商配置。默认移除 API 密钥和额外请求头；可主动选择包含密钥，保存前显示明文泄露警告。OAuth 令牌、客户端账户与本地路由凭据不在导出范围。
 - Codex 官方请求与第三方 API 严格分流；第三方失败不会自动切到官方账户。
-- 模型自动检测 Responses / Anthropic Messages / Chat Completions；闪电优先复查已成功协议，找到可用协议即结束，完整能力实测仍逐项检查三种协议。按客户端选择实测协议，兼容转换请求、流式回复与工具历史。结果按模型长期保存、不按时间过期，支持情况标记在模型行；普通接入不重复检测。已接入路由采用匹配端点、密钥、请求头和网络的成功协议，不发布模型或凭据草稿。临时失败保留此前成功历史，本次成功结果优先；取消或限流会停止剩余探测。
+- 模型自动检测 Responses / Anthropic Messages / Chat Completions；闪电优先复查已成功协议，找到可用协议即结束，完整能力实测仍逐项检查三种协议。客户端注入页可逐模型选择自动或固定协议，选择独立保存，同步后生效；固定协议优先于检测结果，切回自动恢复实测选择。兼容转换请求、流式回复与工具历史。结果按模型长期保存、不按时间过期，支持情况标记在模型行；普通接入不重复检测。已接入路由采用匹配端点、密钥、请求头和网络的成功协议，不发布模型或凭据草稿。临时失败保留此前成功历史，本次成功结果优先；取消或限流会停止剩余探测。
 - Codex 桌面端 / Claude Code 可在模型接入后分别启用“无账号启动”，仅使用已注入模型，不需要官方 OAuth；原有登录保留。CC 开启后直接在系统终端运行 `claude` 也生效，关闭时恢复原生配置字段；Codex 已运行的窗口需重启。Codex 旧对话仍保留创建时的 provider 时，见“接入开关与安全关闭”中的本机认证说明；没有本机官方登录凭据时请新建对话。Claude Code 的自定义模型列表需要 2.1.242+。
 - 通过 Electron / Chromium 网络栈使用 Windows 信任证书和系统代理，不关闭 TLS 校验。
 - 按供应商、模型名称推导上下文默认值，支持手动覆盖。
@@ -72,7 +64,7 @@ ASS 备份并向 `%USERPROFILE%\.codex\config.toml` 写入唯一的 `ASS` provid
 
 若报错 `The 'aimami_relay_...::...' model is not supported when using Codex with a ChatGPT account`，说明带本地路由前缀的模型名进入了官方通道，不代表这个第三方模型需要 ChatGPT 订阅。该前缀也可能只是导入后保留的供应商 ID，不能据此判断 AiMaMi 正在接管。先确认实际运行的 ASS 版本和可执行文件位置，再同步接入、重启 Codex，并在新会话选择 `ASS_...::...` 模型。源码已更新不代表旧发布目录中的 EXE 已更新。ASS 同时设置自定义 provider 和内置 OpenAI 的本地入口，独立 OAuth 账户启动配置也遵循此规则；未知或已删除的命名空间只在本地报错，不回退到官方。
 
-Codex 唯一入口为 `http://127.0.0.1:25819/clients/ASS/v1`（端口随本机设置）。旧 `clients/codex/v1` 和根 `/v1` 入口已删除。普通同步不会改写旧对话的 provider，仍经 `openai_base_url` 进入本机路由。启用“提示词预测兼容”后，旧 ASS 对话需在 Codex 退出时使用“修复旧对话预测”，或确认重启 Codex 并更新接入；原模型和聊天内容保留。ASS 不为迁移自动关闭客户端。
+Codex 唯一入口为 `http://127.0.0.1:25819/clients/ASS/v1`（端口随本机设置）。旧 `clients/codex/v1` 和根 `/v1` 入口已删除。普通 OAuth 接入默认使用 `openai`，经 `openai_base_url` 进入本机路由，保留原生归档筛选和预测通道；不再单独提供实验开关。旧版本需更新接入并重新加载 Codex。普通同步不改写历史会话；旧 ASS 对话的预测绑定仍可在正常退出 Codex 后单独修复，原模型和聊天内容保留。其他旧供应商的归档继续保留原归属，无账号模式仍使用独立供应商。ASS 不为迁移自动关闭客户端。
 
 从第三方 Responses 模型切回官方 GPT 时，ASS 只在发往 ChatGPT Codex 后端的请求副本中移除 `content` 非空的 `reasoning` 项及该项携带的供应商加密状态，避免 `Invalid 'input[…].content': array too long`。正常问答、工具调用及其结果、图片、assistant phase 和内容为空的官方思考状态保持不变；第三方原生 Responses 请求和本地对话日志不改动。该规则依据后端输入结构，不猜测任意不透明密文的来源，也不自动重试失败请求。
 
@@ -146,8 +138,6 @@ ASS 运行时在后台每 2 秒检查 OAuth，等待文件写入稳定后记录�
 
 模型在“供应商与模型”统一管理。客户端的“供应商接入”按供应商整组开关，默认纳入其中已启用、有凭据且协议兼容的模型；展开只读查看模型，不再提供逐模型勾选、默认模型或“启动模型”。模型选择交给原生客户端。DSH / OpenCode / pi / Kimi / ZCode 直写原生配置；Codex 通过 Responses 路由保留官方订阅目录并合并第三方模型。Claude 优先使用 Messages（DeepSeek 使用官方 Messages 入口），其他 Chat Completions / Responses 模型通过 ASS 适配文本与函数工具；不支持的图片、服务端工具或精确 token 计数明确报错。官方账户窗口不混入 API 路由。
 
-v0.1.18 将旧模型排除项迁移为供应商排除项：只要旧版排除了某供应商的一个模型，升级后整家供应商先关闭，避免扩大接入范围。旧设置备份到 `clients.before-provider-injection.json`；迁移不立即重写原生配置，仍需确认同步。
-
 **保存不等于应用。** 保存账户 / 模型 / 接入范围后，已开启的接入显示“待同步”；点击同步图标并确认才应用，不因重启自动覆盖原生配置或路由。新官方账户窗口继承上次已应用的模型字段，不顺带应用草稿。旧账户绑定一次性迁移并备份：不符合客户端归属的卡片移除，但供应商、密钥和模型保留。详见[账户与模型分离规则](docs/account-injection-refactor.md)。
 
 本机 Codex 读取 `CODEX_HOME/auth.json`；Claude Code 读取 `CLAUDE_CONFIG_DIR/.credentials.json` 或环境中的 `CLAUDE_CODE_OAUTH_TOKEN`；OpenCode 读取 `XDG_DATA_HOME/opencode/auth.json`；Pi 读取 `PI_CODING_AGENT_DIR/auth.json`；DSH 读取 `DSH_HOME/.credentials.yaml`。未设置环境目录时使用各客户端默认位置，也可在“客户端路径与凭据目录”指定。多供应商凭据分别显示，不把一个文件当作一个账户。
@@ -196,7 +186,7 @@ OpenAI / Anthropic OAuth 显示接口实际返回的剩余额度窗口；不把�
 
 ### 模型连接与能力检测
 
-- 闪电：只验证被点击的模型，同时更新原生协议支持结果，按“供应商 + 模型”保存。检查完整流，不将 HTTP 200 或截断流当作成功；收到协议结束事件后即完成，不继续等待网关关闭连接。
+- 闪电：只验证被点击的模型，协议确认与连接请求共用 30 秒总时限；可同时测试其他模型，再次点击停止当前模型。检查完整流，不将 HTTP 200 或截断流当作成功；收到协议结束事件后即完成。协议历史按“供应商 + 模型”保存，本次失败但曾成功的协议显示为“未确认”。
 - 保存 / 新增模型时后台检测；接入、同步和修复只使用已保存结果，不阻塞于上游检查。支持、不支持、未知均长期记忆；修改地址、密钥、网络出口、额外请求头或模型 ID 后重新确认，不因修改显示名称而重测。未知不是不支持，429 会停止本轮后续协议检查；手动闪电可补测。
 - “发现模型与能力”：同源查询 `/models`，展示供应商明确声明的上下文、模态、工具与思维参数；可逐项加入配置，不覆盖已有模型。
 - 模型右侧能力按钮：“自动检测能力”经确认发送少量小请求，每条最多请求 512 输出 tokens；检测协议、带随机标记的真实工具调用结构、已配置思维档位以及非法值对照。工具不会被执行；遇到认证错误、限流或服务器错误停止继续探测。
@@ -232,9 +222,7 @@ OpenAI / Anthropic OAuth 显示接口实际返回的剩余额度窗口；不把�
 
 ## 协议和能力限制
 
-Codex Responses 可透传；转换到 Chat Completions / Anthropic 的路径当前只支持文本与函数工具，不支持图片、文件、跨协议 `previous_response_id` 和服务端 compact。DSH / OpenCode / pi 由原生 SDK 直连，不经 ASS 的协议转换；Claude Code 仍按同协议转发。
-
-**Codex 跨协议工具支持仍为实验性**：若当前 Codex 模式没有发送标准 `tools` 定义，ASS 不能凭提示文本重建所有工具；Anthropic 转换只能验证文本，不等同于完整编程代理。此时请选择原生 Responses 模型，或使用 Claude Code / pi 原生协议接入。ASS 不绕过客户端执行策略。
+Codex Responses 可透传；跨协议支持文本、图片输入与函数工具，并转换客户端执行的自定义／命名空间工具。原生网页搜索在不支持的接入中会标为不可用，强制搜索会报错。跨协议不转换文件、`previous_response_id` 或服务端 compact；Codex v2 压缩触发由 ASS 生成加密摘要。官方图片生成／编辑使用独立的 Codex OAuth 路由，详见 [v0.4.4](docs/RELEASE-v0.4.4.md)。DSH / OpenCode / pi 由原生 SDK 直连，Claude Code 同协议请求透传、其他协议经 Messages 适配。
 
 上下文和思维强度菜单是配置声明，**不是上游能力验证**。某些供应商忽略参数，某些返回 400 / 502。ASS 不静默将 ultra 降级为 max，也不把错误流标为成功。pi 等客户端自身支持的思维档位可能少于 ASS / Codex，启动时不会强塞客户端不识别的参数。
 
@@ -271,17 +259,16 @@ node scripts/installer-qa.cjs
 
 默认用户数据目录延续旧版；可用 `ASS_DATA_DIR` 指定独立数据目录。安装器可用 `ASS_INSTALL_DIR` 指定安装位置；`ASS_INSTALL_PORTABLE=1` 跳过开始菜单和卸载注册，便于便携安装。
 
-本机开发版使用固定的开始菜单入口。先从托盘退出 ASS，再执行：
+本机更新可保留运行中的 ASS，先构建新版，再更新下次启动入口：
 
 ```powershell
-npm.cmd run deploy:local
+npm.cmd run package
+node scripts/local-release.cjs install --keep-running --json
 ```
 
-该命令构建当前版本，校验发布包，令 `release/current` 指向当前版本目录，并把当前用户开始菜单的 `ASS.lnk` 的启动目标和工作目录设置到 `release/current`。图标单独引用当前版本目录的 `resources/ass.ico`，每次升级更换图标缓存地址，避免开始菜单继续显示旧 Logo。随后只清理已确认属于本项目的旧版本目录和对应 ZIP / SHA256 文件；保留当前版本、未知文件以及全部用户数据。未来更新继续运行同一命令，启动入口保持不变。
+`--keep-running` 将开始菜单 `ASS.lnk` 指向新版，保留 `release/current` 和全部旧包，由用户自行退出后启动新版。只读预览使用 `node scripts/local-release.cjs`。已退出 ASS 且需要切换 `release/current` 时，可运行 `node scripts/local-release.cjs install`；显式加 `--prune` 才清理已确认归属的旧版本。
 
-已有当前发布包时可运行 `npm.cmd run install:local`；只读预览使用 `node scripts/local-release.cjs`。工具不自动结束进程，相关版本正在运行、目录归属不明或快捷方式冲突时会拒绝继续。`npm.cmd run package` 只打包，不修改用户开始菜单；运行中的当前包不会被覆盖。
-
-Windows 本机安装同时登记当前用户的 ASS 应用身份、启动路径和图标路径；仅更新本项目的注册项，遇到同名外部路径会拒绝覆盖，并在 `release/brand-registry-before-*.xml` 保存原值。顶栏、关于页、托盘、EXE 和注册图标均由同一份 SVG 导出：八片灰色花瓣沿横向收窄 7%，保留外弧与切角；花瓣间空隙随之加大，中心橙色外沿与花瓣的净距由 16 增至 20，内孔半径由 132 缩至 116，使中心环向内加粗。全部采用纯色平面路径。几何参数与制作记录见 [Logo](docs/LOGO.md)。界面采用中性灰黑基调；路由总览的用量热力图使用暗紫到亮紫的递增色阶，Token 趋势和分类统计延续同一紫色系；订阅额度条保留原有分时段颜色与动效。
+Windows 本机安装同时登记 ASS 应用身份、启动路径和图标路径，更新前在 `release/brand-registry-before-*.xml` 保存原值。顶栏、关于页、托盘、EXE 和注册图标共用 SVG 源，制作记录见 [Logo](docs/LOGO.md)，主题资源见 [best-light-dark-switching skill](skills/best-light-dark-switching/SKILL.md)。
 
 清理不删除 `%APPDATA%\AI Switch Servant` 中的账户、凭据、恢复日志与备份，也不删除客户端聊天记录。当前协议适配、原生客户端格式支持和必要事务恢复不是废弃兼容层；历史发布说明保留在源码中，但不再进入应用发布包。
 

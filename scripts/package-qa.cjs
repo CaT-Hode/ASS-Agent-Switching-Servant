@@ -10,6 +10,12 @@ fs.mkdirSync(output, { recursive: true });
 const data = fs.mkdtempSync(path.join(output, "packaged-"));
 const codex = path.join(data, "codex");
 fs.mkdirSync(codex);
+fs.writeFileSync(path.join(data, 'requests.jsonl'), [
+  { model: 'ASS_fixture::vendor/model', source: 'Monitor fixture', client: 'codex', protocol: 'openai-responses', requestId: 'packaged-monitor',
+    time: new Date().toISOString(), ok: true, taskOk: true, httpStatus: 200, status: 200, ms: 3000,
+    ttftMs: 1000, generationMs: 2000, tps: 25, usage: { inputTokens: 1000, outputTokens: 50, cacheReadTokens: 750, cacheWriteTokens: 0 } },
+  { model: 'vendor/model', source: 'Monitor fixture', time: new Date().toISOString(), ok: true, ms: 2000, httpStatus: 200 },
+].map(row => JSON.stringify(row)).join('\n') + '\n');
 const home = path.join(data, 'home');
 const appData = path.join(home, 'AppData', 'Roaming'), localData = path.join(home, 'AppData', 'Local');
 for (const directory of [home, appData, localData]) fs.mkdirSync(directory, { recursive: true });
@@ -58,6 +64,43 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     assert.equal(refresh.ok, true);
     assert.deepEqual(refresh.refreshed, []);
     assert.deepEqual(refresh.skipped, []);
+    // The shipped navigation, lazy renderer, preload allowlist and persisted
+    // history must agree, including unknown measurements in legacy records.
+    await page.getByRole('button', { name: '请求监控', exact: true }).click();
+    await page.getByText('2 个请求', { exact: true }).waitFor();
+    const monitoring = await page.evaluate(() => window.ass.call('request-monitor'));
+    assert.equal(monitoring.rows.length, 2); assert.equal(monitoring.rows[0].usage.cacheReadTokens, 750);
+    assert.equal(monitoring.rows[0].tps, 50 * 1000 / 3000, 'legacy TPS is recalculated from total duration');
+    assert.equal(await page.getByRole('region', { name: '全程 TPS', exact: true }).locator('strong').textContent(), '16.7');
+    assert.deepEqual(monitoring.active, []);
+    const unchangedMonitoring = await page.evaluate(revision => window.ass.call('request-monitor', revision), monitoring.revision);
+    assert.equal(unchangedMonitoring.rows, undefined, 'per-second polls do not resend unchanged historical rows');
+    await page.getByRole('button', { name: '模型汇总', exact: true }).click();
+    await page.locator('.monitor-summary-table').waitFor();
+    assert.equal(await page.locator('.monitor-summary-table tbody > tr').count(), 1);
+    assert.equal(await page.locator('.monitor-summary-table tbody > tr > td').first().textContent(), 'model');
+    await page.getByRole('button', { name: '请求明细', exact: true }).click();
+    await page.locator('.monitor-summary-table').waitFor({ state: 'hidden' });
+    for (const width of [1280, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate(theme => window.ass.call('ui-preferences', { theme }), theme);
+        await page.waitForFunction(theme => document.documentElement.dataset.colorTheme === theme, theme);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        await page.screenshot({ path: path.join(output, `request-monitor-package-${width}-${theme}.png`), animations: 'disabled' });
+      }
+    }
+    await page.evaluate(() => window.ass.call('ui-preferences', { theme: 'light' }));
+    for (const title of ['供应商与模型', '客户端与账户', '对话管理', '连接诊断', '路由总览', '请求监控']) {
+      await page.getByRole('button', { name: title, exact: true }).click();
+      await page.waitForFunction(title => document.querySelector('h1.page-heading-accessible')?.textContent === title, title);
+      await page.waitForFunction(() => !document.documentElement.hasAttribute('data-ui-transition'));
+    }
+    await page.evaluate(() => {
+      const nav = document.querySelector('.sidebar nav');
+      for (const title of ['路由总览', '供应商与模型', '请求监控']) [...nav.querySelectorAll('button')].find(button => button.textContent === title).click();
+    });
+    await page.waitForFunction(() => document.querySelector('h1.page-heading-accessible')?.textContent === '请求监控' && !document.documentElement.hasAttribute('data-ui-transition'));
     await page.getByRole("button", { name: "关于 ASS", exact: true }).click();
     await page.locator(".ass-wordmark").waitFor();
     assert.equal(await page.locator(".ass-brand-hero p").textContent(), "Agent-Switching-Servant");
@@ -105,6 +148,29 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     await page.getByRole("dialog").waitFor({ state: "hidden" });
     assert.equal(await toggle.isChecked(), false);
     assert.deepEqual(errors, []);
+    // Exercise the shipped renderer and production IPC with a disabled fixture;
+    // no real provider, native config sync or inference request is involved.
+    await page.evaluate(() => window.ass.call('save-provider', {
+      id:'package-fixture',name:'Protocol fixture',enabled:false,baseUrl:'https://fixture.invalid/v1',apiKey:'synthetic-package-key',
+      models:[{model:'gemini-fixture',displayName:'Gemini fixture',wireApi:'openai-responses'}],
+    }));
+    await page.getByRole('button',{name:'Codex',exact:true}).click();
+    await page.locator('.client-provider summary').filter({hasText:'Protocol fixture'}).click();
+    const protocol=page.getByRole('combobox',{name:'Protocol fixture / Gemini fixture 接口协议',exact:true});
+    assert.equal(await protocol.inputValue(),'auto');
+    await protocol.selectOption('anthropic');
+    await page.waitForFunction(()=>!document.querySelector('.model-protocol select')?.disabled);
+    assert.equal(await protocol.inputValue(),'anthropic');
+    const changed=await page.evaluate(()=>window.ass.call('snapshot'));
+    assert.equal(changed.providers[0].models[0].wireApi,'openai-responses');
+    assert.equal(changed.harnesses.clients.find(c=>c.id==='codex').injection.models[0].protocol,'anthropic');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(data,'clients.json'),'utf8')).injections.codex.modelProtocols['["package-fixture","gemini-fixture"]'],'anthropic');
+    if (!(await page.getByRole('button',{name:'pi',exact:true}).isVisible()))
+      await page.locator('.more-clients > summary').click();
+    await page.getByRole('button',{name:'pi',exact:true}).click();
+    await page.locator('.client-provider summary').filter({hasText:'Protocol fixture'}).click();
+    assert.equal(await protocol.inputValue(),'auto');
+    assert.deepEqual(errors, []);
     console.log(
       JSON.stringify({
         packaged: "passed",
@@ -115,6 +181,7 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
         pageErrors: 0,
         codexLaunchVisible: true,
         codexDesktopDetected,
+        injectionProtocolUI:true,
       }),
     );
   } finally {

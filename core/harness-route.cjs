@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { RequestMetrics } = require('./request-metrics.cjs');
 const { readTaskJSON } = require('./task-outcome.cjs');
 const { endpoint } = require("./models.cjs");
 const { sseMessages } = require("./adapters.cjs");
@@ -72,13 +73,14 @@ function harnessRoute(url, body, state) {
 async function forwardHarness(router, req, res) {
   const began = Date.now(),
     controller = new AbortController();
+  const metrics = new RequestMetrics({ began }), requestId = crypto.randomUUID();
+  const client = router.requests.get(req)?.client;
   let route, timer, httpStatus = null;
   const write = value => writeResponse(res, value);
   try {
     const credential =
       req.headers["x-api-key"] ||
       req.headers.authorization?.replace(/^Bearer /i, "");
-    const client = router.requests.get(req)?.client;
     const state = router.getState(client);
     // Accountless mode accepts the local token, plus the retained native grant
     // for Codex conversations that still belong to the built-in provider.
@@ -114,6 +116,11 @@ async function forwardHarness(router, req, res) {
     }
     route = harnessRoute(req.url, body, state);
     const { p, m, protocol } = route;
+    const pending = router.requests.get(req);
+    if (!/\/count_tokens/.test(req.url)) router.monitorRequest(req, {
+      requestId, model: m.model, source: p.name, protocol, providerId: p.id,
+      ...(/\/compact/.test(req.url) ? { operation: 'compaction' } : {}),
+    }, metrics);
     const headers = {
       ...p.extraHeaders,
       ...providerSessionHeaders(p, req.headers),
@@ -132,7 +139,7 @@ async function forwardHarness(router, req, res) {
     res.on("close", () => {
       if (!res.writableFinished) controller.abort();
     });
-    const response = await router.fetch(
+    const upstreamResponse = await router.fetch(
       route.url,
       {
         method: "POST",
@@ -144,7 +151,9 @@ async function forwardHarness(router, req, res) {
       },
       p.network,
     );
+    const response = metrics.observe(upstreamResponse, controller.signal);
     httpStatus = response.status;
+    if (pending?.monitor) pending.monitor.httpStatus = httpStatus;
     if (!response.ok) {
       await response.body?.cancel();
       throw Object.assign(
@@ -212,6 +221,9 @@ async function forwardHarness(router, req, res) {
       ms: Date.now() - began,
       ok: true,
       httpStatus, httpOk: httpStatus >= 200 && httpStatus < 300, taskOk: true,
+      requestId, client, protocol, providerId: p.id, ...metrics.snapshot(),
+      startedAt: new Date(began).toISOString(),
+      ...(/\/count_tokens/.test(req.url) ? { operation: 'count_tokens' } : /\/compact/.test(req.url) ? { operation: 'compaction' } : {}),
     });
   } catch (error) {
     // Never put raw provider error bodies or parser excerpts into logs.
@@ -251,6 +263,8 @@ async function forwardHarness(router, req, res) {
       ok: false,
       httpStatus, httpOk: httpStatus !== null && httpStatus >= 200 && httpStatus < 300, taskOk: false,
       error: message.slice(0, 300),
+      requestId, client, protocol: route?.protocol, providerId: route?.p.id, ...metrics.snapshot(),
+      startedAt: new Date(began).toISOString(),
     });
   } finally {
     controller.abort();

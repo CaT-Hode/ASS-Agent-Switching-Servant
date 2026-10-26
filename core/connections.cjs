@@ -568,7 +568,7 @@ class Connections {
     if (this.busy) throw Error('已有接入操作正在执行');
     const applied = this.proxyConfig?.clients.codex;
     if (!this.enabled.codex || !applied?.predictionCompatibility || applied.accountless || !this.sessionHandoff)
-      throw Error('请先开启提示词预测兼容并同步普通 OAuth 接入');
+      throw Error('请先更新并同步普通 OAuth 接入');
     this.busy = true;
     this.blocked.add('codex');
     try {

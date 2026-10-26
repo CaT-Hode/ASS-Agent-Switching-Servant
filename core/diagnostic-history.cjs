@@ -53,7 +53,7 @@ function failureMessage(message) {
   const status = /^HTTP (\d{3})(?:\b|；)/.exec(String(message));
   if (status) return `HTTP ${status[1]}；请检查该模型的凭据、协议和网络出口`;
   if (message === "未收到完整结束事件") return message;
-  if (message === "请求超时（90 秒）") return message;
+  if (/^请求超时（(?:30|90) 秒）$/.test(message)) return message;
   if (message === "未找到 ChatGPT 登录，请先在 Codex 登录") return message;
   return "连接失败，请检查模型配置或网络";
 }

@@ -22,8 +22,9 @@ before(async () => {
     window.rows = Array.from({ length: 31 }, (_, i) => ({ time: new Date(Date.now() - i * 30000).toISOString(), requestId: 'fixture-' + i,
       model: i % 2 ? 'vendor/gemini-4-argon' : 'ASS_fixture::another/vendor/gemini-4-argon', source: i % 2 ? 'WOYAO' : 'MIFY', client: 'codex',
       protocol: i % 2 ? 'anthropic' : 'openai-responses', ok: i !== 2, taskOk: i !== 2, httpStatus: i === 2 ? 502 : 200,
-      error: i === 2 ? 'Synthetic upstream failure' : '', ms: 4200, ttftMs: 1200, generationMs: 3000, tps: 120 / 4.2,
-      usage: { inputTokens: 1000, outputTokens: 120, cacheReadTokens: 600, cacheWriteTokens: 0 } }));
+      error: i === 2 ? 'Synthetic upstream failure' : '', ms: 4200, ttftMs: 1200, generationMs: 3000,
+      visibleTokens: 100, visibleMs: 3000, tps: 100 / 3, endToEndTps: 120 / 4.2,
+      usage: { inputTokens: 1000, outputTokens: 120, reasoningTokens: 20, cacheReadTokens: 600, cacheWriteTokens: 0 } }));
     window.reads = 0;
     window.ass = { call: async name => { if (name !== 'request-monitor') throw Error('Unexpected IPC'); window.reads++;
       return { rows: structuredClone(window.rows), active: structuredClone(window.active || []), limit: 5000, error: '' }; } };
@@ -114,24 +115,27 @@ test('ongoing row updates TPS/elapsed and selected details every second, freezes
   const row = page.locator('tr[data-in-progress]');
   await page.getByRole('button', { name: '查看 live-model 请求详情', exact: true }).click();
   await page.getByRole('region', { name: '请求详情' }).waitFor();
-  await page.evaluate(() => { window.active[0] = { ...window.active[0], phase: 'streaming', ms: 6000, tps: 120 / 6, tpsEstimated: true,
+  await page.evaluate(() => { window.active[0] = { ...window.active[0], phase: 'streaming', ms: 6000,
+    visibleTokens: 120, visibleMs: 4000, tps: 120 / 4, endToEndTps: 120 / 6, tpsEstimated: true,
     outputEstimated: true, ttftMs: 1000, usage: { outputTokens: 120 } }; });
   await page.waitForFunction(() => document.querySelector('tr[data-in-progress]')?.textContent.includes('6.00 s'));
-  assert.match(await row.textContent(), /≈ 20/);
-  assert.match(await page.getByRole('region', { name: '请求详情' }).textContent(), /全程 TPS≈ 20/);
+  assert.match(await row.textContent(), /≈ 30/);
+  assert.match(await page.getByRole('region', { name: '请求详情' }).textContent(), /可见输出 TPS≈ 30/);
+  assert.match(await page.getByRole('region', { name: '请求详情' }).textContent(), /全程吞吐≈ 20 tok\/s/);
   assert.equal(await row.evaluate(el => el.getAnimations().length), 0, 'per-second updates do not reanimate request rows');
   await page.getByRole('button', { name: '暂停刷新', exact: true }).click();
-  await page.evaluate(() => { window.active[0].ms = 9000; window.active[0].tps = 120 / 9; });
+  await page.evaluate(() => { window.active[0].ms = 9000; window.active[0].visibleMs = 7000; window.active[0].tps = 120 / 7; });
   await page.waitForTimeout(1100); assert.match(await row.textContent(), /6\.00 s/);
   await page.getByRole('button', { name: '继续刷新', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('tr[data-in-progress]')?.textContent.includes('9.00 s'));
   await page.evaluate(() => {
     window.rows.unshift({ ...window.active[0], time: new Date().toISOString(), inProgress: false, phase: undefined,
-      ok: true, taskOk: true, httpStatus: 200, tps: 160 / 9, tpsEstimated: false, outputEstimated: false, usage: { inputTokens: 500, outputTokens: 160 } });
+      ok: true, taskOk: true, httpStatus: 200, visibleTokens: 160, visibleMs: 6000, tps: 160 / 6, endToEndTps: 160 / 9,
+      tpsEstimated: false, outputEstimated: false, usage: { inputTokens: 500, outputTokens: 160, reasoningTokens: 0 } });
     window.active = []; window.bump();
   });
   await page.waitForFunction(() => !document.querySelector('tr[data-in-progress]'));
   assert.equal(await page.getByRole('button', { name: '查看 live-model 请求详情', exact: true }).count(), 1);
-  assert.match(await page.getByRole('region', { name: '请求详情' }).textContent(), /全程 TPS17\.8/);
+  assert.match(await page.getByRole('region', { name: '请求详情' }).textContent(), /可见输出 TPS26\.7/);
   assert.deepEqual(errors, []);
 });

@@ -1,5 +1,5 @@
 const fs = require('node:fs'), path = require('node:path');
-const { requestTps } = require('./request-metrics.cjs');
+const { requestTps, visibleOutputTokens } = require('./request-metrics.cjs');
 const MAX_BYTES = 2 * 1024 * 1024, MAX_RECORDS = 5000;
 // Reuse the existing bounded request log. The monitor reads only numeric
 // measurements and routing labels; it never exposes raw upstream payloads.
@@ -13,8 +13,14 @@ function publicRecord(record) {
   if (record.usage && typeof record.usage === 'object') result.usage = Object.fromEntries(
     ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens']
       .filter(key => Number.isSafeInteger(record.usage[key]) && record.usage[key] >= 0).map(key => [key, record.usage[key]]));
-  // Recalculate legacy speeds on read; retain the original log and token counts.
-  result.tps = requestTps(result.usage?.outputTokens, result.ms);
+  const hasVisibleCount = Number.isSafeInteger(record.visibleTokens) && record.visibleTokens >= 0;
+  result.visibleTokens = hasVisibleCount ? record.visibleTokens : visibleOutputTokens(result.usage);
+  result.visibleMs = Number.isFinite(record.visibleMs) && record.visibleMs >= 0 ? record.visibleMs : null;
+  result.tpsEstimated = hasVisibleCount && record.tpsEstimated === true;
+  // Older logs did not separate visible timing from reasoning. Keep that speed
+  // unknown, rather than reuse a whole-request or mixed reasoning interval.
+  result.tps = requestTps(result.visibleTokens, result.visibleMs);
+  result.endToEndTps = requestTps(result.usage?.outputTokens, result.ms);
   return result;
 }
 class RequestHistory {

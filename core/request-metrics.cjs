@@ -1,6 +1,8 @@
 const { SseParser } = require('./sse-parser.cjs');
 const tokenCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const requestTps = (tokens, ms) => tokenCount(tokens) !== null && Number.isFinite(ms) && ms > 0 ? tokens * 1000 / ms : null;
+const visibleOutputTokens = usage => tokenCount(usage?.outputTokens) !== null && tokenCount(usage?.reasoningTokens) !== null &&
+  usage.reasoningTokens <= usage.outputTokens ? usage.outputTokens - usage.reasoningTokens : null;
 
 // Observation only. No prompt/output text, credentials or response headers are
 // retained. A metrics parse failure must never change the inference stream.
@@ -8,22 +10,30 @@ class RequestMetrics {
   constructor({ now = Date.now, began = now() } = {}) {
     this.now = now; this.began = began; this.usage = null; this.first = null; this.last = null;
     this.outputUnits = 0; this.reportedAtUnits = 0;
+    this.firstVisible = null; this.lastVisible = null; this.visibleUnits = 0;
+    this.reportedVisibleTokens = null; this.reportedVisibleAtUnits = 0;
   }
-  event(event) {
+  event(event, receivedAt = this.now()) {
     const delta = event.delta;
     const pieces = [];
-    if (/\.delta$/.test(event.type || '') && /output_text|reasoning|function_call_arguments|custom_tool_call_input/.test(event.type)) pieces.push(delta);
-    if (event.type === 'content_block_delta') pieces.push(delta?.text, delta?.thinking, delta?.partial_json);
-    if (event.type === 'content_block_start') pieces.push(event.content_block?.text, event.content_block?.thinking);
+    if (/\.delta$/.test(event.type || '') && /output_text|reasoning|function_call_arguments|custom_tool_call_input/.test(event.type))
+      pieces.push([delta, !event.type.includes('reasoning')]);
+    if (event.type === 'content_block_delta') pieces.push([delta?.text, true], [delta?.thinking, false], [delta?.partial_json, true]);
+    if (event.type === 'content_block_start') pieces.push([event.content_block?.text, true], [event.content_block?.thinking, false]);
     for (const choice of event.choices || []) {
-      pieces.push(choice.delta?.content, choice.delta?.reasoning_content, choice.delta?.reasoning);
-      for (const tool of choice.delta?.tool_calls || []) pieces.push(tool.function?.arguments);
+      pieces.push([choice.delta?.content, true], [choice.delta?.reasoning_content, false], [choice.delta?.reasoning, false]);
+      for (const tool of choice.delta?.tool_calls || []) pieces.push([tool.function?.arguments, true]);
     }
-    for (const text of pieces) if (typeof text === 'string' && text.length) {
-      this.first ??= this.now();
+    for (const [text, visible] of pieces) if (typeof text === 'string' && text.length) {
+      this.first ??= receivedAt;
       // Keep numeric estimates only. A usage report in this same event covers
       // these deltas too, so apply its cumulative count after observing them.
-      for (const character of text) this.outputUnits += character.codePointAt(0) < 128 ? .25 : 1;
+      let units = 0;
+      for (const character of text) units += character.codePointAt(0) < 128 ? .25 : 1;
+      this.outputUnits += units;
+      if (visible) {
+        this.firstVisible ??= receivedAt; this.lastVisible = receivedAt; this.visibleUnits += units;
+      }
     }
     const usage = event.response?.usage || event.message?.usage || event.usage;
     if (usage && typeof usage === 'object') {
@@ -39,6 +49,10 @@ class RequestMetrics {
       this.usage ||= {};
       for (const [key, value] of Object.entries(patch)) if (value !== null) this.usage[key] = value;
       if (patch.outputTokens !== null) this.reportedAtUnits = this.outputUnits;
+      const reportedVisible = visibleOutputTokens(patch);
+      if (reportedVisible !== null) {
+        this.reportedVisibleTokens = reportedVisible; this.reportedVisibleAtUnits = this.visibleUnits;
+      }
       // Anthropic's input_tokens excludes cache reads/writes. OpenAI's includes
       // them. Normalize both to total input without adding repeated snapshots.
       if (anthropic) {
@@ -47,7 +61,7 @@ class RequestMetrics {
           (this.usage.cacheReadTokens || 0) + (this.usage.cacheWriteTokens || 0);
       }
     }
-    if (event.usage || event.response?.usage || ['response.completed', 'response.incomplete', 'message_stop'].includes(event.type)) this.last = this.now();
+    if (event.usage || event.response?.usage || ['response.completed', 'response.incomplete', 'message_stop'].includes(event.type)) this.last = receivedAt;
   }
   observe(response, signal, onData = () => {}) {
     if (!response.body) return response;
@@ -57,12 +71,15 @@ class RequestMetrics {
     const feed = (chunk, done = false) => {
       if (disabled) return;
       try {
+        const receivedAt = this.now();
         if (!mode && chunk) mode = /^\s*[\[{]/.test(Buffer.from(chunk).toString('utf8')) ? 'json' : 'sse';
         if (mode === 'sse') {
-          for (const frame of parser.feed(chunk, done)) this.event(frame.event);
+          // Frames in one network packet arrived together. Parsing time must
+          // not turn a buffered answer into a measurable streaming interval.
+          for (const frame of parser.feed(chunk, done)) this.event(frame.event, receivedAt);
         } else if (mode === 'json') {
           if (chunk) { size += chunk.byteLength; if (size > 4 * 1024 * 1024) { disabled = true; chunks = []; return; } chunks.push(Buffer.from(chunk)); }
-          if (done && size) { this.event(JSON.parse(Buffer.concat(chunks).toString('utf8'))); chunks = []; }
+          if (done && size) { this.event(JSON.parse(Buffer.concat(chunks).toString('utf8')), receivedAt); chunks = []; }
         }
       } catch { disabled = true; chunks = []; parser = null; }
     };
@@ -78,12 +95,18 @@ class RequestMetrics {
     const elapsedMs = until === null ? null : Math.max(0, until - this.began);
     const estimated = live && this.outputUnits > this.reportedAtUnits;
     const outputTokens = live ? (this.usage?.outputTokens || 0) + Math.ceil(this.outputUnits - this.reportedAtUnits) : this.usage?.outputTokens;
+    const visibleExtra = Math.ceil(this.visibleUnits - this.reportedVisibleAtUnits);
+    const visibleTokens = this.reportedVisibleTokens !== null || visibleExtra > 0
+      ? (this.reportedVisibleTokens || 0) + visibleExtra : null;
+    const visibleMs = this.firstVisible !== null && this.lastVisible > this.firstVisible
+      ? (live ? until : this.lastVisible) - this.firstVisible : null;
+    const visibleEstimated = visibleTokens !== null && (this.reportedVisibleTokens === null || visibleExtra > 0);
     return { usage: live && (this.usage || outputTokens) ? { ...this.usage, ...(outputTokens ? { outputTokens } : {}) } : this.usage,
       ttftMs: this.first === null ? null : Math.max(0, this.first - this.began), generationMs,
-      // All output tokens include hidden reasoning. The matching interval must
-      // include the wait before visible output, not just its final short burst.
-      tps: live && (this.first === null || elapsedMs < 1000) ? null : requestTps(outputTokens, elapsedMs),
-      ...(live ? { tpsEstimated: estimated, outputEstimated: estimated } : {}) };
+      visibleTokens, visibleMs,
+      tps: live && (visibleMs === null || visibleMs < 1000) ? null : requestTps(visibleTokens, visibleMs), tpsEstimated: visibleEstimated,
+      endToEndTps: requestTps(outputTokens, elapsedMs),
+      ...(live ? { outputEstimated: estimated } : {}) };
   }
 }
-module.exports = { RequestMetrics, requestTps };
+module.exports = { RequestMetrics, requestTps, visibleOutputTokens };

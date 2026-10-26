@@ -11,7 +11,7 @@ export const seconds = value => known(value) ? (value / 1000).toFixed(2) + ' s' 
 export function emptyStats() {
   return { calls: 0, completed: 0, running: 0, liveTps: 0, liveTpsSamples: 0, liveEstimated: false, passed: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, usageSamples: 0,
     inputSamples: 0, outputSamples: 0, cacheReadSamples: 0, cacheWriteSamples: 0,
-    cacheSamples: 0, cachedInput: 0, cacheReadForRate: 0, tpsSamples: 0, generatedTokens: 0, throughputMs: 0, ttftSamples: 0, ttftTotal: 0 };
+    cacheSamples: 0, cachedInput: 0, cacheReadForRate: 0, tpsSamples: 0, visibleTokens: 0, visibleMs: 0, tpsEstimated: false, ttftSamples: 0, ttftTotal: 0 };
 }
 function add(stats, row) {
   stats.calls++;
@@ -30,12 +30,13 @@ function add(stats, row) {
   if (known(usage?.cacheReadTokens) && known(usage?.inputTokens)) {
     stats.cacheSamples++; stats.cacheReadForRate += usage.cacheReadTokens; stats.cachedInput += usage.inputTokens;
   }
-  if (requestOK(row) && known(row.ms) && row.ms > 0 && known(usage?.outputTokens)) {
-    stats.tpsSamples++; stats.generatedTokens += usage.outputTokens; stats.throughputMs += row.ms;
+  if (requestOK(row) && known(row.visibleMs) && row.visibleMs > 0 && known(row.visibleTokens)) {
+    stats.tpsSamples++; stats.visibleTokens += row.visibleTokens; stats.visibleMs += row.visibleMs;
+    stats.tpsEstimated ||= row.tpsEstimated === true;
   }
   if (known(row.ttftMs)) { stats.ttftSamples++; stats.ttftTotal += row.ttftMs; }
 }
-export const aggregateTps = stats => stats.throughputMs > 0 ? stats.generatedTokens * 1000 / stats.throughputMs : null;
+export const aggregateTps = stats => stats.visibleMs > 0 ? stats.visibleTokens * 1000 / stats.visibleMs : null;
 export const currentTps = stats => stats.running ? stats.liveTpsSamples ? stats.liveTps : null : aggregateTps(stats);
 export const cacheRate = stats => stats.cacheSamples && stats.cachedInput > 0 ? stats.cacheReadForRate / stats.cachedInput * 100 : null;
 export const meanTtft = stats => stats.ttftSamples ? stats.ttftTotal / stats.ttftSamples : null;

@@ -13,7 +13,8 @@ fs.mkdirSync(codex);
 fs.writeFileSync(path.join(data, 'requests.jsonl'), [
   { model: 'ASS_fixture::vendor/model', source: 'Monitor fixture', client: 'codex', protocol: 'openai-responses', requestId: 'packaged-monitor',
     time: new Date().toISOString(), ok: true, taskOk: true, httpStatus: 200, status: 200, ms: 3000,
-    ttftMs: 1000, generationMs: 2000, tps: 25, usage: { inputTokens: 1000, outputTokens: 50, cacheReadTokens: 750, cacheWriteTokens: 0 } },
+    ttftMs: 1000, generationMs: 2000, tps: 25, visibleTokens: 40, visibleMs: 2000,
+    usage: { inputTokens: 1000, outputTokens: 50, reasoningTokens: 10, cacheReadTokens: 750, cacheWriteTokens: 0 } },
   { model: 'vendor/model', source: 'Monitor fixture', time: new Date().toISOString(), ok: true, ms: 2000, httpStatus: 200 },
 ].map(row => JSON.stringify(row)).join('\n') + '\n');
 const home = path.join(data, 'home');
@@ -70,8 +71,10 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     await page.getByText('2 个请求', { exact: true }).waitFor();
     const monitoring = await page.evaluate(() => window.ass.call('request-monitor'));
     assert.equal(monitoring.rows.length, 2); assert.equal(monitoring.rows[0].usage.cacheReadTokens, 750);
-    assert.equal(monitoring.rows[0].tps, 50 * 1000 / 3000, 'legacy TPS is recalculated from total duration');
-    assert.equal(await page.getByRole('region', { name: '全程 TPS', exact: true }).locator('strong').textContent(), '16.7');
+    assert.equal(monitoring.rows[0].tps, (50 - 10) * 1000 / 2000, 'primary TPS uses visible count and its own receive interval');
+    assert.equal(monitoring.rows[0].endToEndTps, 50 * 1000 / 3000);
+    assert.equal(monitoring.rows[1].tps, null, 'legacy records cannot reuse total timing as visible timing');
+    assert.equal(await page.getByRole('region', { name: '可见输出 TPS', exact: true }).locator('strong').textContent(), '20');
     assert.deepEqual(monitoring.active, []);
     const unchangedMonitoring = await page.evaluate(revision => window.ass.call('request-monitor', revision), monitoring.revision);
     assert.equal(unchangedMonitoring.rows, undefined, 'per-second polls do not resend unchanged historical rows');

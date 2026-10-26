@@ -6,7 +6,7 @@
 
 ASS（Agent-Switching-Servant）是你的 Windows 桌面 AI 路由与账户助手。把模型、API 凭据与官方授权放到一个独立窗口，切换客户端时不必反复搬配置。关闭窗口后继续在托盘运行。
 
-v0.4.17 修复 TPS 虚高，统一使用包含等待与推理时间的全程吞吐，实时首秒先采样，旧历史重新计算，见 [v0.4.17](docs/RELEASE-v0.4.17.md)。监控搜索框样式见 [v0.4.16](docs/RELEASE-v0.4.16.md)，进行中请求每秒更新与界面动画见 [v0.4.15](docs/RELEASE-v0.4.15.md)，监控基础功能与模型最后一级归并见 [v0.4.14](docs/RELEASE-v0.4.14.md)，客户端逐模型协议选择见 [v0.4.13](docs/RELEASE-v0.4.13.md)，Gemini 工具兼容见 [v0.4.12](docs/RELEASE-v0.4.12.md)，流式超时见 [v0.4.11](docs/RELEASE-v0.4.11.md)，OAuth 归档修复见 [v0.4.10](docs/RELEASE-v0.4.10.md)。
+v0.4.18 将主要 TPS 改为可见文本与工具参数的接收速率，推理量及计时独立处理，全程吞吐保留在详情中，见 [v0.4.18](docs/RELEASE-v0.4.18.md)。旧历史缺少可见输出计时时不猜测速度；估算统一标记「≈」。上一版全程统计见 [v0.4.17](docs/RELEASE-v0.4.17.md)，搜索框样式见 [v0.4.16](docs/RELEASE-v0.4.16.md)，实时监控与界面动画见 [v0.4.15](docs/RELEASE-v0.4.15.md)，模型最后一级归并见 [v0.4.14](docs/RELEASE-v0.4.14.md)，逐模型协议选择见 [v0.4.13](docs/RELEASE-v0.4.13.md)。
 
 ## 能做什么
 

@@ -10,7 +10,8 @@ test('usage groups every client by the final model component across nested names
   assert.equal(usageModelName(current, 'pi'), 'deepseek-v4-pro');
   for (const client of ['codex','claude','opencode','pi','dsh','kimi','zcode']) {
     for (const name of ['openrouter/vendor/model', 'vendor::model', 'ASS_fixture::model',
-      'ASS_fixture::relay::openrouter/vendor/model', 'aimami_relay_not-a-hash::model'])
+      'ASS_fixture::relay::openrouter/vendor/model', 'aimami_relay_not-a-hash::model',
+      'relay::model[1m]', 'vendor/model[1M]'])
       assert.equal(usageModelName(name, client), 'model');
     assert.equal(usageModelName('gpt-6-astra', client), 'gpt-6-astra');
   }
@@ -26,7 +27,7 @@ test('cached native and routed model names group together without rewriting rows
     { ...base, model: 'gpt-5.6-sol' },
     { ...base, provider: 'ASS', model: require('../core/models.cjs').codexModelId('fixture', 'gpt-5.6-sol') },
     { ...base, provider: 'aimai1', model: 'aimami_relay_0a211c788d::router/vendor/gpt-5.6-sol', sessions: ['other'] },
-    { ...base, client: 'pi', provider: 'custom', model: 'openrouter/vendor/gpt-5.6-sol', sessions: ['pi'] },
+    { ...base, client: 'pi', provider: 'custom', model: 'openrouter/vendor/gpt-5.6-sol[1m]', sessions: ['pi'] },
     { ...base, model: 'deepseek-ai/deepseek-v4-pro' }
   ];
   const cached = JSON.parse(JSON.stringify(rows)), before = JSON.stringify(cached), now = new Date(2026, 9, 10, 12);

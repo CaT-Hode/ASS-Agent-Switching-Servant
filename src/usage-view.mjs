@@ -50,7 +50,7 @@ export function usageModelName(model) {
   if (typeof model !== "string" || /[\x00-\x1f\x7f]/.test(model)) return "未标注";
   // Suppliers and clients can nest both provider::model and vendor/model.
   // The usage view intentionally merges by the final model component only.
-  return model.trim().split(/::|\//).at(-1).trim() || "未标注";
+  return model.trim().split(/::|\//).at(-1).trim().replace(/\[1m\]$/i, '').trim() || "未标注";
 }
 export function summarize(rows, options, now = new Date()) {
   const bounds = rangeBounds(options.range, now),

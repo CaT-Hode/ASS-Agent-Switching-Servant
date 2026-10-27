@@ -6,8 +6,10 @@ before(async () => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-surface-motion-'));
   require('esbuild').buildSync({ stdin: { contents: `import React,{useState}from'react';import{createRoot}from'react-dom/client';
     import{transitionUI,Presence}from'./src/surface-motion.jsx';import'./src/style.css';import'./src/theme.css';import'./src/motion.css';
+    const nativeTransition=document.startViewTransition.bind(document);
+    document.startViewTransition=update=>{window.lastTransition=nativeTransition(update);return window.lastTransition;};
     function Fixture(){const[pane,setPane]=useState('A'),[notice,setNotice]=useState(true);
-      window.move=name=>transitionUI(()=>setPane(name));window.notice=setNotice;
+      window.move=(name,direction)=>transitionUI(()=>setPane(name),{direction});window.notice=setNotice;
       return <div className="app-shell" data-input="pointer" onPointerDownCapture={e=>e.currentTarget.dataset.input='pointer'} onKeyDownCapture={e=>e.currentTarget.dataset.input='keyboard'}>
         <main className="page-content" style={{margin:0,padding:32}}><nav>{['A','B','C'].map(name=><button key={name} onClick={()=>window.move(name)}>Show {name}</button>)}</nav>
           <section key={pane}><h1>Pane {pane}</h1><div className="token-stack" style={{height:70,width:20,background:'#68b69b'}}/></section>
@@ -40,6 +42,39 @@ test('native page entry/exit is interruptible; keyboard navigation and theme rev
   assert.deepEqual(errors, []);
 });
 
+test('navigation directions reverse entry/exit; detail depth moves horizontally and peers only fade', async () => {
+  const output = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'ASS-validation'); fs.mkdirSync(output, { recursive: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  for (const [direction, pane, enterX, enterY, exitX, exitY] of [
+    ['down', 'A', 0, 1, 0, -1], ['up', 'B', 0, -1, 0, 1],
+    ['forward', 'C', 1, 0, -1, 0], ['back', 'B', -1, 0, 1, 0], ['fade', 'C', 0, 0, 0, 0],
+  ]) {
+    const motion = await page.evaluate(async ({ direction, pane }) => {
+      document.querySelector('.app-shell').dataset.input = 'pointer';
+      window.move(pane, direction); await window.lastTransition.ready;
+      const animations = document.getAnimations().filter(a => ['surface-in', 'surface-out'].includes(a.animationName));
+      const sample = name => {
+        const animation = animations.find(a => a.animationName === name), frames = animation.effect.getKeyframes();
+        const frame = name === 'surface-in' ? frames[0] : frames.at(-1);
+        const probe = document.createElement('div'); probe.style.cssText = 'position:fixed;pointer-events:none'; probe.style.transform = frame.transform;
+        document.body.append(probe); const matrix = new DOMMatrix(getComputedStyle(probe).transform); probe.remove();
+        return [Math.sign(matrix.m41), Math.sign(matrix.m42)];
+      };
+      const result = { direction: document.documentElement.dataset.uiTransition, enter: sample('surface-in'), exit: sample('surface-out') };
+      window.surfaceAnimations = animations;
+      for (const animation of animations) { animation.pause(); animation.currentTime = 70; }
+      return result;
+    }, { direction, pane });
+    assert.equal(motion.direction, direction);
+    assert.deepEqual(motion.enter, [enterX, enterY]);
+    assert.deepEqual(motion.exit, [exitX, exitY]);
+    if (['up', 'down'].includes(direction)) await page.screenshot({ path: path.join(output, `ass-nav-motion-${direction}.png`) });
+    await page.evaluate(async () => { for (const animation of window.surfaceAnimations) animation.finish(); await window.lastTransition.finished; });
+    await page.waitForFunction(() => !document.documentElement.hasAttribute('data-ui-transition'));
+  }
+  assert.deepEqual(errors, []);
+});
+
 test('bars rise once, reduced motion uses a short fade, and transient surfaces remain through exit', async () => {
   await page.getByRole('button', { name: 'Show A', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'Pane A' && !document.documentElement.hasAttribute('data-ui-transition'));
@@ -55,7 +90,7 @@ test('bars rise once, reduced motion uses a short fade, and transient surfaces r
   assert.equal(await page.locator('.motion-presence').count(), 1, 'real DOM remains while exiting');
   await page.waitForFunction(() => !document.querySelector('.motion-presence'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.getByRole('button', { name: 'Show C', exact: true }).click();
+  await page.evaluate(() => { document.querySelector('.app-shell').dataset.input = 'pointer'; window.move('C', 'down'); });
   await page.getByRole('heading', { name: 'Pane C', exact: true }).waitFor();
   const reduced = await page.locator('.token-stack').evaluate(node => ({
     input: document.querySelector('.app-shell').dataset.input, matches: matchMedia('(prefers-reduced-motion: reduce)').matches,

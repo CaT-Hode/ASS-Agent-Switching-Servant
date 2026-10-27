@@ -1,19 +1,26 @@
 /* Motion belongs to the icon's named parts, not to its outer silhouette. */
 :root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); }
 .page-content { min-width: 0; animation: surface-in 180ms var(--ease-out); }
+:root[data-ui-transition] { --surface-enter: none; --surface-exit: none; --surface-enter-duration: 160ms; --surface-exit-duration: 100ms; }
+:root[data-ui-transition="down"], :root[data-ui-transition="up"] { --surface-enter-duration: 200ms; --surface-exit-duration: 130ms; }
+:root[data-ui-transition="down"] { --surface-enter: translateY(22px); --surface-exit: translateY(-14px); }
+:root[data-ui-transition="up"] { --surface-enter: translateY(-22px); --surface-exit: translateY(14px); }
+:root[data-ui-transition="forward"], :root[data-ui-transition="back"] { --surface-enter-duration: 180ms; --surface-exit-duration: 110ms; }
+:root[data-ui-transition="forward"] { --surface-enter: translateX(24px) scale(.985); --surface-exit: translateX(-12px) scale(.995); }
+:root[data-ui-transition="back"] { --surface-enter: translateX(-18px) scale(.995); --surface-exit: translateX(24px) scale(.985); }
 :root[data-ui-transition] .page-content { view-transition-name: ass-content; }
 :root[data-ui-transition]::view-transition { pointer-events: none; }
 :root[data-ui-transition]::view-transition-group(root),
 :root[data-ui-transition]::view-transition-old(root),
 :root[data-ui-transition]::view-transition-new(root) { animation: none; }
 :root[data-ui-transition]::view-transition-old(root) { opacity: 0; }
-:root[data-ui-transition]::view-transition-group(ass-content) { animation-duration: 180ms; animation-timing-function: var(--ease-out); }
-:root[data-ui-transition]::view-transition-old(ass-content) { animation: surface-out 110ms var(--ease-out) both; }
-:root[data-ui-transition]::view-transition-new(ass-content) { animation: surface-in 180ms var(--ease-out) both; }
+:root[data-ui-transition]::view-transition-group(ass-content) { animation-duration: var(--surface-enter-duration); animation-timing-function: var(--ease-out); }
+:root[data-ui-transition]::view-transition-old(ass-content) { animation: surface-out var(--surface-exit-duration) var(--ease-out) both; }
+:root[data-ui-transition]::view-transition-new(ass-content) { animation: surface-in var(--surface-enter-duration) var(--ease-out) both; }
 .motion-presence { display: contents; }
 .motion-presence > .toast { animation: none; }
-@keyframes surface-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-@keyframes surface-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-4px); } }
+@keyframes surface-in { from { opacity: 0; transform: var(--surface-enter, translateY(6px)); } to { opacity: 1; transform: none; } }
+@keyframes surface-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: var(--surface-exit, translateY(-4px)); } }
 @keyframes bars-rise { from { transform: scaleY(0); opacity: .4; } to { transform: scaleY(1); opacity: 1; } }
 @keyframes bars-fill { from { transform: scaleX(0); opacity: .4; } to { transform: scaleX(1); opacity: 1; } }
 .token-stack { transform-origin: center bottom; animation: bars-rise 260ms var(--ease-out) both; }

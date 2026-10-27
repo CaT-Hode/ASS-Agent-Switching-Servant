@@ -1,5 +1,17 @@
 const path = require("node:path");
 const { execFile } = require("node:child_process");
+const CLAUDE_MODEL_ENV = ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_AUTO_MODE_MODEL"];
+function claudeModelEnv(providers, selected, review = selected) {
+  const rows = require('./claude-models.cjs').claudeModels(providers);
+  const cliModel = value => rows.find(row => row.model === value || row.cliModel === value)?.cliModel || value;
+  selected = cliModel(selected); review = cliModel(review);
+  return { ...Object.fromEntries(CLAUDE_MODEL_ENV.map(key => [key, selected])),
+    // Current CLI releases select the classifier through the Sonnet alias;
+    // 2.1.302+ also reads the dedicated override. Keep both on the same route.
+    ANTHROPIC_DEFAULT_SONNET_MODEL: review, CLAUDE_CODE_AUTO_MODE_MODEL: review,
+    CLAUDE_CODE_AUTO_MODE_SERVER: "0" };
+}
 function claudeVersionCommand(launcher, platform = process.platform) {
   if (!launcher?.ready || !path.isAbsolute(launcher.executable || "") ||
       !Array.isArray(launcher.args) || [launcher.executable, ...launcher.args].some(s => typeof s !== "string" || /[\0\r\n]/.test(s)))
@@ -39,11 +51,13 @@ async function assertClaudePicker(launcher) {
 }
 
 function claudeModelSettings(providers, selected) {
-  const options = require("./claude-models.cjs").claudeModels(providers)
-    .map(({ model, label, description }) => ({ model, label, description }));
-  if (!options.some((m) => m.model === selected)) throw Error("启动模型不在已注入的模型列表中");
+  const rows = require("./claude-models.cjs").claudeModels(providers);
+  const options = rows.map(({ model, cliModel, label, description }) => ({ model: cliModel,
+    label: label + (cliModel !== model ? ' [1m]' : ''), description }));
+  const entry = rows.find(m => m.model === selected || m.cliModel === selected);
+  if (!entry) throw Error("启动模型不在已注入的模型列表中");
   return {
-    model: selected,
+    model: entry.cliModel,
     availableModels: options.map((m) => m.model),
     enforceAvailableModels: true,
     // Older CC releases use the allowlist plus gateway discovery. v2.1.242+
@@ -52,15 +66,15 @@ function claudeModelSettings(providers, selected) {
   };
 }
 
-function configureClaudeModels(config, providers, selected, dir) {
+function configureClaudeModels(config, providers, selected, dir, review) {
   const settings = claudeModelSettings(providers, selected);
   config.files.push(["settings.json", JSON.stringify(settings, null, 2)]);
   config.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = "1";
-  config.env.CLAUDE_CODE_SUBAGENT_MODEL = selected;
-  config.env.ANTHROPIC_DEFAULT_FABLE_MODEL = selected;
+  Object.assign(config.env, claudeModelEnv(providers, selected, review));
   // Never load another project's credential overrides into an API-only home.
   // Managed organizational policy still applies; normal tool approval remains on.
   config.args.push("--setting-sources", "user", "--settings", path.join(dir, "settings.json"));
+  return settings.model;
 }
 function prepareClaudeOnboarding(dir) {
   const { read, edit, atomic } = require("./native-fields.cjs");
@@ -70,4 +84,4 @@ function prepareClaudeOnboarding(dir) {
   const after = edit(before, "json", ["hasCompletedOnboarding"], { exists: true, value: true });
   if (after !== before) atomic(file, after);
 }
-module.exports = { claudeModelSettings, configureClaudeModels, assertClaudePicker, prepareClaudeOnboarding, claudeVersionCommand };
+module.exports = { claudeModelSettings, claudeModelEnv, CLAUDE_MODEL_ENV, configureClaudeModels, assertClaudePicker, prepareClaudeOnboarding, claudeVersionCommand };

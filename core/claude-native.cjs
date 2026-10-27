@@ -3,14 +3,12 @@
 const path = require("node:path");
 const { isDeepStrictEqual: equal } = require("node:util");
 const { document, edit, read } = require("./native-fields.cjs");
-const { claudeModelSettings } = require("./accountless.cjs");
-const MODEL_ENV = ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
-  "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"];
+const { claudeModelSettings, claudeModelEnv, CLAUDE_MODEL_ENV: MODEL_ENV } = require("./accountless.cjs");
 const CLEAR_ENV = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"];
 const CLOUD_ENV = ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"];
 const SETTING_KEYS = ["model", "availableModels", "enforceAvailableModels", "modelPicker", "apiKeyHelper"];
 const ENV_KEYS = [...MODEL_ENV, ...CLEAR_ENV, ...CLOUD_ENV, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
-  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"];
+  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "CLAUDE_CODE_AUTO_MODE_SERVER"];
 const present = value => ({ exists: true, value });
 function valueAt(data, keys) {
   let value = data;
@@ -55,7 +53,7 @@ function specs(manager, plan) {
   const base = `http://127.0.0.1:${manager.options?.port || 25819}/clients/claude/models`;
   const env = { ANTHROPIC_BASE_URL: base, ANTHROPIC_AUTH_TOKEN: plan.localToken,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1",
-    ...Object.fromEntries(MODEL_ENV.map(k => [k, selected])),
+    ...claudeModelEnv(plan.providers, selected, plan.autoModeModel),
     ...Object.fromEntries(CLEAR_ENV.map(k => [k, ""])), ...Object.fromEntries(CLOUD_ENV.map(k => [k, "0"])) };
   return [
     ...Object.entries(settings).map(([key, value]) => ({ file: t.settings, path: [key], after: present(value) })),

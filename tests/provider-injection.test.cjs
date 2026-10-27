@@ -40,6 +40,23 @@ test('provider selection covers future models, is per client and does not change
   assert.throws(()=>f.manager.setInjection('pi',{excludedProviders:[]}),/disk failure/);
   assert.deepEqual(f.manager.state.injections.pi,before);
 });
+test('Claude model defaults persist, follow renames and deletion, and reject invalid or cross-client review choices', t => {
+  const f = fixture(t), first = modelRef('work', 'one'), second = modelRef('work', 'two');
+  f.manager.setInjection('claude', { defaultModel: second, autoModeModel: first });
+  assert.equal(f.create().injection('claude').defaultModel, second);
+  assert.equal(f.create().injection('claude').autoModeModel, first);
+  const before = fs.readFileSync(f.manager.file);
+  for (const changes of [{ defaultModel: 'bad' }, { autoModeModel: first + 'bad' }, { autoModeModel: modelRef('work', 'missing') }])
+    assert.throws(() => f.manager.setInjection('claude', changes), /引用无效/);
+  assert.throws(() => f.manager.setInjection('codex', { autoModeModel: first }), /引用无效/);
+  assert.deepEqual(fs.readFileSync(f.manager.file), before);
+  f.manager.reconcileModel('work', 'one', 'renamed');
+  assert.equal(f.create().injection('claude').autoModeModel, modelRef('work', 'renamed'));
+  f.manager.reconcileModel('work', 'renamed', null);
+  assert.equal(f.create().injection('claude').autoModeModel, null);
+  assert.equal(f.create().injection('claude').defaultModel, second);
+});
+
 test('schema3 initializes missing clients correctly and restart can parse the resulting save', t => {
   const f=fixture(t,{schemaVersion:3,injections:{pi:{excludedProviders:[]}}});
   f.manager.save(); assert.deepEqual(f.create().state.injections.dsh,{excludedProviders:[]});

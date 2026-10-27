@@ -13,9 +13,10 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
     : "";
   const excluded = new Set(injection.excludedProviders || []);
   const enabled = [...groups].filter(([id, models]) => !excluded.has(id) && models.some((m) => !m.issue)).length;
-  const codexModels = client.id === "codex" ? injection.models.filter((m) => m.included && !m.issue) : [];
+  const defaultModels = ['codex', 'claude'].includes(client.id) ? injection.models.filter((m) => m.included && !m.issue) : [];
   const officialModels = connection?.accountless ? [] : injection.officialModels || [];
-  const selectedDefault = [...officialModels, ...codexModels].some(m => m.ref === injection.defaultModel) ? injection.defaultModel : '';
+  const selectedDefault = [...officialModels, ...defaultModels].some(m => m.ref === injection.defaultModel) ? injection.defaultModel : '';
+  const selectedReview = defaultModels.some(m => m.ref === injection.autoModeModel) ? injection.autoModeModel : '';
   return <section className="client-injection" aria-label={client.name + " 模型接入"}>
     <header><h3>供应商接入 {!client.injectionUnsupported && <span className="injection-count" title="已纳入 / 已配置供应商" aria-label={`已纳入 ${enabled} 个供应商，共 ${groups.size} 个`}>{enabled} / {groups.size}</span>}</h3>
     </header>
@@ -50,17 +51,31 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
       className="button" disabled={!!busy || state.connections.busy}
       title="恢复 ASS 对话的官方供应商和模型绑定；需先关闭 Codex"
       onClick={() => onManage({ scope: client.id, enabled: false, restoreSessions: true, name: client.name })}>恢复官方续聊</button>}
-    {client.id === "codex" && (codexModels.length > 0 || officialModels.length > 0) && <label className="codex-default-model">
-      <span>默认模型</span>
-      <select aria-label="Codex 默认模型" value={selectedDefault} disabled={!!busy || state.connections.busy}
+    {['codex', 'claude'].includes(client.id) && (defaultModels.length > 0 || officialModels.length > 0) && <label className="client-default-model">
+      <span>{client.id === 'claude' ? 'CLI 默认模型' : '默认模型'}</span>
+      <select aria-label={client.id === 'claude' ? 'Claude Code CLI 默认模型' : 'Codex 默认模型'} value={selectedDefault} disabled={!!busy || state.connections.busy}
         onChange={(e) => act("client-injection-default", () => api.call("client-injection", client.id, {
           excludedProviders: [...excluded], defaultModel: e.target.value || null,
         }))}>
         <option value="">自动选择首个已纳入模型</option>
         {officialModels.length > 0 && <optgroup label="OpenAI 官方订阅">{officialModels.map(m => <option key={m.ref} value={m.ref}>{m.name || m.model}</option>)}</optgroup>}
-        {codexModels.length > 0 && <optgroup label="已注入模型">{codexModels.map((m) => <option key={m.ref} value={m.ref}>{m.providerName} / {m.name || m.model}</option>)}</optgroup>}
+        {defaultModels.length > 0 && <optgroup label="已注入模型">{defaultModels.map((m) => <option key={m.ref} value={m.ref}>{m.providerName} / {m.name || m.model}</option>)}</optgroup>}
       </select>
     </label>}
+    {client.id === 'claude' && defaultModels.length > 0 && <>
+      <label className="client-default-model">
+        <span>Auto Mode 审查模型</span>
+        <select aria-label="Claude Code Auto Mode 审查模型" value={selectedReview} disabled={!!busy || state.connections.busy}
+          onChange={e => act('client-injection-review', () => api.call('client-injection', 'claude', { autoModeModel: e.target.value || null }))}>
+          <option value="">跟随当前终端模型</option>
+          {defaultModels.map(m => <option key={m.ref} value={m.ref}>{m.providerName} / {m.name || m.model}</option>)}
+        </select>
+      </label>
+      <p className="codex-tool-mode-hint">同步后用于新开的 ASS 模型终端；开启无账号启动后，直接运行 claude 也生效。审查在 CLI 内发起；兼容旧版时也映射 sonnet 别名，不改变权限模式。</p>
+      {!connection?.accountless && <button className="button" disabled={!!busy || state.connections.busy || !connection?.applied || !client.launcher?.ready}
+        onClick={() => act('claude-default-launch', () => api.call('client-model-launch', 'claude', selectedDefault || defaultModels[0].ref), '已打开 Claude Code 默认模型终端')}>
+        <Terminal size={15} />启动默认模型终端</button>}
+    </>}
     {client.id === 'codex' && !connection?.accountless && <p className="codex-tool-mode-hint">
       普通接入保留原生归档与提示词预测通道。更新接入并重新加载 Codex 后生效；预测仍需官方功能开放与模型支持。
     </p>}

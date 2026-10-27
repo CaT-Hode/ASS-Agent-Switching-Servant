@@ -104,6 +104,7 @@ const json = (file) => {
           (config.predictionCompatibility !== undefined && (harness !== 'codex' || typeof config.predictionCompatibility !== 'boolean')) ||
           (config.codexToolModes !== undefined && (harness !== 'codex' || !validToolModes(config.codexToolModes))) ||
           (config.modelProtocols !== undefined && !validModelProtocols(config.modelProtocols)) ||
+          (config.autoModeModel !== undefined && config.autoModeModel !== null && (harness !== 'claude' || !validToolRef(config.autoModeModel))) ||
           (config.defaultModel !== undefined && config.defaultModel !== null && typeof config.defaultModel !== "string")) throw Error();
     if (value.profiles !== undefined && (!Array.isArray(value.profiles) || value.profiles.some((p) => !p || !/^[a-f0-9]{24}$/.test(p.id) || !SPECS.some((s) => s.id === p.harness)))) throw Error();
     return value;
@@ -919,15 +920,21 @@ class HarnessManager {
   }
   setInjection(harness, changes) {
     if (this.spec(harness).injectionUnsupported) throw Error("此客户端尚未支持供应商接入");
-    if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).some((k) => !["excludedProviders", "defaultModel", 'predictionCompatibility', 'codexToolMode', 'modelProtocol'].includes(k)))
+    if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).some((k) => !["excludedProviders", "defaultModel", 'autoModeModel', 'predictionCompatibility', 'codexToolMode', 'modelProtocol'].includes(k)))
       throw Error("接入范围请按供应商设置");
     if (Object.hasOwn(changes, 'predictionCompatibility') && (harness !== 'codex' || typeof changes.predictionCompatibility !== 'boolean'))
       throw Error('提示词预测兼容设置无效');
-    if (Object.hasOwn(changes, "defaultModel") && harness !== "codex")
+    if (Object.hasOwn(changes, "defaultModel") && !['codex', 'claude'].includes(harness))
       throw Error("接入范围请按供应商设置");
     if (Object.hasOwn(changes, "defaultModel") && changes.defaultModel !== null &&
         (typeof changes.defaultModel !== "string" || changes.defaultModel.length > 500))
       throw Error("默认模型引用无效");
+    for (const key of ['defaultModel', 'autoModeModel']) {
+      if (!Object.hasOwn(changes, key) || (key === 'defaultModel' && harness !== 'claude')) continue;
+      if (harness !== 'claude' || (changes[key] !== null && (!validToolRef(changes[key]) ||
+          !this.getState().providers.some(p => p.models.some(m => modelRef(p.id, m.model) === changes[key])))))
+        throw Error(key === 'autoModeModel' ? 'Auto Mode 审查模型引用无效' : '默认模型引用无效');
+    }
     const { codexToolMode, modelProtocol, ...settings } = changes;
     const next = { ...this.state.injections[harness], ...settings };
     if (Object.hasOwn(changes, 'modelProtocol')) {
@@ -1004,7 +1011,7 @@ class HarnessManager {
     const previousRef = modelRef(providerId, previousName);
     const nextRef = nextName ? modelRef(providerId, nextName) : null;
     for (const settings of Object.values(this.state.injections)) {
-      if (settings.defaultModel === previousRef) settings.defaultModel = nextRef;
+      for (const key of ['defaultModel', 'autoModeModel']) if (settings[key] === previousRef) settings[key] = nextRef;
       if (settings.excluded) settings.excluded = settings.excluded.flatMap((ref) => ref !== previousRef ? [ref] : nextRef ? [nextRef] : []);
       for (const key of ['codexToolModes', 'modelProtocols']) {
         if (!settings[key] || !Object.hasOwn(settings[key], previousRef)) continue;
@@ -1339,10 +1346,9 @@ class HarnessManager {
     if (harness === "claude") {
       const name = p.id + "::" + m.model;
       config.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${this.options.port || 25819}/clients/claude/models`;
-      for (const key of ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"])
-        config.env[key] = name;
-      config.args = ["--model", name];
-      configureClaudeModels(config, applied?.providers || this.getState().providers, name, dir);
+      config.args = [];
+      const cliModel = configureClaudeModels(config, applied?.providers || this.getState().providers, name, dir, applied?.autoModeModel);
+      config.args.unshift('--model', cliModel);
     }
     return { ...config, harness, dir, env: { ...isolatedEnv(harness, dir), ...config.env },
       routed: true, accountKind: "model", hint: "使用模型所属供应商的凭据；官方订阅账户不变。" };

@@ -128,6 +128,59 @@ test("Claude terminal overlay persists, preserves OAuth and unrelated settings, 
   assert.equal(fs.readFileSync(oauth, "utf8"), credentials);
 });
 
+test("Claude CLI defaults and auto review sync independently, use applied choices and restore native values", async t => {
+  const f = fixture(t), settingsFile = path.join(f.manager.nativeHome, '.claude/settings.json');
+  const original = { model: 'official-original', permissions: { deny: ['Bash(rm *)'] }, env: {
+    CLAUDE_CODE_AUTO_MODE_MODEL: 'original-review', CLAUDE_CODE_AUTO_MODE_SERVER: '1', KEEP: 'keep' } };
+  atomic(settingsFile, JSON.stringify(original));
+  const main = modelRef('relay', 'test-chat'), review = modelRef('relay', 'test-claude');
+  f.manager.setInjection('claude', { defaultModel: main, autoModeModel: review });
+  await f.apply('claude');
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile)), original, 'ordinary injection leaves native login configuration alone');
+  const normal = f.manager.modelPlan('claude', main, 'synthetic-local');
+  assert.equal(normal.env.ANTHROPIC_MODEL, 'relay::test-chat');
+  assert.equal(normal.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude');
+  assert.equal(normal.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'relay::test-claude');
+  assert.equal(normal.env.CLAUDE_CODE_AUTO_MODE_SERVER, '0');
+  assert.ok(!normal.args.some(a => /skip-permissions|permission-mode/.test(a)));
+  await f.apply('claude', true);
+  let settings = JSON.parse(fs.readFileSync(settingsFile));
+  assert.equal(settings.model, 'relay::test-chat');
+  assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude');
+  assert.deepEqual(settings.permissions, original.permissions);
+  const before = fs.readFileSync(settingsFile);
+  f.manager.setInjection('claude', { defaultModel: review, autoModeModel: main });
+  assert.equal(f.proxy.status('claude', true).pending, true);
+  assert.deepEqual(fs.readFileSync(settingsFile), before, 'drafts do not change the native terminal');
+  f.proxy.repair('claude');
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude', 'repair keeps the applied reviewer');
+  await f.apply('claude');
+  settings = JSON.parse(fs.readFileSync(settingsFile));
+  assert.equal(settings.model, 'relay::test-claude');
+  assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-chat');
+  const plan = f.manager.accountlessPlan('claude', 'ignored');
+  assert.deepEqual(plan.args.slice(0, 2), ['--model', 'relay::test-claude']);
+  assert.equal(plan.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-chat');
+  f.manager.setInjection('claude', { autoModeModel: null }); await f.apply('claude');
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude');
+  await f.apply('claude', false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile)), original);
+});
+
+test('Claude model terminals pass 1M CLI selections without changing the stored provider ID or ordinary reviewer', async t => {
+  const f = fixture(t), provider = f.store.state.providers[0];
+  f.store.updateProvider({ ...provider, models: provider.models.map(m => ({ ...m, contextWindow: m.model === 'test-chat' ? 1000000 : 200000 })) });
+  f.manager.setInjection('claude', { defaultModel: modelRef('relay', 'test-chat'), autoModeModel: modelRef('relay', 'test-claude') });
+  await f.apply('claude');
+  const plan = f.manager.modelPlan('claude', modelRef('relay', 'test-chat'), 'synthetic-local');
+  assert.deepEqual(plan.args.slice(0, 2), ['--model', 'relay::test-chat[1m]']);
+  assert.equal(plan.env.ANTHROPIC_MODEL, 'relay::test-chat[1m]');
+  assert.equal(plan.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude');
+  assert.equal(JSON.parse(plan.files.find(([name]) => name === 'settings.json')[1]).model, 'relay::test-chat[1m]');
+  assert.equal(f.proxy.clients.claude.defaultModel.model, 'relay::test-chat');
+  assert.ok(f.store.state.providers[0].models.every(m => !m.model.includes('[1m]')));
+});
+
 test("Claude native drift is visible, blocks disable/quit, and repair uses applied models rather than drafts", async t => {
   const f = fixture(t); await f.apply("claude"); await f.apply("claude", true);
   const settings = f.proxy.clients.claude.nativeClaude.targets.settings;

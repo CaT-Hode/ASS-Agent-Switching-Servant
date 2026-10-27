@@ -11,7 +11,7 @@ const data = fs.mkdtempSync(path.join(output, "packaged-"));
 const codex = path.join(data, "codex");
 fs.mkdirSync(codex);
 fs.writeFileSync(path.join(data, 'requests.jsonl'), [
-  { model: 'ASS_fixture::vendor/model', source: 'Monitor fixture', client: 'codex', protocol: 'openai-responses', requestId: 'packaged-monitor',
+  { model: 'ASS_fixture::vendor/model[1m]', source: 'Monitor fixture', client: 'codex', protocol: 'openai-responses', requestId: 'packaged-monitor',
     time: new Date().toISOString(), ok: true, taskOk: true, httpStatus: 200, status: 200, ms: 3000,
     ttftMs: 1000, generationMs: 2000, tps: 25, visibleTokens: 40, visibleMs: 2000,
     usage: { inputTokens: 1000, outputTokens: 50, reasoningTokens: 10, cacheReadTokens: 750, cacheWriteTokens: 0 } },
@@ -94,16 +94,27 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
       }
     }
     await page.evaluate(() => window.ass.call('ui-preferences', { theme: 'light' }));
+    await page.evaluate(() => {
+      window.navigationMotions = [];
+      const nativeTransition = document.startViewTransition.bind(document);
+      document.startViewTransition = update => {
+        window.navigationMotions.push(document.documentElement.dataset.uiTransition);
+        return nativeTransition(update);
+      };
+    });
     for (const title of ['供应商与模型', '客户端与账户', '对话管理', '连接诊断', '路由总览', '请求监控']) {
       await page.getByRole('button', { name: title, exact: true }).click();
       await page.waitForFunction(title => document.querySelector('h1.page-heading-accessible')?.textContent === title, title);
       await page.waitForFunction(() => !document.documentElement.hasAttribute('data-ui-transition'));
     }
+    assert.deepEqual(await page.evaluate(() => window.navigationMotions), ['down', 'down', 'down', 'down', 'up', 'down']);
     await page.evaluate(() => {
+      window.navigationMotions = [];
       const nav = document.querySelector('.sidebar nav');
-      for (const title of ['路由总览', '供应商与模型', '请求监控']) [...nav.querySelectorAll('button')].find(button => button.textContent === title).click();
+      for (const title of ['路由总览', '连接诊断', '客户端与账户', '请求监控']) [...nav.querySelectorAll('button')].find(button => button.textContent === title).click();
     });
     await page.waitForFunction(() => document.querySelector('h1.page-heading-accessible')?.textContent === '请求监控' && !document.documentElement.hasAttribute('data-ui-transition'));
+    assert.deepEqual(await page.evaluate(() => window.navigationMotions), ['up', 'down', 'down', 'fade'], 'rapid clicks compare against the displayed page, not an uncommitted destination');
     await page.getByRole("button", { name: "关于 ASS", exact: true }).click();
     await page.locator(".ass-wordmark").waitFor();
     assert.equal(await page.locator(".ass-brand-hero p").textContent(), "Agent-Switching-Servant");
@@ -173,6 +184,25 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     await page.getByRole('button',{name:'pi',exact:true}).click();
     await page.locator('.client-provider summary').filter({hasText:'Protocol fixture'}).click();
     assert.equal(await protocol.inputValue(),'auto');
+    await page.evaluate(() => window.ass.call('save-provider', {
+      id:'package-fixture',name:'Protocol fixture',enabled:true,baseUrl:'https://fixture.invalid/v1',apiKey:'synthetic-package-key',
+      models:[{model:'gemini-fixture',displayName:'Gemini fixture',wireApi:'openai-responses'},
+        {model:'claude-review-fixture',displayName:'Review fixture',wireApi:'anthropic'}],
+    }));
+    await page.getByRole('button',{name:'Claude Code',exact:true}).click();
+    const cliDefault=page.getByRole('combobox',{name:'Claude Code CLI 默认模型',exact:true});
+    const reviewer=page.getByRole('combobox',{name:'Claude Code Auto Mode 审查模型',exact:true});
+    const mainRef='["package-fixture","gemini-fixture"]',reviewRef='["package-fixture","claude-review-fixture"]';
+    await cliDefault.selectOption(mainRef);
+    await page.waitForFunction(()=>!document.querySelector('.client-default-model select')?.disabled);
+    await reviewer.selectOption(reviewRef);
+    await page.waitForFunction(()=>!document.querySelector('.client-default-model select')?.disabled);
+    assert.equal(await cliDefault.inputValue(),mainRef);assert.equal(await reviewer.inputValue(),reviewRef);
+    const claudeInjection=JSON.parse(fs.readFileSync(path.join(data,'clients.json'),'utf8')).injections.claude;
+    assert.equal(claudeInjection.defaultModel,mainRef);assert.equal(claudeInjection.autoModeModel,reviewRef);
+    assert.equal(await page.getByRole('button',{name:'启动默认模型终端',exact:true}).isDisabled(),true,'unsynced routes cannot launch');
+    const shot=path.join(process.env.LOCALAPPDATA || root,'ASS-validation','claude-model-defaults.png');
+    fs.mkdirSync(path.dirname(shot),{recursive:true});await page.screenshot({path:shot});
     assert.deepEqual(errors, []);
     console.log(
       JSON.stringify({
@@ -185,6 +215,7 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
         codexLaunchVisible: true,
         codexDesktopDetected,
         injectionProtocolUI:true,
+        claudeModelDefaultsUI:true,
       }),
     );
   } finally {

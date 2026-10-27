@@ -5,7 +5,7 @@ let active = null, generation = 0;
 // Capture outgoing pixels instead of retaining obsolete React pages. Inputs
 // commit once, rapid navigation cancels old snapshots, background refreshes do
 // not call this helper, and theme reveal keeps ownership of its own transition.
-export function transitionUI(commit) {
+export function transitionUI(commit, { direction = 'fade' } = {}) {
   const root = document.documentElement;
   const ticket = ++generation;
   active?.skipTransition(); active = null; root.removeAttribute('data-ui-transition');
@@ -15,7 +15,7 @@ export function transitionUI(commit) {
     document.querySelector('.app-shell')?.dataset.input === 'keyboard' || document.querySelector('dialog[open]')) {
     apply(); return;
   }
-  root.setAttribute('data-ui-transition', 'true');
+  root.setAttribute('data-ui-transition', direction);
   let transition;
   try { transition = document.startViewTransition(apply); active = transition; }
   catch { root.removeAttribute('data-ui-transition'); apply(); return; }

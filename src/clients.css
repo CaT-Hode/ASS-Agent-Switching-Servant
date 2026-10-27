@@ -813,10 +813,10 @@
 .claude-desktop-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .claude-desktop-setup-body small { display: block; margin-top: 10px; color: var(--muted); font-size: 11px; }
 .client-injection > header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-.codex-default-model { display: grid; grid-template-columns: minmax(72px, auto) minmax(0, 1fr); align-items: center; gap: 12px; margin: 0 0 14px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
-.codex-default-model span { font-size: 12px; font-weight: 600; color: var(--muted); }
-.codex-default-model select { min-width: 0; width: 100%; }
-@media (max-width: 620px) { .codex-default-model { grid-template-columns: 1fr; gap: 7px; } }
+.client-default-model { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: center; gap: 12px; margin: 0 0 14px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.client-default-model span { font-size: 12px; font-weight: 600; color: var(--muted); }
+.client-default-model select { min-width: 0; width: 100%; }
+@media (max-width: 620px) { .client-default-model { grid-template-columns: 1fr; gap: 7px; } }
 .client-injection h3 { display: flex; align-items: baseline; gap: 13px; margin: 0; font-size: 16px; }
 .injection-count { font-size: 13px; font-weight: 400; color: light-dark(#7e7e7e, #b4b4b4); font-variant-numeric: tabular-nums; }
 .client-provider-list { border: 1px solid var(--border); border-radius: 11px; padding: 0 12px; max-height: 360px; overflow-y: auto; scrollbar-width: thin; }

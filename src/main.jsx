@@ -45,6 +45,15 @@ import "./motion.css";
 const api = window.ass;
 const Conversations = lazy(() => import("./conversations.jsx").then((m) => ({ default: m.Conversations })));
 const RequestMonitor = lazy(() => import('./request-monitor.jsx').then(module => ({ default: module.RequestMonitor })));
+const NAVIGATION = [
+  ['overview', LayoutGrid, '路由总览'], ['monitor', Zap, '请求监控'], ['providers', Boxes, '供应商与模型'],
+  ['clients', Monitor, '客户端与账户'], ['conversations', MessagesSquare, '对话管理'],
+  ['diagnostics', Activity, '连接诊断'], ['updates', Download, '关于 ASS'],
+];
+const pageMotion = (from, to) => {
+  const delta = NAVIGATION.findIndex(([id]) => id === to) - NAVIGATION.findIndex(([id]) => id === from);
+  return delta > 0 ? 'down' : delta < 0 ? 'up' : 'fade';
+};
 const date = (value) =>
   new Date(value).toLocaleTimeString("zh-CN", { hour12: false });
 function Button({
@@ -297,6 +306,7 @@ function App() {
   const [providerDetail, setProviderDetail] = useState(null);
   const [conversationTarget, setConversationTarget] = useState(null);
   const viewTarget = useRef('overview');
+  const shownView = useRef('overview');
   function remember(input) {
     api
       .call("ui-preferences", input)
@@ -307,7 +317,8 @@ function App() {
   function setView(next) {
     if (viewTarget.current !== next || providerDetail) {
       viewTarget.current = next;
-      transitionUI(() => { setProviderDetail(null); setViewLocal(next); });
+      const direction = next === shownView.current && providerDetail ? 'back' : pageMotion(shownView.current, next);
+      transitionUI(() => { setProviderDetail(null); setViewLocal(next); shownView.current = next; }, { direction });
     }
     remember({ view: next });
   }
@@ -321,7 +332,8 @@ function App() {
   function openProvider(id) {
     setProviderTarget(id);
     viewTarget.current = 'providers';
-    transitionUI(() => { setViewLocal('providers'); setProviderDetail(id); });
+    const direction = shownView.current === 'providers' ? 'forward' : pageMotion(shownView.current, 'providers');
+    transitionUI(() => { setViewLocal('providers'); setProviderDetail(id); shownView.current = 'providers'; }, { direction });
     remember({ view: 'providers' });
   }
   useEffect(
@@ -342,6 +354,7 @@ function App() {
       .then((next) => {
         setState((current) => latestSnapshot(current, next));
         setViewLocal("overview");
+        shownView.current = 'overview';
         applyTheme(next.preferences.theme);
         setClientTargetLocal(next.preferences.client);
       })
@@ -406,15 +419,7 @@ function App() {
     },
     ...state.providers,
   ];
-  const title = {
-    overview: "路由总览",
-    monitor: '请求监控',
-    providers: "供应商与模型",
-    clients: "客户端与账户",
-    conversations: "对话管理",
-    diagnostics: "连接诊断",
-    updates: "关于 ASS",
-  }[view];
+  const title = NAVIGATION.find(([id]) => id === view)?.[2];
   const brand = <InteractiveBrand>
     <AssLogo interactive />
     <div><div className="brand-title"><strong className="brand-wordmark" aria-label="ASS"><span className="brand-letter" data-letter="A">A</span><span className="brand-letter" data-letter="S">S</span><span className="brand-letter" data-letter="S">S</span></strong>
@@ -444,15 +449,7 @@ function App() {
         {!api.windowChrome && brand}
         <div className="nav-label">工作空间</div>
         <nav aria-label="主导航">
-          {[
-            ["overview", LayoutGrid, "路由总览"],
-            ['monitor', Zap, '请求监控'],
-            ["providers", Boxes, "供应商与模型"],
-            ["clients", Monitor, "客户端与账户"],
-            ["conversations", MessagesSquare, "对话管理"],
-            ["diagnostics", Activity, "连接诊断"],
-            ["updates", Download, "关于 ASS"],
-          ].map(([id, Icon, label]) => (
+          {NAVIGATION.map(([id, Icon, label]) => (
             <button
               key={id}
               className={view === id ? "active" : ""}
@@ -515,9 +512,9 @@ function App() {
             activeProvider={providerDetail}
             onOpenProvider={(id) => {
               setProviderTarget(id);
-              transitionUI(() => setProviderDetail(id));
+              transitionUI(() => setProviderDetail(id), { direction: 'forward' });
             }}
-            onBack={() => transitionUI(() => setProviderDetail(null))}
+            onBack={() => transitionUI(() => setProviderDetail(null), { direction: 'back' })}
           />
         ) : view === "clients" ? (
           <Clients

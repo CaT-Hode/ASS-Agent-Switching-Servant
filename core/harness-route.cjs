@@ -164,7 +164,7 @@ async function forwardHarness(router, req, res) {
       );
     }
     if (route.adapted) {
-      const events = messagesEvents(response.body, protocol, m.model);
+      const events = messagesEvents(response.body, protocol, m.model, body.stop_sequences);
       if (route.stream) {
         res.writeHead(response.status, { "content-type": "text/event-stream", "cache-control": "no-cache" });
         res.flushHeaders();

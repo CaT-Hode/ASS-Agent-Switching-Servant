@@ -19,6 +19,7 @@ import {
   MessagesSquare,
 } from "./icons.jsx";
 import { Modal } from "./editors.jsx";
+import { WslSyncControl } from './wsl-sync.jsx';
 import { transitionUI } from './surface-motion.jsx';
 import {
   AddAccount,
@@ -544,6 +545,7 @@ export function Clients({
             </div>
             <details className="client-settings" key={"paths:" + client.id}>
               <summary><Settings2 size={16} />客户端设置 <ChevronRight size={15} /></summary>
+              <WslSyncControl client={client} state={state} act={act} busy={busy} />
               <div className="client-location-actions" aria-label="客户端位置">
                 <button className="button" disabled={!!busy} onClick={detect}>
                   <Search size={14} />

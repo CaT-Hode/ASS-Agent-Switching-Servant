@@ -1,7 +1,8 @@
 const fs = require('node:fs'), path = require('node:path');
 const { requestTps, visibleOutputTokens } = require('./request-metrics.cjs');
-const MAX_BYTES = 2 * 1024 * 1024, MAX_RECORDS = 5000;
-// Reuse the existing bounded request log. The monitor reads only numeric
+const { atomic } = require('./config.cjs');
+const MAX_RECORDS = 200;
+// The monitor reads only numeric
 // measurements and routing labels; it never exposes raw upstream payloads.
 function publicRecord(record) {
   if (!record || typeof record.model !== 'string' || !record.model) return null;
@@ -26,23 +27,36 @@ function publicRecord(record) {
 class RequestHistory {
   constructor(dataDir) {
     this.file = path.join(dataDir, 'requests.jsonl'); this.rows = []; this.revision = 0; this.error = '';
+    let compact = false;
     for (const file of [this.file + '.previous', this.file]) {
       try {
-        for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+        const text = fs.readFileSync(file, 'utf8');
+        if (file !== this.file) compact = true;
+        for (const line of text.split(/\r?\n/)) {
           if (!line) continue;
-          try { const row = publicRecord(JSON.parse(line)); if (row) this.rows.push(row); }
+          try { const row = publicRecord(JSON.parse(line)); if (row) {
+            this.rows.push(row);
+            if (this.rows.length > MAX_RECORDS) { this.rows.shift();compact = true; }
+          } }
           catch { this.error = '部分旧请求记录无法读取，已保留其余记录。'; }
         }
       } catch (error) { if (error.code !== 'ENOENT') this.error = '请求历史暂不可读，仍会显示本次运行的新请求。'; }
     }
-    this.rows = this.rows.slice(-MAX_RECORDS);
+    if (compact) {
+      try { this.persist(); }
+      catch { this.error = '旧请求明细清理失败，当前仅显示最近 200 条。'; }
+    }
+  }
+  persist() {
+    atomic(this.file, this.rows.map(row => JSON.stringify(row) + '\n').join(''));
+    fs.rmSync(this.file + '.previous', { force: true });
   }
   append(record) {
     const row = publicRecord(record);
-    if (row) { this.rows.push(row); if (this.rows.length > MAX_RECORDS) this.rows.shift(); this.revision++; }
+    if (!row) return;
+    this.rows.push(row); if (this.rows.length > MAX_RECORDS) this.rows.shift(); this.revision++;
     try {
-      if (fs.existsSync(this.file) && fs.statSync(this.file).size > MAX_BYTES) fs.renameSync(this.file, this.file + '.previous');
-      fs.appendFileSync(this.file, JSON.stringify(record) + '\n');
+      this.persist();
     } catch { this.error = '请求历史写入失败，当前运行的监控仍可用，重启后可能缺少记录。'; }
   }
   snapshot() { return { rows: this.rows, revision: this.revision, error: this.error, limit: MAX_RECORDS }; }

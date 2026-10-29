@@ -51,6 +51,27 @@ test("Chat is checked independently when either Responses or Messages succeeds",
     assert.equal(f.protocols.select(f.p, f.m, "codex"), working);
   }
 });
+
+test('CC keeps verified native Messages after transient failures, including older cross-protocol overrides', async t => {
+  const f = fixture(t);await f.protocols.ensure(f.p, f.m);
+  const manager = new HarnessManager(f.dataDir, () => f.store.state, [], f.store.codexDir,
+    { home: path.join(f.dataDir, 'home'), env: {}, protocols: f.protocols });
+  const proxy = new ProxyConfig(f.dataDir, crypt, manager, f.store, new ConfigManager(f.store.codexDir, f.dataDir));
+  const ref = require('../core/client-policy.cjs').modelRef(f.p.id, f.m.model);
+  manager.setInjection('claude', { modelProtocol: { ref, protocol: 'openai-responses' } });
+  proxy.sync('claude');
+  for (const httpStatus of [400, 429, 502]) {
+    f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { anthropic: { status: 'unknown', httpStatus } } });
+    assert.equal(f.protocols.select(f.p, f.m, 'claude'), 'anthropic');
+    assert.equal(proxy.routingState('claude').providers[0].models[0].wireApi, 'anthropic');
+    const row = manager.injection('claude').models[0];
+    assert.equal(row.protocol, 'anthropic');assert.equal(row.protocolOverride, 'anthropic');assert.equal(row.nativeMessages, true);
+    assert.equal(f.protocols.select(f.p, f.m, 'codex'), 'openai-responses');
+  }
+  f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { anthropic: { status: 'rejected', unsupported: true } } });
+  assert.equal(proxy.routingState('claude').providers[0].models[0].wireApi, 'openai-responses');
+  assert.equal(manager.injection('claude').models[0].nativeMessages, undefined);
+});
 test("manual recheck fills legacy Chat evidence and persists explicit endpoint rejection", async t => {
   const f = fixture(t, url => url.endsWith("/completions") ? Response.json({ error: { message: 'This endpoint is not supported' } }, { status: 404 }) : success(url.endsWith("/messages") ? "anthropic" : "openai-responses"));
   f.protocols.record(f.p, f.m, { time: new Date().toISOString(), protocols: { "openai-responses": { status: "passed" }, anthropic: { status: "passed" } } });
@@ -203,7 +224,8 @@ test('manual injection protocol wins over detection only after sync, survives re
   assert.equal(routeFor({model},proxy.routingState('codex')).url,'https://example.test/v1/messages');
   f.protocols.record(f.p,f.m,{time:new Date().toISOString(),protocols:{'openai-responses':{status:'passed',httpStatus:200}}});
   assert.equal(proxy.routingState('codex').providers[0].models[0].wireApi,'anthropic','new automatic evidence cannot override a manual choice');
-  assert.equal(manager.injection('claude').models[0].protocolOverride,'auto');
+  assert.equal(manager.state.injections.claude.modelProtocols, undefined, 'Codex edits do not create a Claude override');
+  assert.equal(manager.injection('claude').models[0].protocol, 'anthropic', 'Claude independently uses its verified native protocol');
   manager.setInjection('codex',{modelProtocol:{ref,protocol:'openai-chat'}});proxy.sync('codex');
   assert.equal(routeFor({model},proxy.routingState('codex')).url,'https://example.test/v1/chat/completions');
   const reloadedManager=new HarnessManager(f.dataDir,()=>f.store.state,[],f.store.codexDir,{home:path.join(f.dataDir,'home'),env:{},protocols:f.protocols});

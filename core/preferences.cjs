@@ -9,6 +9,7 @@ const defaults = {
   officialService: "openai",
   providerOrder: [],
   quotaAccounts: {},
+  requestWidget: { enabled: false, width: 380, radius: 36, rows: 5, materialVersion: 1 },
   conversations: { harness: "codex", pinned: false, scope: "projects", project: "", columns: { projects: 235, threads: 205 } },
   usage: { client: "all", range: "month", tab: "activity", group: "client" },
 };
@@ -17,14 +18,23 @@ class Preferences {
     this.file = path.join(dataDir, "preferences.json");
     this.state = { ...defaults };
     try {
-      this.state = this.validate(
-        JSON.parse(fs.readFileSync(this.file, "utf8")),
-      );
+      const saved = JSON.parse(fs.readFileSync(this.file, "utf8"));
+      const upgrade = saved.requestWidget?.radius === 24 && !saved.requestWidget.materialVersion;
+      if (upgrade) saved.requestWidget.radius = 36;
+      this.state = this.validate(saved);
+      if (upgrade) atomic(this.file, JSON.stringify(this.state, null, 2));
     } catch {}
   }
   validate(input) {
     const next = { ...this.state };
     if (["system", "light", "dark"].includes(input.theme)) next.theme = input.theme;
+    if (input.requestWidget && typeof input.requestWidget === 'object') {
+      next.requestWidget = { ...defaults.requestWidget, ...next.requestWidget };
+      const value = input.requestWidget;
+      if (typeof value.enabled === 'boolean') next.requestWidget.enabled = value.enabled;
+      for (const [key, min, max] of [['width', 320, 640], ['radius', 8, 48], ['rows', 1, 8], ['x', -100000, 100000], ['y', -100000, 100000]])
+        if (Number.isInteger(value[key]) && value[key] >= min && value[key] <= max) next.requestWidget[key] = value[key];
+    }
     if (input.conversations && typeof input.conversations === "object") {
       next.conversations = { ...defaults.conversations, ...next.conversations };
       if (["codex", "claude", "dsh", "opencode", "pi"].includes(input.conversations.harness)) next.conversations.harness = input.conversations.harness;

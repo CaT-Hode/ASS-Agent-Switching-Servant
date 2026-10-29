@@ -71,6 +71,11 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     await page.getByText('2 个请求', { exact: true }).waitFor();
     const monitoring = await page.evaluate(() => window.ass.call('request-monitor'));
     assert.equal(monitoring.rows.length, 2); assert.equal(monitoring.rows[0].usage.cacheReadTokens, 750);
+    assert.equal(monitoring.limit, 200);
+    await page.getByRole('button', { name: '查看 model 请求详情', exact: true }).first().click();
+    await page.getByRole('region', { name: '请求详情', exact: true }).waitFor();
+    await page.getByRole('button', { name: '关闭请求详情', exact: true }).click();
+    await page.getByRole('region', { name: '请求详情', exact: true }).waitFor({ state: 'hidden' });
     assert.equal(monitoring.rows[0].tps, (50 - 10) * 1000 / 2000, 'primary TPS uses visible count and its own receive interval');
     assert.equal(monitoring.rows[0].endToEndTps, 50 * 1000 / 3000);
     assert.equal(monitoring.rows[1].tps, null, 'legacy records cannot reuse total timing as visible timing');
@@ -78,6 +83,37 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     assert.deepEqual(monitoring.active, []);
     const unchangedMonitoring = await page.evaluate(revision => window.ass.call('request-monitor', revision), monitoring.revision);
     assert.equal(unchangedMonitoring.rows, undefined, 'per-second polls do not resend unchanged historical rows');
+    const widgetCreated = app.waitForEvent('window');
+    await page.getByRole('button', { name: '悬浮窗', exact: true }).click();
+    const widget = await widgetCreated;
+    await widget.waitForSelector('.widget-heatcell');
+    assert.equal(await widget.locator('.widget-close').count(), 0);
+    assert.equal(await widget.locator('.widget-heatcell').count(), 24);
+    assert.equal(await widget.locator('.widget-heatcell').evaluateAll(cells => cells.every(cell => cell.textContent === '')), true);
+    const heatPositions = await widget.locator('.widget-heatcell').evaluateAll(cells => cells.slice(0, 4).map(cell => {
+      const { x, y } = cell.getBoundingClientRect();return { x, y };
+    }));
+    assert.equal(heatPositions[0].x, heatPositions[1].x, 'hours 0 and 1 occupy the same column');
+    assert.ok(heatPositions[1].y > heatPositions[0].y, 'hour 1 follows hour 0 vertically');
+    assert.equal(heatPositions[0].y, heatPositions[2].y, 'hour 2 begins the next column at the top');
+    assert.ok(heatPositions[2].x > heatPositions[0].x);
+    assert.equal(heatPositions[2].x, heatPositions[3].x);
+    assert.equal(heatPositions[1].y, heatPositions[3].y);
+    const corners = await widget.locator('.widget-panel').evaluate(panel => {
+      const cell = panel.querySelector('.widget-heatcell'), last = panel.querySelector('.widget-heatcell:last-child');
+      const outer = panel.getBoundingClientRect(), first = cell.getBoundingClientRect(), end = last.getBoundingClientRect();
+      return { outer: parseFloat(getComputedStyle(panel).borderTopLeftRadius), inner: parseFloat(getComputedStyle(cell).borderTopLeftRadius),
+        left: first.left - outer.left, bottom: outer.bottom - end.bottom };
+    });
+    assert.ok(Math.abs(corners.left + corners.inner - corners.outer) < 1, 'inner and outer corner centers align horizontally');
+    assert.ok(Math.abs(corners.bottom + corners.inner - corners.outer) < 1, 'bottom corners use the same inset geometry: ' + JSON.stringify(corners));
+    await widget.waitForFunction(() => document.querySelector('.widget-panel').dataset.glass === 'true', undefined, { timeout: 10000 });
+    assert.equal(await widget.evaluate(() => typeof window.ass), 'undefined', 'widget cannot access the full application bridge');
+    await widget.locator('.widget-heatcell').first().hover();
+    await widget.getByRole('tooltip').waitFor();
+    assert.equal(await widget.getByRole('tooltip').evaluate(node => node.getBoundingClientRect().left >= 0 && node.getBoundingClientRect().right <= innerWidth), true);
+    await widget.evaluate(() => window.requestWidget.hide());
+    await page.waitForFunction(() => document.querySelector('.monitor-live button[aria-pressed]')?.getAttribute('aria-pressed') === 'false');
     await page.getByRole('button', { name: '模型汇总', exact: true }).click();
     await page.locator('.monitor-summary-table').waitFor();
     assert.equal(await page.locator('.monitor-summary-table tbody > tr').count(), 1);
@@ -201,6 +237,10 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     const claudeInjection=JSON.parse(fs.readFileSync(path.join(data,'clients.json'),'utf8')).injections.claude;
     assert.equal(claudeInjection.defaultModel,mainRef);assert.equal(claudeInjection.autoModeModel,reviewRef);
     assert.equal(await page.getByRole('button',{name:'启动默认模型终端',exact:true}).isDisabled(),true,'unsynced routes cannot launch');
+    await page.locator('.client-settings > summary').click();
+    assert.equal(await page.getByRole('switch',{name:'Claude Code WSL 自动同步',exact:true}).isChecked(),false);
+    assert.equal(await page.locator('.wsl-sync').getByRole('button',{name:'立即同步',exact:true}).isDisabled(),true);
+    await page.locator('.client-settings > summary').click();
     const shot=path.join(process.env.LOCALAPPDATA || root,'ASS-validation','claude-model-defaults.png');
     fs.mkdirSync(path.dirname(shot),{recursive:true});await page.screenshot({path:shot});
     assert.deepEqual(errors, []);
@@ -216,6 +256,7 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
         codexDesktopDetected,
         injectionProtocolUI:true,
         claudeModelDefaultsUI:true,
+        requestWidget:true,
       }),
     );
   } finally {

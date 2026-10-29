@@ -10,6 +10,8 @@ const APP_NAME = "ASS";
 const VERSION_RE = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 const ZIP_RE = /^ASS-v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win32-x64\.zip$/i;
 const SHA_RE = /^ASS-v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-SHA256\.txt$/i;
+const SETUP_RE = /^ASS-v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win32-x64-setup\.exe$/i;
+const SETUP_SHA_RE = /^ASS-v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-setup-SHA256\.txt$/i;
 
 function normalize(p) {
   return path.resolve(String(p)).replace(/[\\/]+$/, "").toLowerCase();
@@ -256,6 +258,26 @@ function versionFromEntry(name) {
   const match = VERSION_RE.exec(name);
   return match ? match[1] : null;
 }
+// Called only after a new installer and checksum have been built successfully.
+// Runtime directories, release/current and the running processes are untouched.
+function pruneInstallerFiles(ctx) {
+  assertReleaseRoot(ctx);
+  const installer = path.join(ctx.releaseRoot, `ASS-v${ctx.version}-win32-x64-setup.exe`);
+  assertPlainPath(ctx, installer);
+  const ready = lstatMaybe(installer, ctx.fsApi);
+  if (!ready?.isFile() || isLink(ready) || ready.size === 0) throw Error('New installer is missing; old installers were retained');
+  const removed = [];
+  for (const name of ctx.fsApi.readdirSync(ctx.releaseRoot)) {
+    const match = SETUP_RE.exec(name) || SETUP_SHA_RE.exec(name);
+    if (!match || match[1] === ctx.version) continue;
+    const file = path.join(ctx.releaseRoot, name), stat = ctx.fsApi.lstatSync(file);
+    if (!stat.isFile() || isLink(stat)) continue;
+    ctx.fsApi.unlinkSync(file);
+    removed.push(name);
+  }
+  return removed;
+}
+
 function artifactVersion(name) {
   let m = ZIP_RE.exec(name); if (m) return m[1];
   m = SHA_RE.exec(name); return m ? m[1] : null;
@@ -578,4 +600,5 @@ module.exports = {
   validatePackage, inspectCurrent, collectPruneCandidates, shortcutSpec, prePackageGuard,
   windowsBrandSpec,
   refreshShortcutIcon,
+  pruneInstallerFiles,
 };

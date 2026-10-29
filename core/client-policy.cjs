@@ -51,7 +51,8 @@ function injectionCatalog(harness, providers, settings = {}) {
   return providers.flatMap((p) => p.models.map((m) => {
     const ref = modelRef(p.id, m.model), issue = modelIssue(harness, p, m);
     return { ref, providerId: p.id, providerName: p.name, model: m.model,
-      name: m.displayName, protocol: m.wireApi, protocolOverride: settings.modelProtocols?.[ref] || 'auto', issue,
+      name: m.displayName, protocol: m.wireApi, protocolOverride: m.nativeMessages ? 'anthropic' : settings.modelProtocols?.[ref] || 'auto', issue,
+      ...(m.nativeMessages ? { nativeMessages: true } : {}),
       ...(harness === "claude" ? { adapter: require("./provider-transport.cjs").messagesTransport(p, m).adapted
         ? "Messages 转换接入" : "Messages 原生接入" } : {}),
       ...(harness === "codex" && m.wireApi !== "openai-responses" ? { adapter: "Responses 转换接入" } : {}),

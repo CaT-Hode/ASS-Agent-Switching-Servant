@@ -15,6 +15,8 @@ function contentText(content) {
   return content.map((c) => { if (c.type !== "text") throw unsupported(c.type); return c.text || ""; }).join("\n");
 }
 function messagesRequest(body, model, protocol) {
+  if (body.stop_sequences != null && (!Array.isArray(body.stop_sequences) || body.stop_sequences.some(s => typeof s !== 'string' || !s)))
+    throw Object.assign(Error('stop_sequences 必须是非空字符串数组'), { status: 400 });
   const input = [];
   const system = [contentText(body.system || "")];
   for (const message of body.messages || []) {
@@ -53,13 +55,12 @@ function messagesRequest(body, model, protocol) {
   if (choice?.disable_parallel_tool_use) request.parallel_tool_calls = false;
   const converted = protocol === "openai-responses" ? request : convertRequest(request, model, protocol);
   for (const field of ["temperature", "top_p"]) if (body[field] !== undefined) converted[field] = body[field];
-  if (body.stop_sequences?.length) {
-    if (protocol === "openai-responses") throw unsupported("stop_sequences");
+  if (body.stop_sequences?.length && protocol !== 'openai-responses') {
     converted.stop = body.stop_sequences;
   }
   return converted;
 }
-async function* messagesEvents(stream, protocol, model) {
+async function* translatedMessages(stream, protocol, model) {
   const id = "msg_" + randomUUID().replace(/-/g, "");
   const usage = { input_tokens: 0, output_tokens: 0 };
   yield { type: "message_start", message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { ...usage } } };
@@ -131,6 +132,44 @@ async function* messagesEvents(stream, protocol, model) {
     }
   }
   if (!ended) throw Error("上游流提前结束");
+}
+async function* messagesEvents(stream, protocol, model, stopSequences = []) {
+  const events = translatedMessages(stream, protocol, model);
+  if (protocol !== 'openai-responses' || !stopSequences?.length) { yield* events;return; }
+  const tail = Math.max(...stopSequences.map(s => s.length)) - 1;
+  const open = new Map(), pending = new Map();
+  let usage = { input_tokens: 0, output_tokens: 0 };
+  for await (const event of events) {
+    if (event.type === 'message_start') usage = { ...event.message.usage };
+    if (event.type === 'message_delta') Object.assign(usage, event.usage);
+    if (event.type === 'content_block_start') open.set(event.index, event.content_block.type);
+    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+      const text = (pending.get(event.index) || '') + event.delta.text;
+      let position = -1, stop;
+      for (const sequence of stopSequences) {
+        const found = text.indexOf(sequence);
+        if (found >= 0 && (position < 0 || found < position)) { position = found;stop = sequence; }
+      }
+      const end = position >= 0 ? position : Math.max(0, text.length - tail);
+      if (end) yield { ...event, delta: { type: 'text_delta', text: text.slice(0, end) } };
+      if (position >= 0) {
+        // A stop marker cannot make a partial function call executable.
+        if ([...open.values()].includes('tool_use')) throw Error('停止序列命中前工具调用未完整生成，未转发执行');
+        for (const index of open.keys()) yield { type: 'content_block_stop', index };
+        yield { type: 'message_delta', delta: { stop_reason: 'stop_sequence', stop_sequence: stop }, usage };
+        yield { type: 'message_stop' };
+        return; // Closing the source iterator also cancels the upstream reader.
+      }
+      pending.set(event.index, text.slice(end));
+      continue;
+    }
+    if (event.type === 'content_block_stop') {
+      const text = pending.get(event.index);
+      if (text) yield { type: 'content_block_delta', index: event.index, delta: { type: 'text_delta', text } };
+      pending.delete(event.index);open.delete(event.index);
+    }
+    yield event;
+  }
 }
 async function messagesJSON(events) {
   let message;

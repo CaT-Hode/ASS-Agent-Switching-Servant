@@ -272,6 +272,9 @@ test("managed OpenCode/Pi/DSH profiles enumerate individual provider cards and s
 test("UI preferences persist with an allowlist and do not accept secrets or invalid page IDs", (t) => {
   const dir = temp(t),
     preferences = new Preferences(dir);
+  // New UI features may add defaults. This test protects persisted changes and
+  // the allowlist, while requiring every unrelated initial preference to survive.
+  const initial = structuredClone(preferences.state);
   preferences.update({
     view: "clients",
     client: "dsh",
@@ -280,15 +283,11 @@ test("UI preferences persist with an allowlist and do not accept secrets or inva
     token: "secret",
   });
   assert.deepEqual(new Preferences(dir).state, {
+    ...initial,
     view: "clients",
-    theme: "system",
     client: "dsh",
     provider: "fixture",
     officialService: "deepseek",
-    providerOrder: [],
-    quotaAccounts: {},
-    conversations: { harness: "codex", pinned: false, scope: "projects", project: "", columns: { projects: 235, threads: 205 } },
-    usage: { client: "all", range: "month", tab: "activity", group: "client" },
   });
   preferences.update({ view: "<script>", client: "unknown" });
   assert.equal(new Preferences(dir).state.view, "clients");

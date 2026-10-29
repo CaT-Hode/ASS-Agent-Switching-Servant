@@ -131,6 +131,31 @@ test('history reloads current and rotated logs, tolerates one incomplete record 
   assert.equal(reloaded.rows[1].tps, 2); assert.equal(reloaded.rows[1].tpsEstimated, true);
 });
 
+test('request detail FIFO prunes disk and memory to 200 across upgrades and restarts without changing accumulated usage', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-monitor-fifo-'));t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rows = Array.from({ length: 250 }, (_, i) => ({ requestId: 'request-' + i, model: 'vendor/model', ok: true,
+    time: new Date(2026, 9, 29, 9, 0, 249 - i).toISOString(), usage: { inputTokens: 10, outputTokens: 2 } }));
+  const file = path.join(root, 'requests.jsonl'), usageFile = path.join(root, 'usage-history.enc.json');
+  const cumulative = JSON.stringify({ encrypted: 'independent-cumulative-usage-fixture' });
+  fs.writeFileSync(usageFile, cumulative);
+  fs.writeFileSync(file + '.previous', rows.slice(0, 150).map(JSON.stringify).join('\n') + '\n');
+  fs.writeFileSync(file, rows.slice(150).map(JSON.stringify).join('\n') + '\n');
+  const history = new RequestHistory(root);
+  assert.equal(history.snapshot().limit, 200);assert.equal(history.snapshot().rows.length, 200);
+  assert.equal(history.snapshot().rows[0].requestId, 'request-50', 'FIFO follows admission order, not a sort by wall-clock time');
+  assert.equal(fs.existsSync(file + '.previous'), false, 'old rotated records are physically removed');
+  assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 200);
+  history.append({ ...rows[249], requestId: 'request-250' });
+  const reloaded = new RequestHistory(root).snapshot();
+  assert.equal(reloaded.rows.length, 200);assert.equal(reloaded.rows[0].requestId, 'request-51');
+  assert.equal(reloaded.rows.at(-1).requestId, 'request-250');
+  assert.equal(fs.readFileSync(usageFile, 'utf8'), cumulative, 'request retention never edits the independent cumulative cache');
+  const { todayHeatmap } = await import('../core/request-widget-view.mjs');
+  const now = new Date(2026, 9, 29, 12).getTime();
+  const usage = { updatedAt: new Date(now).toISOString(), rows: [{ day: '2026-10-29', hour: 9, input: 2500, output: 500 }] };
+  assert.equal(todayHeatmap(usage, reloaded.rows, now).total, 3000, 'heatmap keeps the complete accumulated usage after FIFO deletion');
+});
+
 test('monitor uses existing leaf-name merging, weighted TPS/cache denominators and excludes diagnostics by default', async () => {
   const { monitorRows, summarizeRequests, aggregateTps, cacheRate, requestTimeline, meanTtft } = await import('../src/request-monitor-view.mjs');
   const time = '2026-10-26T01:00:00Z', now = Date.parse(time) + 1000;

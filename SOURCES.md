@@ -93,6 +93,8 @@ ASS 是独立实现，不是原产品的官方版本。界面不沿用旧产品�
 
 ## 视觉
 
+桌面悬浮窗复用本地 `best-liquid-glass` skill 的独立桌面核心，源码位于 `native/desktop-glass`，不依赖 MifyQuota 的业务或本地项目路径。ASS 接入增加原生 Node-API 宿主、局部 GPU 材质网格、容量内 viewport 调整及同队列提交呈现；本轮问题与修复方法同步回 skill。使用 Windows SDK 的 DXGI Desktop Duplication、Windows.Graphics.Capture、D3D11 与 DirectComposition。验证分别覆盖 WARP 合成纹理、隔离桌面采样和软件坐标路径，未将静态截图或 GPU 耗时表述为物理输入延迟。
+
 请求监控的信息布局参考 [ccflare](https://github.com/snipeship/ccflare) README 中的 dashboard 截图：顶部指标、请求趋势和分组表现；参考 [ccusage](https://github.com/ccusage/ccusage/tree/main/apps/ccusage) 将输入、输出、缓存读取和写入分列。界面与采集逻辑由 ASS 独立实现，没有引入上述工具的代码、依赖或账户信息。模型展示继续复用 ASS 的 `usageModelName`，仅按最后一级归并。
 
 ASS logo 为本项目原创设计。基线 `public/ass-logo-reference.svg` 依据用户指定的 `docs/assets/ass-reference-flat.png` 逐瓣描摹。0.2.17 的最终 `public/ass-logo.svg` 逐字保留八片实际花瓣路径，仅修改中心：从真实根部及八条空隙宽度导向边构造法向偏移外沿，内孔为正圆，不用旋转复制或重新绘制花瓣。参考图来源、轮廓覆盖指标、导出清单与仅开发期使用的描摹工具边界见 [Logo 记录](docs/LOGO.md)。PNG、程序和 Windows ICO 均由最终 SVG 统一导出。其他图标使用 Lucide。系统字体与交互针对横向桌面窗口设计。

@@ -43,6 +43,8 @@ backups/
 requests.jsonl*
 test-results/
 playwright-report/
+native/build/
+native/bin/
 *.pem
 *.key
 *.pfx

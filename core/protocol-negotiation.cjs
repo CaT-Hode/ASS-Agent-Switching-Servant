@@ -66,11 +66,16 @@ class ProtocolNegotiation {
   }
   select(p, m, harness) {
     const r = this.get(p, m), order = harness === "claude" ? ["anthropic", "openai-responses", "openai-chat"] : ORDER;
+    // CC speaks Messages natively. A transient probe failure must not replace
+    // verified native support with a lossy protocol bridge.
+    if (harness === 'claude' && r?.protocols.anthropic?.status === 'passed') return 'anthropic';
+    if (m.protocolOverride) return m.protocolOverride;
     return order.find(protocol => r?.protocols[protocol]?.status === "passed" && r.protocols[protocol].lastStatus !== "unknown") ||
       order.find(protocol => r?.protocols[protocol]?.status === "passed") || m.wireApi;
   }
   providers(harness) {
-    return this.getProviders().map(p => ({ ...p, models: p.models.map(m => ({ ...m, wireApi: this.select(p, m, harness) })) }));
+    return this.getProviders().map(p => ({ ...p, models: p.models.map(m => ({ ...m, wireApi: this.select(p, m, harness),
+      ...(harness === 'claude' && this.get(p, m)?.protocols.anthropic?.status === 'passed' ? { nativeMessages: true } : {}) })) }));
   }
   public() {
     return Object.fromEntries(this.getProviders().flatMap(p => p.models.flatMap(m => {

@@ -499,7 +499,7 @@ class ProxyConfig {
         ? { ...provider, network: current.network } : provider;
       const protocols = this.manager?.options?.protocols;
       return protocols ? { ...routed, models: routed.models.map(model => ({ ...model,
-        wireApi: model.protocolOverride || protocols.select(routed, model, id) })) } : routed;
+        wireApi: protocols.select(routed, model, id) })) } : routed;
     });
     return { providers: this.error ? [] : providers, accountless: plan?.accountless === true,
       gatewayAuth: plan?.gatewayAuth === true, localToken: this.error ? undefined : plan?.localToken };

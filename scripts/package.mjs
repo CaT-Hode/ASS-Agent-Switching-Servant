@@ -5,12 +5,14 @@ import { readFile, writeFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import layout from "./package-layout.cjs";
 import localRelease from "./local-release.cjs";
+import { execFileSync } from 'node:child_process';
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const { version } = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
 localRelease.prePackageGuard({ root });
+execFileSync(process.execPath, [path.join(root, 'scripts/build-desktop-glass.cjs')], { stdio: 'inherit', windowsHide: true });
 const lock = JSON.parse(await readFile(path.join(root, "package-lock.json"), "utf8"));
 const notices = [];
 for (const [relative, entry] of Object.entries(lock.packages)) {
@@ -27,7 +29,7 @@ const outputs = await packager({
   appCopyright: "ASS · Agent-Switching-Servant",
   win32metadata: { FileDescription: "Agent-Switching-Servant", ProductName: "ASS" },
   icon: fileURLToPath(new URL("../assets/ass.ico", import.meta.url)),
-  extraResource: [fileURLToPath(new URL("../assets/ass.ico", import.meta.url))],
+  extraResource: [fileURLToPath(new URL("../assets/ass.ico", import.meta.url)), path.join(root, 'native/bin/desktop-glass')],
   asar: true,
   platform: "win32",
   arch: "x64",

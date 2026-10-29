@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const {
-  RUNTIME_FILES, makeContext, parseArgs, buildPlan, executeInstall, prePackageGuard,
+  RUNTIME_FILES, makeContext, parseArgs, buildPlan, executeInstall, prePackageGuard, pruneInstallerFiles,
 } = require("../scripts/local-release.cjs");
 
 function fixture(t) {
@@ -58,6 +58,23 @@ function snapshot(root) {
   visit(root);
   return result;
 }
+test('successful installer builds retain one installer version without touching runtime packages or unrelated files', t => {
+  const f = fixture(t), old = f.build('0.2.4');
+  const oldExe = f.write('release/ASS-v0.2.4-win32-x64-setup.exe');
+  const oldHash = f.write('release/ASS-v0.2.4-setup-SHA256.txt');
+  const latestHash = f.write('release/ASS-v0.2.6-setup-SHA256.txt');
+  const unrelated = f.write('release/user-installer.exe');
+  const before = snapshot(f.root);
+  assert.throws(() => pruneInstallerFiles(f.ctx), /New installer is missing/);
+  assert.deepEqual(snapshot(f.root), before, 'failed builds keep the previous installer');
+  const latest = f.write('release/ASS-v0.2.6-win32-x64-setup.exe');
+  assert.deepEqual(pruneInstallerFiles(f.ctx).sort(), [path.basename(oldExe), path.basename(oldHash)].sort());
+  assert.equal(fs.existsSync(oldExe), false); assert.equal(fs.existsSync(oldHash), false);
+  for (const file of [latest, latestHash, unrelated, path.join(old, 'ASS.exe'), path.join(f.target, 'ASS.exe')])
+    assert.equal(fs.existsSync(file), true, file);
+  assert.deepEqual(pruneInstallerFiles(f.ctx), [], 'repeated cleanup is harmless');
+});
+
 test('owned resources icon is prunable, repeat install is safe, and unknown resources stay protected',t=>{
   const f=fixture(t),old=f.build('0.2.4');fs.writeFileSync(path.join(old,'resources/ass.ico'),'synthetic icon');
   assert.ok(buildPlan(f.ctx,{prune:true}).prune.candidates.some(item=>item.path===old));

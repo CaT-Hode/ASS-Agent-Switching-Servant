@@ -91,7 +91,7 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
       展开供应商，在模型菜单中设置工具兼容。工具调用变成普通文字时可切换“兼容模式”；更改后同步接入生效。
     </p>}
     {!client.injectionUnsupported && groups.size > 0 && <p className="codex-tool-mode-hint">
-      可为每个模型选择接口协议，仅影响此客户端；自动模式按检测结果选择。更改后同步接入生效。
+      {client.id === 'claude' ? '已检测支持 Messages 的模型固定使用原生 Messages；其他模型可选择兼容协议。' : '可为每个模型选择接口协议，仅影响此客户端；自动模式按检测结果选择。'}更改后同步接入生效。
     </p>}
     {client.injectionUnsupported ? <p className="client-support-note">{client.injectionUnsupported}</p> :
       groups.size ? <div className="client-provider-list">{[...groups].map(([id, models]) => {
@@ -110,7 +110,8 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
               <label className="model-protocol">
                 <span>接口协议</span>
                 <select aria-label={`${m.providerName} / ${m.name || m.model} 接口协议`}
-                  value={m.protocolOverride || 'auto'} disabled={!!busy || state.connections.busy}
+                  value={m.protocolOverride || 'auto'} disabled={!!busy || state.connections.busy || m.nativeMessages}
+                  title={m.nativeMessages ? '已检测支持 Messages，Claude Code 直接使用原生协议' : undefined}
                   onChange={e => { const protocol = e.target.value;
                     act('model-protocol', () => api.call('client-injection', client.id, {
                       modelProtocol: { ref: m.ref, protocol },

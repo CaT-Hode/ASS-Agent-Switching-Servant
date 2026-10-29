@@ -11,8 +11,11 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-claude-defaults-'));
 const home = path.join(root, 'home'), data = path.join(root, 'data'), codex = path.join(home, '.codex');
 const crypt = { isEncryptionAvailable: () => true, encryptString: s => Buffer.from(s), decryptString: b => b.toString() };
 const store = new Store(data, codex, crypt), calls = [];
-for (const [id, model] of [['main', 'claude-opus-4-6'], ['review', 'claude-sonnet-4-6']])
-  store.updateProvider({ id, baseUrl: `https://${id}.invalid`, apiKey: 'synthetic-native-key', models: [{ model, wireApi: 'anthropic', contextWindow: 1000000 }] });
+const reviewProtocol = process.env.ASS_QA_REVIEW_PROTOCOL || 'anthropic';
+const reviewModel = reviewProtocol === 'anthropic' ? 'claude-sonnet-4-6' : 'deepseek/deepseek-flash';
+for (const [id, model] of [['main', 'claude-opus-4-6'], ['review', reviewModel]])
+  store.updateProvider({ id, baseUrl: `https://${id}.invalid`, apiKey: 'synthetic-native-key', models: [{ model,
+    wireApi: id === 'review' ? reviewProtocol : 'anthropic', contextWindow: 1000000 }] });
 const manager = new HarnessManager(data, () => store.state, [], codex, { home, env: {}, launchEnv: { PATH: '' } });
 const proxy = manager.options.proxyConfig = new ProxyConfig(data, crypt, manager, store, new ConfigManager(codex, data));
 function response(body, content, stop) {
@@ -31,7 +34,13 @@ function response(body, content, stop) {
 const router = new Router({ getState: id => proxy.routingState(id), allowClient: () => true, fetchUpstream: async (url, init) => {
   const body = JSON.parse(init.body); calls.push({ host: new URL(url).hostname, model: body.model });
   if (url.includes('count_tokens')) return new Response('{"input_tokens":10}', { headers: { 'content-type': 'application/json' } });
-  if (body.model === 'claude-sonnet-4-6') return response(body, [{ type: 'text', text: '<block>no</block><severity>0</severity>' }], 'end_turn');
+  if (body.model === reviewModel) {
+    if (reviewProtocol === 'anthropic') return response(body, [{ type: 'text', text: '<block>no</block><severity>0</severity>' }], 'end_turn');
+    assert.equal(body.stop_sequences, undefined);
+    const output = { id: 'review-text', type: 'message', content: [{ type: 'output_text', text: '<block>no</block><severity>0</severity>' }] };
+    return new Response('data: ' + JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [output],
+      usage: { input_tokens: 10, output_tokens: 10 } } }) + '\n\n', { headers: { 'content-type': 'text/event-stream' } });
+  }
   const used = body.messages.some(m => Array.isArray(m.content) && m.content.some(b => b.type === 'tool_result'));
   return used ? response(body, [{ type: 'text', text: 'ASS_NATIVE_OK' }], 'end_turn')
     : response(body, [{ type: 'tool_use', id: 'tool_synthetic', name: 'Bash', input: { command: `node -e "require('node:fs').writeFileSync('qa-marker.txt','ASS_QA')"`, description: 'Write the isolated QA marker' } }], 'tool_use');
@@ -39,7 +48,7 @@ const router = new Router({ getState: id => proxy.routingState(id), allowClient:
 (async () => {
   await router.start(0); manager.options.port = router.port;
   const dir = manager.nativeEnv.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
-  manager.setInjection('claude', { defaultModel: modelRef('main', 'claude-opus-4-6'), autoModeModel: modelRef('review', 'claude-sonnet-4-6') });
+  manager.setInjection('claude', { defaultModel: modelRef('main', 'claude-opus-4-6'), autoModeModel: modelRef('review', reviewModel) });
   proxy.sync('claude', true);
   fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, projects: { [root]: { hasTrustDialogAccepted: true } } }));
   const binary = process.env.ASS_QA_CLAUDE_BIN || path.join(process.env.APPDATA, 'npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe');
@@ -60,8 +69,10 @@ const router = new Router({ getState: id => proxy.routingState(id), allowClient:
   assert.deepEqual(JSON.parse(stdout).permission_denials, [], 'The classifier must approve the isolated tool call');
   assert.ok(Object.hasOwn(JSON.parse(stdout).modelUsage, 'main::claude-opus-4-6[1m]'), 'The native CLI must load the 1M selection');
   assert.ok(calls.some(c => c.host === 'main.invalid' && c.model === 'claude-opus-4-6'), JSON.stringify(calls));
-  assert.ok(calls.some(c => c.host === 'review.invalid' && c.model === 'claude-sonnet-4-6'), 'Classifier must reach its independently selected provider: ' + JSON.stringify(calls));
-  assert.match(fs.readFileSync(path.join(root, 'debug.log'), 'utf8'), /classifier_request_started[^\n]*model=review::claude-sonnet-4-6\[1m\]/);
+  assert.ok(calls.some(c => c.host === 'review.invalid' && c.model === reviewModel), 'Classifier must reach its independently selected provider: ' + JSON.stringify(calls));
+  const debug = fs.readFileSync(path.join(root, 'debug.log'), 'utf8');
+  assert.ok(debug.split('\n').some(line => line.includes('classifier_request_started') && line.includes('model=review::' + reviewModel + '[1m]')));
   assert.equal(fs.readFileSync(path.join(root, 'qa-marker.txt'), 'utf8'), 'ASS_QA');
-  console.log(JSON.stringify({ passed: true, defaultModel: true, independentClassifierRoute: true, nativeAutoMode: true, context1m: true, upstreamSuffixRemoved: true, realCloudCalls: 0, root }));
+  console.log(JSON.stringify({ passed: true, defaultModel: true, independentClassifierRoute: true, nativeAutoMode: true, context1m: true,
+    reviewProtocol, upstreamSuffixRemoved: true, realCloudCalls: 0, root }));
 })().catch(e => { console.error(e); console.error('Evidence: ' + root); process.exitCode = 1; }).finally(() => router.stop());

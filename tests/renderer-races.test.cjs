@@ -4,13 +4,42 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { _electron: electron } = require('playwright');
 let app, page, root; const rendererErrors = [];
+test('WSL controls configure only the selected client, sync explicitly, and can withdraw without process actions', async () => {
+  await page.evaluate(() => window.mountWsl());
+  const toggle = page.getByRole('switch', { name: 'Codex WSL 自动同步', exact: true });
+  await toggle.click();
+  assert.deepEqual(await page.evaluate(() => window.calls.at(-1)), ['wsl-configure', 'codex', { enabled: true }]);
+  await page.evaluate(() => window.mountWsl(true));
+  await page.getByRole('button', { name: '立即同步', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.calls.at(-1)), ['wsl-sync', 'codex']);
+  await toggle.click();
+  assert.deepEqual(await page.evaluate(() => window.calls.at(-1)), ['wsl-configure', 'codex', { enabled: false }]);
+  assert.equal(await page.evaluate(() => window.calls.some(c => /launch|stop|restart/.test(c[0]))), false);
+});
+test('CC verified Messages models display their fixed native protocol', async () => {
+  await page.evaluate(() => window.mountNativeMessages());
+  await page.locator('.client-provider > details > summary').click();
+  const select = page.getByRole('combobox', { name: 'Fixture Relay / Synthetic Flash 接口协议', exact: true });
+  assert.equal(await select.inputValue(), 'anthropic');
+  assert.equal(await select.isDisabled(), true);
+  assert.match(await select.getAttribute('title'), /原生协议/);
+  assert.equal(await page.getByText('Messages 原生接入', { exact: true }).count(), 1);
+});
 before(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-renderer-regression-'));
   require('esbuild').buildSync({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import {flushSync} from 'react-dom';
     import {ProjectConversations} from './src/project-conversations.jsx';
     import {ConversationHistory} from './src/conversation-history.jsx'; import {ModelEditor} from './src/editors.jsx';
     import {Providers} from './src/providers.jsx'; import {ClientInjection} from './src/client-injection.jsx';
+    import {WslSyncControl} from './src/wsl-sync.jsx';
     const root=createRoot(document.getElementById('root'));
+    window.mountWsl=(enabled=false)=>flushSync(()=>root.render(<WslSyncControl client={{id:'codex',name:'Codex'}} busy="" act={async(k,fn)=>fn()}
+      state={{connections:{busy:false},wslSync:{distro:'Ubuntu',distros:['Ubuntu','Debian'],busy:false,clients:{codex:{enabled,configured:enabled,status:enabled?'已同步':'尚未开启'}}}}}/>));
+    window.mountNativeMessages=()=>flushSync(()=>root.render(<ClientInjection client={{id:'claude',name:'Claude Code',injection:{excludedProviders:[],models:[
+      {ref:'fixture',providerId:'fixture',providerName:'Fixture Relay',model:'flash',name:'Synthetic Flash',included:true,
+        protocol:'anthropic',protocolOverride:'anthropic',nativeMessages:true,adapter:'Messages 原生接入'}]}}}
+      state={{providers:[{id:'fixture',name:'Fixture Relay'}],connections:{busy:false,clients:{claude:{applied:true}}}}}
+      act={async(k,fn)=>fn()} onManage={()=>{}}/>));
     window.mountSuppliers=()=>flushSync(()=>root.render(<Providers providers={[]} activeProvider="" onOpenProvider={()=>{}} onBack={()=>{}} act={async(k,fn)=>fn()}
       state={{providers:[{id:'woyao',name:'WOYAO',models:[{model:'custom',displayName:'Custom'}],enabled:true}],modelSources:[{id:'woyao',name:'WOYAO',models:[{model:'custom',displayName:'Custom'}],enabled:true}],
       officialProviderIds:{},preferences:{providerOrder:[]},balances:{},harnesses:{clients:[]}}}/>));

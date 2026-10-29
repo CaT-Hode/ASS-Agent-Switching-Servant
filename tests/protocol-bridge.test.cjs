@@ -56,6 +56,51 @@ test("image content is not silently stripped from Messages or Responses historie
   assert.equal(messagesRequest(body, m, "openai-chat").messages[0].content[0].image_url.url, "data:image/png;base64,AAAA");
   assert.deepEqual(convertRequest(r, m, "anthropic").messages[0].content[0].source, body.messages[0].content[0].source);
 });
+
+for (const stream of [false, true]) test(`CC classifier stop sequences work across Responses chunks (${stream ? 'stream' : 'JSON'})`, async t => {
+  const model = { ...m, model: 'deepseek/deepseek-flash', enabled: true, wireApi: 'openai-responses', contextWindow: 1000000 };
+  let forwarded;
+  const router = new Router({ getState: () => ({ providers: [{ id: 'relay', enabled: true,
+    baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic', models: [model] }] }), fetchUpstream: async (url, init) => {
+    forwarded = JSON.parse(init.body);
+    assert.ok(url.endsWith('/responses'));
+    return sse(['<block>no</block>', '<severity>0</severity><EN', 'D>discarded'].map(delta => ({ type: 'response.output_text.delta', output_index: 0, delta })));
+  } });
+  await router.start(0);t.after(() => router.stop());
+  const response = await fetch(`http://127.0.0.1:${router.port}/clients/claude/models/v1/messages`, { method: 'POST',
+    headers: { 'x-api-key': router.clientToken, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'relay::deepseek/deepseek-flash[1m]', messages: [{ role: 'user', content: 'Classify the harmless fixture' }],
+      max_tokens: 64, stop_sequences: ['<END>'], stream }) });
+  assert.equal(response.status, 200);
+  const result = stream ? await messagesJSON(require('../core/adapters.cjs').sseMessages(response.body)) : await response.json();
+  assert.equal(result.content[0].text, '<block>no</block><severity>0</severity>');
+  assert.equal(result.stop_reason, 'stop_sequence');assert.equal(result.stop_sequence, '<END>');
+  assert.equal(forwarded.model, 'deepseek/deepseek-flash');assert.equal(forwarded.stop_sequences, undefined);
+  assert.equal(forwarded.stop, undefined, 'Responses receives no unsupported stop parameter');
+});
+
+test('Responses stop handling flushes unmatched prefixes and cancels on a match without completing partial tools', async () => {
+  const completion = text => ({ type: 'response.completed', response: { output: [{ id: 'one', type: 'message', content: [{ type: 'output_text', text }] }],
+    usage: { input_tokens: 10, output_tokens: 3 } } });
+  const unmatched = await messagesJSON(messagesEvents(sse([completion('Keep <EN')]).body, 'openai-responses', 'test', ['<END>']));
+  assert.equal(unmatched.content[0].text, 'Keep <EN');assert.equal(unmatched.stop_reason, 'end_turn');
+  for (const absent of [undefined, null, []]) assert.equal((await messagesJSON(messagesEvents(sse([completion('Whole text')]).body,
+    'openai-responses', 'test', absent))).content[0].text, 'Whole text');
+  const matched = await messagesJSON(messagesEvents(sse([completion('First<END>ignored<OTHER>')]).body, 'openai-responses', 'test', ['<OTHER>', '<END>']));
+  assert.equal(matched.content[0].text, 'First');assert.equal(matched.stop_sequence, '<END>');
+  let cancelled = false;
+  const source = new ReadableStream({ start(controller) {
+    controller.enqueue(Buffer.from('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'Done<END>', output_index: 0 }) + '\n\n'));
+  }, cancel() { cancelled = true; } });
+  assert.equal((await messagesJSON(messagesEvents(source, 'openai-responses', 'test', ['<END>']))).content[0].text, 'Done');
+  assert.equal(cancelled, true);
+  await assert.rejects(messagesJSON(messagesEvents(sse([
+    { type: 'response.output_item.added', item: { id: 'call', type: 'function_call', call_id: 'one', name: 'Bash' } },
+    { type: 'response.function_call_arguments.delta', item_id: 'call', delta: '{"command":' },
+    { type: 'response.output_text.delta', output_index: 1, delta: '<END>' },
+  ]).body, 'openai-responses', 'test', ['<END>'])), /工具调用未完整/);
+  assert.throws(() => messagesRequest({ stop_sequences: [''] }, m, 'openai-responses'), error => error.status === 400);
+});
 test("namespace functions and custom raw tools round-trip identity, arguments, history and sequence", async () => {
   const body = { tools: [{ type: "namespace", name: "files", tools: [
     { type: "function", name: "read", parameters: { type: "object" } }, { type: "custom", name: "patch", description: "Apply a patch", format: { syntax: "lark", definition: "start: /.+/" } },

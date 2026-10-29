@@ -915,7 +915,7 @@ class HarnessManager {
     if (!overrides) return providers;
     return providers.map(p => ({ ...p, models: p.models.map(m => {
       const protocol = overrides[modelRef(p.id, m.model)];
-      return protocol ? { ...m, wireApi: protocol, protocolOverride: protocol } : m;
+      return protocol ? { ...m, wireApi: m.nativeMessages ? 'anthropic' : protocol, protocolOverride: protocol } : m;
     }) }));
   }
   setInjection(harness, changes) {

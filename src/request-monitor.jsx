@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronRight, Search, X, Zap, Play, Square } from './icons.jsx';
+import { Activity, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronRight, Search, X, Zap, Play, Square, Monitor } from './icons.jsx';
 import { usageModelName } from './usage-view.mjs';
 import { transitionUI, Presence } from './surface-motion.jsx';
 import { PROTOCOL_NAMES, clientName, providerName, requestOK, requestKey, phaseName, known, fmt, seconds, monitorRows, summarizeRequests,
   aggregateTps, currentTps, cacheRate, meanTtft, requestTimeline } from './request-monitor-view.mjs';
 import './request-monitor.css';
-const EMPTY = { rows: [], active: [], error: '', limit: 5000 };
+const EMPTY = { rows: [], active: [], error: '', limit: 200 };
 const PAGESIZE = 25;
 const percent = value => known(value) ? fmt(value, 1) + '%' : '—';
 const time = value => new Date(value).toLocaleTimeString('zh-CN', { hour12: false });
@@ -90,7 +90,7 @@ export function RequestMonitor({ state }) {
   const buckets = useMemo(() => requestTimeline(rows, options.range, now), [rows, options.range, now]);
   const providers = useMemo(() => [...new Set(allRows.map(providerName))].sort(), [allRows]);
   const clients = useMemo(() => [...new Set(allRows.map(row => row.client || 'unknown'))].sort(), [allRows]);
-  const selectedRow = selected && (allRows.find(row => requestKey(row) === requestKey(selected)) || selected);
+  const selectedRow = selected && allRows.find(row => requestKey(row) === selected);
   const total = summary.total, maxPage = Math.max(0, Math.ceil(rows.length / PAGESIZE) - 1), currentPage = Math.min(page, maxPage);
   const patch = update => { setOptions(current => ({ ...current, ...update })); setPage(0); setSelected(null); };
   const metrics = [
@@ -104,6 +104,9 @@ export function RequestMonitor({ state }) {
   return <div className="request-monitor">
     <header className="monitor-heading"><div><span className="monitor-eyebrow">REQUEST OBSERVABILITY</span><h2>请求监控</h2><p>吞吐、缓存与供应商表现，随请求实时更新。</p></div>
       <div className="monitor-live"><span className={paused ? 'paused' : ''}><i />{paused ? '已暂停刷新' : '实时更新'}</span>
+        <button className="button" aria-pressed={!!state.preferences?.requestWidget?.enabled}
+          onClick={() => window.ass.call('request-widget', { enabled: !state.preferences?.requestWidget?.enabled }).catch(error => setLoadError(error.message))}>
+          <Monitor size={14} />悬浮窗</button>
         <button className="button" onClick={() => setPaused(value => !value)}>{paused ? <Play size={14} /> : <Square size={14} />}{paused ? '继续刷新' : '暂停刷新'}</button></div></header>
     <div className="monitor-toolbar"><div className="monitor-range" role="group" aria-label="监控时间范围">
       {[['hour', '近 1 小时'], ['day', '近 24 小时'], ['week', '近 7 天'], ['all', '全部保留记录']].map(([value, label]) =>
@@ -133,7 +136,7 @@ export function RequestMonitor({ state }) {
           {['时间', '模型 / 协议', '供应商 / 客户端', '输入 / 输出', '缓存读取', '可见 TPS', '首输出', '总耗时', '状态'].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>
           {rows.slice(currentPage * PAGESIZE, (currentPage + 1) * PAGESIZE).map(row => <tr key={requestKey(row)} data-in-progress={row.inProgress || undefined} className={selectedRow && requestKey(selectedRow) === requestKey(row) ? 'selected' : ''}>
             <td><time title={new Date(row.startedAt || row.time).toLocaleString('zh-CN')}>{time(row.startedAt || row.time)}</time></td>
-            <td><button className="monitor-model-button" aria-label={`查看 ${usageModelName(row.model)} 请求详情`} aria-expanded={selectedRow && requestKey(selectedRow) === requestKey(row)} onClick={() => setSelected(selectedRow && requestKey(selectedRow) === requestKey(row) ? null : row)}>{usageModelName(row.model)}<ChevronRight size={12} /></button>
+            <td><button className="monitor-model-button" aria-label={`查看 ${usageModelName(row.model)} 请求详情`} aria-expanded={selectedRow && requestKey(selectedRow) === requestKey(row)} onClick={() => setSelected(selected === requestKey(row) ? null : requestKey(row))}>{usageModelName(row.model)}<ChevronRight size={12} /></button>
               <small>{row.operation === 'compaction' ? '上下文压缩 · ' : ''}{PROTOCOL_NAMES[row.protocol] || '未记录协议'}</small></td>
             <td><span className="monitor-provider-name" title={providerName(row)}>{providerName(row)}</span><small>{clientName(row.client)}</small></td>
             <td><span>{fmt(row.usage?.inputTokens)}</span><small>{row.outputEstimated ? '≈ ' : ''}{fmt(row.usage?.outputTokens)}</small></td>

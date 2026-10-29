@@ -46,5 +46,11 @@ for (const relative of ["core", "electron", "src"]) for (const name of fs.readdi
 }
 if (suspect.length) throw Error("Unexpected token-shaped source content: " + suspect.join(", "));
 if (JSON.parse(asar.extractFile(archive, "package.json")).version !== version) throw Error("Wrong packaged version");
+for (const name of ['RequestGlass.node', 'DesktopGlass.dll']) {
+  const source = fs.readFileSync(path.join(root, 'native/bin/desktop-glass', name));
+  const shipped = fs.readFileSync(path.join(path.dirname(archive), 'desktop-glass', name));
+  if (!source.equals(shipped)) throw Error('Packaged native glass mismatch: ' + name);
+}
+if (fs.existsSync(path.join(path.dirname(archive), 'desktop-glass/RequestGlassReview.node'))) throw Error('Native review bridge must not ship');
 console.log(JSON.stringify({ version, identicalRuntimeFiles: count, forbiddenPackagedFiles: forbidden.length, tokenShapedSourceFiles: suspect.length,
   asarSha256: crypto.createHash("sha256").update(fs.readFileSync(archive)).digest("hex") }));

@@ -1,5 +1,6 @@
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
+const { makeContext, pruneInstallerFiles } = require('./local-release.cjs');
 const root = path.resolve(__dirname, '..'), { version } = require('../package.json');
 if (process.platform !== 'win32') throw Error('Windows installer builds require Windows IExpress');
 execFileSync(process.execPath, [path.join(__dirname, 'verify-package.cjs')], { stdio: 'inherit' });
@@ -33,6 +34,7 @@ if (fs.existsSync(path.join(stage, 'setup.exe'))) fs.copyFileSync(path.join(stag
 if (result.status !== 0 || !fs.existsSync(output) || fs.statSync(output).size < 1024 ** 2 || fs.readFileSync(output).subarray(0, 2).toString() !== 'MZ')
   throw Error(`IExpress installer build failed (exit ${result.status}; ${result.error?.message || ''}); input retained at ` + stage);
 fs.writeFileSync(path.join(release, `ASS-v${version}-setup-SHA256.txt`), hash(output) + '  ' + path.basename(output) + '\n');
-console.log(JSON.stringify({ installer: output, bytes: fs.statSync(output).size, sha256: hash(output) }));
+const removedInstallers = pruneInstallerFiles(makeContext({ root }));
+console.log(JSON.stringify({ installer: output, bytes: fs.statSync(output).size, sha256: hash(output), removedInstallers }));
 if (!path.resolve(stage).startsWith(path.resolve(release) + path.sep + 'installer-')) throw Error('Unexpected build cleanup path');
 fs.rmSync(stage, { recursive: true });

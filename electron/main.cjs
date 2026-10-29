@@ -25,6 +25,8 @@ const { PROVIDER_PRESETS } = require("../core/presets.cjs");
 const { HarnessManager } = require("../core/harnesses.cjs");
 const { ClaudeDesktopGateway } = require("../core/claude-desktop-gateway.cjs");
 const { NativeConfig } = require("../core/native-config.cjs");
+const { WslSync, windowsSources } = require('../core/wsl-sync.cjs');
+const { RequestWidget } = require('../core/request-widget.cjs');
 const { ProxyConfig } = require("../core/proxy-config.cjs");
 const {
   modelKey,
@@ -138,6 +140,8 @@ let window,
   processes,
   preferences,
   usageHistory,
+  wslSync,
+  requestWidget,
   quitting = false;
 let recent = [],
   balances = {};
@@ -519,6 +523,8 @@ function buildSnapshot() {
       store.state.providers.map((p) => [p.id, accountInfo.public(p)]),
     ),
     connections: connections.snapshot(),
+    wslSync: wslSync?.public(),
+    requestWidget: requestWidget?.public(),
     claudeDesktop: (() => { try { return claudeDesktop.status(proxyConfig.clients.claude?.localToken, servicePort); }
       catch (error) { return { configured: false, owned: false, current: false, conflict: true, error: error.message }; } })(),
     providerPresets: PROVIDER_PRESETS,
@@ -933,6 +939,16 @@ function showWindow() {
     window = null;
   });
 }
+function updateTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '打开 ASS', click: showWindow },
+    { label: '请求悬浮窗', type: 'checkbox', checked: !!preferences.state.requestWidget.enabled,
+      click: item => requestWidget.configure({ enabled: item.checked }) },
+    { label: '检查 ASS 更新', click: () => { showWindow();void updates.check({ manual: true }); } },
+    { type: 'separator' },{ label: '退出…', click: requestExit },
+  ]));
+}
 function exitStatus() {
   const status = connections.exitStatus();
   try {
@@ -1125,6 +1141,8 @@ else {
           },
         }),
       });
+      wslSync = new WslSync({ dataDir, crypto: safeStorage, port: servicePort, onChange: push,
+        sources: () => windowsSources({ proxyConfig, nativeConfig, config, connections, router }) });
       oauthHistory = new OAuthHistory({
         dataDir, crypto: safeStorage,
         sources: () => harnesses.oauthHistorySources(),
@@ -1191,7 +1209,14 @@ else {
         try { await codexWorkspaceLaunchOptions(); }
         catch (error) { startupError = [startupError,'Codex 官方服务中转未恢复：'+error.message].filter(Boolean).join('；'); }
       }
+      wslSync.start();
+      requestWidget = new RequestWidget({ electron: require('electron'), preferences,
+        model: await import('../core/request-widget-view.mjs'),
+        read: () => ({ active: router.monitorSnapshot(), history: requestHistory.snapshot(), usage: usageHistory.public() }),
+        refreshUsage: () => usageHistory.refresh(), onChange: () => { updateTrayMenu();push(); } });
+      if (preferences.state.requestWidget.enabled) requestWidget.open();
       register("snapshot", () => snapshot());
+      register('request-widget', input => requestWidget.configure(input));
       register('request-monitor', revision => {
         const history = requestHistory.snapshot();
         return { ...history, rows: revision === history.revision ? undefined : history.rows,
@@ -1340,6 +1365,9 @@ else {
         harnesses.add(id, label, oauthProvider),
       );
       register("client-refresh", refreshClientState);
+      register('wsl-detect', () => wslSync.detect());
+      register('wsl-configure', (id, input) => wslSync.configure(id, input));
+      register('wsl-sync', id => wslSync.sync([id]));
       register("native-login-preview", async (id) => {
         if (connections.busy) throw Error("正在修改客户端接入，请稍后登录");
         return nativeLogin.preview(id);
@@ -1790,25 +1818,7 @@ else {
       const image = nativeImage.createFromPath(iconPath);
       tray = new Tray(image.resize({ width: 24, height: 24 }));
       tray.setToolTip("ASS · 模型随你切");
-      tray.setContextMenu(
-        Menu.buildFromTemplate([
-          { label: "打开 ASS", click: showWindow },
-          {
-            label: "检查 ASS 更新",
-            click: () => {
-              showWindow();
-              void updates.check({ manual: true });
-            },
-          },
-          { type: "separator" },
-          {
-            label: "退出…",
-            click: () => {
-              requestExit();
-            },
-          },
-        ]),
-      );
+      updateTrayMenu();
       tray.on("double-click", showWindow);
       if (!process.argv.includes("--hidden")) showWindow();
       const importArg = process.argv.find((x) =>
@@ -1831,6 +1841,7 @@ else {
           nativeLogin,
           accountInfo,
           preferences,
+          requestWidget,
           openRouterAuth,
           updates,
           connections,
@@ -1879,6 +1890,8 @@ else {
     runtimeHealth?.record('exit');
     publisher.clear();
     updates?.stop();
+    wslSync?.stop();
+    requestWidget?.dispose();
     oauthHistory?.stop();
     projectConversations?.stop();
     modelDirectory.invalidate();

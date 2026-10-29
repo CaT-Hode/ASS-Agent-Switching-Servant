@@ -816,6 +816,15 @@
 .client-default-model { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: center; gap: 12px; margin: 0 0 14px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
 .client-default-model span { font-size: 12px; font-weight: 600; color: var(--muted); }
 .client-default-model select { min-width: 0; width: 100%; }
+.wsl-sync { margin: 14px 0; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.wsl-sync header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.wsl-sync strong { font-size: 13px; }
+.wsl-sync small { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.wsl-sync-actions { display: flex; align-items: end; gap: 8px; margin-top: 12px; }
+.wsl-sync-actions label { display: grid; gap: 5px; flex: 1; font-size: 11px; color: var(--muted); }
+.wsl-sync-actions select { width: 100%; }
+.wsl-sync p { margin: 12px 0 5px; font-size: 12px; }
+.wsl-sync code { display: block; overflow-wrap: anywhere; font-size: 11px; }
 @media (max-width: 620px) { .client-default-model { grid-template-columns: 1fr; gap: 7px; } }
 .client-injection h3 { display: flex; align-items: baseline; gap: 13px; margin: 0; font-size: 16px; }
 .injection-count { font-size: 13px; font-weight: 400; color: light-dark(#7e7e7e, #b4b4b4); font-variant-numeric: tabular-nums; }

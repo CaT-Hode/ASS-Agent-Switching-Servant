@@ -16,7 +16,6 @@
     "build:native": "node scripts/build-desktop-glass.cjs",
     "start": "electron .",
     "test": "node --test --test-concurrency=4 tests/*.test.cjs",
-    "test:native": "node scripts/native-contract/run.cjs",
     "package": "electron scripts/make-icons.cjs && npm run build && node scripts/package.mjs && npm run installer",
     "installer": "node scripts/make-installer.cjs",
     "install:local": "node scripts/local-release.cjs install --prune",

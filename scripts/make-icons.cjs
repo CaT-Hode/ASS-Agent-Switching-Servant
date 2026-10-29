@@ -2,7 +2,6 @@
 const { app, BrowserWindow } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const { createHash } = require("node:crypto");
 const { iconCrop } = require("./icon-layout.cjs");
 const { SPEC, createGeometry, buildLogoSvg } = require("./brand-geometry.cjs");
 app.commandLine.appendSwitch("force-device-scale-factor", "1");
@@ -62,20 +61,6 @@ app
       path.join(root, "assets/ass.ico"),
       Buffer.concat([header, ...pngs]),
     );
-    fs.mkdirSync(path.join(root, "docs/assets"), { recursive: true });
-    const hash = (data) => createHash("sha256").update(data).digest("hex");
-    const files = ["public/ass-logo.svg", "public/ass-logo.png", "public/ass-app-icon.png", "assets/ass.ico"];
-    fs.writeFileSync(path.join(root, "docs/assets/ass-logo-exports.json"), JSON.stringify({
-      version: require(path.join(root, "package.json")).version,
-      reference: "public/ass-logo-reference.svg", spec: SPEC, crop: layout,
-      preservedPetals: geometry.petals.map(({ id, tag }) => ({ id, sha256: hash(tag) })),
-      geometry: { contourEdges: geometry.facets.length,
-        gapEdges: geometry.facets.filter(f => f.type === "gap").length,
-        rootGuides: geometry.roots.map(({ id, contour }) => ({ id, contour })),
-        perimeter: geometry.perimeter, hub: geometry.hub },
-      exports: files.map(file => ({ file, sha256: hash(fs.readFileSync(path.join(root, file))) })),
-      icoSizes: sizes,
-    }, null, 2) + "\n");
     console.log("Exported ASS icon: 16–256px; artwork " + (layout.occupancy * 100).toFixed(1) + "%");
     app.quit();
   })

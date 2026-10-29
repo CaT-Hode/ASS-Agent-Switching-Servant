@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { readDesktopJson } = require("../core/desktop-metadata.cjs");
-const { archiveBuffer } = require("../scripts/desktop-metadata-qa.cjs");
+const { archiveBuffer } = require("./helpers/asar-fixture.cjs");
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ass-desktop-metadata-test-"));

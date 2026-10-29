@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { archiveBuffer } = require("../scripts/desktop-metadata-qa.cjs");
+const { archiveBuffer } = require("./helpers/asar-fixture.cjs");
 const {
   resolveLauncher,
   discoverLaunchers,

@@ -38,7 +38,6 @@ pi 同步的是活动父链上**当前生效的文本上下文**，不是逐条�
 
 共享预览的“同步范围”显示来源和未迁移项。系统 / developer 提示（包括 Claude `prompt_snapshot`）、工具许可、插件、凭据和附件正文不迁移；只传递存在标记，不将来源提示正文发送给界面或提升为目标系统指令。历史工具保留为不可执行文本，用户消息中的指令仍保持用户角色。这是有效文本上下文同步，不是完整可执行上下文复制。
 
-回归入口：`node --test tests/session-sync-fidelity.test.cjs`。隔离原生验证：`node scripts/native-contract/session-sync-fidelity.cjs --enable --prefix <已安装的固定版本目录>`，目录包含 `native-oc1`（1.18.34）、`native-oc2`（2.0.22）、`native-claude`（2.1.287）、`native-pi`（1.0.0）的 `node_modules`。脚本只写新临时目录，模型请求仅发往本地模拟接口；不自动安装依赖、不使用真实账户。它验证两代 OpenCode 默认恢复的实际请求、Claude 多块回复的原生恢复请求，以及 pi 原生 SDK 的压缩 / 编辑上下文和投影恢复；不代表真实云模型、Codex 原生续聊或 DSH 完整 CLI 往返已通过。
 
 ## DSH / pi 适配边界
 

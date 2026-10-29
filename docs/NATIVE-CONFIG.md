@@ -40,5 +40,3 @@ API 发现不依赖模型列表。地址、协议和 Key 可以确认但没有�
 ## 依据与验证边界
 
 配置格式以 [OpenCode Config](https://opencode.ai/docs/config/)、[OpenCode Providers](https://opencode.ai/docs/providers/)、[pi 自定义模型](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)、[pi Settings](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md)、[DSH llm-pi-ai](https://github.com/deepseek-ai/deepseek-harness/tree/main/packages/llm/llm-pi-ai) 和 [DSH credentials-local](https://github.com/deepseek-ai/deepseek-harness/tree/main/packages/credentials/credentials-local) 为依据。
-
-2026-09-22，v0.1.17：pi 0.73.1 的实际 ModelRegistry、AuthStorage 与 CLI 模型列表，OpenCode 1.18.31 的 `debug config/paths`，本机 DSH 0.1.5-rc.1 的 Settings / Credentials 服务与 `--dump-config` 均接受生成结果。没有发送模型请求；这些结果证明配置可读及凭据归属，不代表完整客户端任务或所有上游权限已实测。历史三协议合成流验证及本版隔离 Electron 回归见 [验证记录](VALIDATION.md)。

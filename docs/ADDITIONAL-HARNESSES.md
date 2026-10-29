@@ -84,7 +84,6 @@
 - Kimi 文件 OAuth 只向原区域的官方 Coding 接口发送；过期令牌、冲突环境覆盖、共享文件的区域歧义不会尝试刷新或借用其他账户。Kimi 原生 `kimi` 协议识别为 Chat Completions。
 - ZCode Start 使用原生会话 JWT；个人 / Team Coding Plan 使用当前用户及选定项目的已缓存专用 Key，不使用业务 OAuth token 代替，不创建 Key。缺少专用 Key 时提示先在 ZCode 使用对应套餐。OAuth 端点和套餐必须匹配。原生 OpenAI / Anthropic 文件型 OAuth 采用各自官方协议；其他专有协议、密钥库或外部命令凭据会明确提示暂不支持。
 - 检测是一次小型流式文本请求，不运行 Agent / 工具，不执行原生参数映射脚本，也不验证所有思维档位。Chat Completions、Responses、Messages 都要求可见文本和各自的完整结束事件，HTTP 200、半截流和仅推理片段不能标记成功。除 Codex 订阅自身的协议约束外，输出预算为 512 Token，超时 90 秒；不会记录响应正文或凭据。
-- 此功能经过隔离 Electron 交互与模拟协议响应检查，未使用真实订阅发起计费请求。仅凭这些检查不能声称所有供应商或原生客户端端到端可用；接口自身拒绝、限额与兼容性仍以逐模型实测结果为准。
 
 ## 官方依据
 
@@ -96,5 +95,3 @@
 - Start Plan 动态模型范围依据同提交的 [Start Plan Billing](https://github.com/zai-org/ZCode/blob/872ad960de7ec172591f7e1952f7849229f94521/packages/services/src/model-provider/zaiStartPlanBilling.ts) 与 [Provider Availability](https://github.com/zai-org/ZCode/blob/872ad960de7ec172591f7e1952f7849229f94521/packages/services/src/model-provider/codingPlanProviderAvailability.ts)。ASS 只缓存经过清洗的状态、模型 ID 与查询时间，不保存响应体，也不写 ZCode 的账户供应商覆盖层。
 - Coding Plan / Team 依据同提交的 [Quota Provider](https://github.com/zai-org/ZCode/blob/872ad960de7ec172591f7e1952f7849229f94521/packages/services/src/usage-stats/providers/bigmodelUsageQuotaProvider.ts)、`codingPlanEntitlement.ts`、`accountProviderCredentialKey.ts`、`accountProviderApiKeyResolver.ts`、`accountProviderTeamPlanRequestKey.ts`；MCP 依据 [MCP Quota Provider](https://github.com/zai-org/ZCode/blob/872ad960de7ec172591f7e1952f7849229f94521/packages/services/src/usage-stats/providers/zcodeMcpQuotaProvider.ts)、`officialMcpCredentials.ts`。ASS 仅复用其中只读流程，不执行原生 Key 自动创建或额度重置动作。
 - 登录命令以同一提交的 [Kimi `login.ts`](https://github.com/MoonshotAI/kimi-code/blob/6451f1e056e90037bbf832f3578955cf8e55db64/apps/kimi-code/src/cli/sub/login.ts)、[旧版 Kimi CLI](https://github.com/MoonshotAI/kimi-cli/blob/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82/src/kimi_cli/cli/__init__.py)、[ZCode `login-command.ts`](https://github.com/zai-org/ZCode/blob/872ad960de7ec172591f7e1952f7849229f94521/apps/zcode-cli/packages/cli/src/login-command.ts) 为依据；ZCode `auth-login.ts` 会保存默认模型，`zcodeAgentProcessManager.ts` 定义桌面内置 CLI 的 Electron Node 启动方式。
-
-当前验证使用合成凭据及隔离 Electron 窗口。本机默认位置未发现两者的实际账户，不宣称真实用户登录、订阅额度或完整 Agent 任务已验证。

@@ -37,4 +37,4 @@ fs.writeFileSync(path.join(release, `ASS-v${version}-setup-SHA256.txt`), hash(ou
 const removedInstallers = pruneInstallerFiles(makeContext({ root }));
 console.log(JSON.stringify({ installer: output, bytes: fs.statSync(output).size, sha256: hash(output), removedInstallers }));
 if (!path.resolve(stage).startsWith(path.resolve(release) + path.sep + 'installer-')) throw Error('Unexpected build cleanup path');
-fs.rmSync(stage, { recursive: true });
+fs.rmSync(stage, { recursive: true, maxRetries: 3, retryDelay: 200 });

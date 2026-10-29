@@ -1,8 +1,6 @@
 # Codex OAuth → OpenCode / pi 兼容性
 
-核对日期：2026-09-30（Asia/Shanghai）。这是官方文档、已固定版本源码与合成凭据测试的兼容性检查。未执行真实登录、refresh、推理、客户端升级或原生凭据迁移；没有验证当前用户的 grant 有效性、模型权益或计费结果。
-
-2026-10-01 / v0.3.1 补充：已按 Pi 0.99.1 的实际消费者核对 access JWT 账户字段及 Anthropic 固定刷新客户端；导入改为事务提交。Claude 用户级 settings.env 覆盖阻止 preview/apply，OpenCode v2 的 credential 数据库可作为只读来源。仅支持 Codex / Claude / OpenCode → pi，尚未实现反向转移或 OpenCode OAuthHistory。新增原生验收只使用本机模拟服务和内存刷新 mock；无真实服务端授权结论，详见 [OAuth 专项修复](oauth-qa-0.3.0.md)。以下旧版协议分析保留其原有证据边界。
+本文说明 ASS 的 OAuth 格式兼容规则，来源为下文标注版本的官方文档与源码。模型权限和授权有效性以原生客户端登录结果为准。
 
 ## 结论
 
@@ -45,7 +43,7 @@
 
 ### OpenCode
 
-- 最新正式版 `v1.18.33`：commit `51ef4be1d3c122f18fefb510dca8d778571f4f18`，commit 日期 `2026-09-28T04:22:32Z`，发布于 `2026-09-28T04:22:46Z`。[Release v1.18.33](https://github.com/anomalyco/opencode/releases/tag/v1.18.33)、[官方 Changelog](https://opencode.ai/changelog)
+- 核对的正式版 `v1.18.33`：commit `51ef4be1d3c122f18fefb510dca8d778571f4f18`，commit 日期 `2026-09-28T04:22:32Z`，发布于 `2026-09-28T04:22:46Z`。[Release v1.18.33](https://github.com/anomalyco/opencode/releases/tag/v1.18.33)、[官方 Changelog](https://opencode.ai/changelog)
 - 检查时 HEAD：`2fa3363c924c5c3e367b84a87ae478296a0ed59b`，`2026-09-29T21:43:58Z`。
 - [packages/opencode/src/plugin/openai/codex.ts](https://github.com/anomalyco/opencode/blob/51ef4be1d3c122f18fefb510dca8d778571f4f18/packages/opencode/src/plugin/openai/codex.ts) 与 [auth/index.ts](https://github.com/anomalyco/opencode/blob/51ef4be1d3c122f18fefb510dca8d778571f4f18/packages/opencode/src/auth/index.ts)：`openai` OAuth 仍使用固定 Codex client，存储 `type/access/refresh/expires/accountId`，请求 Codex backend。
 - HEAD 的 [packages/core/src/plugin/provider/openai.ts](https://github.com/anomalyco/opencode/blob/2fa3363c924c5c3e367b84a87ae478296a0ed59b/packages/core/src/plugin/provider/openai.ts) 同样使用固定 Codex client。
@@ -55,7 +53,6 @@
 
 - 官方 `rust-v0.159.2`：tag 指向 commit `ff6aec96948b70d94983af2641a6b67c94faeff5`，发布于 `2026-09-29T23:57:16Z`。[Release](https://github.com/openai/codex/releases/tag/rust-v0.159.2)
 - [codex-rs/login/src/server.rs](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/login/src/server.rs)：原生 Codex 使用 `/oauth/authorize` 和 `/oauth/token`；较新 Codex 的 scopes 另包含 connector 权限，但它们不会自动形成 SIWC direct-plan scopes。
-- 本机 PATH 可见 Codex npm launcher，其 `@openai/codex/package.json` 为 `0.146.1`；这不代表桌面端内置 Codex 的版本。本机 PATH 未发现 `opencode`、`pi`，不能据此断言未安装。主线程从已存在的 `C:\Users\cth\AppData\Local\Programs\@opencode-aidesktop\resources\app.asar/package.json` 只读核对到 OpenCode Desktop `1.18.33`，与上面核对的正式版一致。没有启动、关闭或升级真实客户端；pi 的具体本机版本未确认。此文档随 ASS `0.2.12` 交付。
 
 ## ASS 现有接口与此次边界
 
@@ -81,7 +78,3 @@
 | `refreshRotationRisk` / `warning` | 允许复制时提示同一 refresh grant 的轮换竞争；被阻止的复制不发生竞争，不代表该 grant 没有轮换性质。 |
 
 `reasonCode` 目前包括 `compatible_format`、`provider_not_supported`、`chatgpt_plan_login_required`、`oauth_client_mismatch`、`oauth_issuer_mismatch`、`oauth_resource_mismatch`、`oauth_account_mismatch`、`oauth_grant_unknown`、`oauth_auth_mode_mismatch`、`provider_grant_mismatch` 和 `oauth_record_invalid`。
-
-## 验证
-
-专用测试：`node --test tests/oauth-transfer.test.cjs`。使用隔离临时目录与合成凭据，覆盖 legacy 保留、新 plan 拒绝、只支持新 `openai` 时不放行旧 / 未知 grant、client/scope/resource/账户一致性、到期快照、无凭据的原因字段、现有 import 方法再次核对来源、拒绝前不创建 profile、原生账户与配置字节不变、旧 / 新 pi 包的只读能力枚举。实际运行结果由本次交付报告给出；此文档不替代真实推理证据。

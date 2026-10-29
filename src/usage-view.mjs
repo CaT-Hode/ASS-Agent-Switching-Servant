@@ -103,7 +103,7 @@ export function summarize(rows, options, now = new Date()) {
   ) {
     const day = dayKey(d);
     if (grain === "day")
-      timeline.push({ key: day, day, ...(days.get(day) || empty()) });
+      timeline.push({ key: day, day, current: day === bounds.to, ...(days.get(day) || empty()) });
     else {
       const lastHour = day === bounds.to ? now.getHours() : 23;
       for (let hour = 0; hour <= lastHour; hour += periodHours) {
@@ -112,6 +112,7 @@ export function summarize(rows, options, now = new Date()) {
           key,
           day,
           hour,
+          current: day === bounds.to && hour <= now.getHours() && now.getHours() < hour + periodHours,
           label: `${day} ${String(hour).padStart(2, "0")}:00–${String(hour + periodHours).padStart(2, "0")}:00`,
           ...(hours.get(key) || empty()),
         });

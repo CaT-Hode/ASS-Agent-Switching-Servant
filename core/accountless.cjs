@@ -56,8 +56,21 @@ function claudeModelSettings(providers, selected) {
     label: label + (cliModel !== model ? ' [1m]' : ''), description }));
   const entry = rows.find(m => m.model === selected || m.cliModel === selected);
   if (!entry) throw Error("启动模型不在已注入的模型列表中");
+  const window = row => Number.isSafeInteger(row.contextWindow) && row.contextWindow > 0
+    ? Math.max(100000, Math.min(1000000, Math.floor(row.contextWindow * 95 / 100))) : undefined;
+  // CC keys known Claude models by canonical name, including routed/[1m] IDs.
+  // Keep the selected deployment last when multiple routes share that identity.
+  const modelSettings = Object.fromEntries([...rows.filter(row => row !== entry), entry]
+    .filter(row => window(row) !== undefined).map(row => [
+      row.claudeIdentity?.canonical.replace(/-20\d{6}$/, '') || row.model.toLowerCase(),
+      { autoCompactWindow: window(row) },
+    ]));
   return {
     model: entry.cliModel,
+    // Claude Code accepts 100K–1M here and reserves its own output/summary
+    // headroom. Set the window itself; a percentage override would compound it.
+    ...(window(entry) !== undefined ? { autoCompactWindow: window(entry) } : {}),
+    modelSettings,
     availableModels: options.map((m) => m.model),
     enforceAvailableModels: true,
     // Older CC releases use the allowlist plus gateway discovery. v2.1.242+

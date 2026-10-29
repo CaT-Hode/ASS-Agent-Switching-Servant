@@ -89,6 +89,8 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     await widget.waitForSelector('.widget-heatcell');
     assert.equal(await widget.locator('.widget-close').count(), 0);
     assert.equal(await widget.locator('.widget-heatcell').count(), 24);
+    assert.equal(await widget.locator('.widget-heatcell[data-current="true"][aria-current="time"]').count(), 1);
+    assert.ok((await widget.locator('.widget-heatcell[data-current="true"]').evaluate(cell => getComputedStyle(cell).boxShadow)).includes('1px'));
     assert.equal(await widget.locator('.widget-heatcell').evaluateAll(cells => cells.every(cell => cell.textContent === '')), true);
     const heatPositions = await widget.locator('.widget-heatcell').evaluateAll(cells => cells.slice(0, 4).map(cell => {
       const { x, y } = cell.getBoundingClientRect();return { x, y };
@@ -103,11 +105,25 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
       const cell = panel.querySelector('.widget-heatcell'), last = panel.querySelector('.widget-heatcell:last-child');
       const outer = panel.getBoundingClientRect(), first = cell.getBoundingClientRect(), end = last.getBoundingClientRect();
       return { outer: parseFloat(getComputedStyle(panel).borderTopLeftRadius), inner: parseFloat(getComputedStyle(cell).borderTopLeftRadius),
-        left: first.left - outer.left, bottom: outer.bottom - end.bottom };
+        left: first.left - outer.left, bottom: outer.bottom - end.bottom,
+        continuous: CSS.supports('corner-shape', 'superellipse(2)') && ['superellipse(2)', 'squircle'].includes(getComputedStyle(panel).cornerShape) };
     });
-    assert.ok(Math.abs(corners.left + corners.inner - corners.outer) < 1, 'inner and outer corner centers align horizontally');
-    assert.ok(Math.abs(corners.bottom + corners.inner - corners.outer) < 1, 'bottom corners use the same inset geometry: ' + JSON.stringify(corners));
+    assert.ok(Math.abs(corners.left - 16) < 1 && Math.abs(corners.bottom - 16) < 1, 'compact content uses matching 16px edge gaps');
+    assert.equal(corners.inner, 5, 'heat cells retain rectangular sides rather than capsule ends');
+    assert.ok(corners.continuous, 'foreground supports continuous corners matching native glass');
     await widget.waitForFunction(() => document.querySelector('.widget-panel').dataset.glass === 'true', undefined, { timeout: 10000 });
+    const widgetBounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .find(window => window.webContents.getURL().includes('request-widget.html')).getContentBounds());
+    const anchored = await widgetBounds();
+    await widget.evaluate(() => window.requestWidget.layout(5));
+    await widget.waitForFunction(() => innerHeight >= 254);
+    const expanded = await widgetBounds();
+    assert.ok(Math.abs(expanded.y + expanded.height - anchored.y - anchored.height) <= 1, 'actual foreground bottom stays anchored while growing');
+    await widget.evaluate(() => window.requestWidget.layout(1));
+    await widget.waitForFunction(() => innerHeight <= 141);
+    const collapsed = await widgetBounds();
+    assert.ok(Math.abs(collapsed.y + collapsed.height - anchored.y - anchored.height) <= 1, 'actual foreground bottom stays anchored while shrinking');
+    await widget.evaluate(() => window.requestWidget.layout(document.querySelectorAll('.widget-row-slot').length));
     assert.equal(await widget.evaluate(() => typeof window.ass), 'undefined', 'widget cannot access the full application bridge');
     await widget.locator('.widget-heatcell').first().hover();
     await widget.getByRole('tooltip').waitFor();

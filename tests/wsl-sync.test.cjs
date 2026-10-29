@@ -26,8 +26,12 @@ test('WSL projections use Linux paths and gateway auth, keep CC 1M choices and p
   const ccPlan = planFiles(cc, [], { [cc[0].file]: '{"env":{"KEEP":"kept"},"permissions":{"deny":["Bash(rm *)"]}}' });
   const settings = JSON.parse(ccPlan.files[0].after);
   assert.equal(settings.model, 'relay::claude-sonnet-4-6[1m]');
+  assert.equal(settings.autoCompactWindow, 950000);
+  assert.equal(settings.modelSettings['claude-sonnet-4-6'].autoCompactWindow, 950000);
   assert.equal(settings.env.ANTHROPIC_BASE_URL, base + '/clients/claude/models');
   assert.equal(settings.env.KEEP, 'kept');assert.deepEqual(settings.permissions.deny, ['Bash(rm *)']);
+  const restored = planFiles([], ccPlan.records, { [cc[0].file]: ccPlan.files[0].after });
+  assert.equal(JSON.parse(restored.files[0].after).autoCompactWindow, undefined);
   const pi = projection('pi', { files: [{ name: 'models.json', fields: [{ keys: ['providers', 'ass-fixture'], value: { baseUrl: 'https://fixture.invalid' } }] }] }, info, base);
   assert.equal(pi[0].file, '/home/test/.pi/agent/models.json');
   assert.equal(pi[0].fields[0].value.baseUrl, 'https://fixture.invalid');

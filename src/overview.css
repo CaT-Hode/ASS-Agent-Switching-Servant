@@ -132,6 +132,8 @@
   --usage-level-2: light-dark(#61b8df, #74509b);
   --usage-level-3: light-dark(#218dc0, #9f76c7);
   --usage-level-4: light-dark(#155d85, #c79aed);
+  --heat-current-edge: light-dark(#227ca6, #d6aaff);
+  --heat-current-glow: light-dark(#168dc24d, #bb82f068);
   margin-top: 26px;
   --cell-gap: 4px;
 }
@@ -180,11 +182,16 @@
   min-width: 0;
   transition:
     filter 0.12s,
-    transform 0.12s;
+    transform 0.12s,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+.heatmap-cell[data-current="true"] {
+  border-color: var(--heat-current-edge);
+  box-shadow: 0 0 0 1px var(--heat-current-edge), 0 0 8px var(--heat-current-glow), inset 0 0 4px var(--heat-current-glow);
 }
 .heatmap-cell:hover,
-.heatmap-cell:focus-visible,
-.heatmap-cell.selected {
+.heatmap-cell:focus-visible {
   filter: brightness(0.93);
   outline: 2px solid var(--usage-level-3);
   outline-offset: 1px;

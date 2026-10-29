@@ -71,7 +71,7 @@ function projection(id, source, info, base) {
   if (id === 'claude') {
     const selected = source.plan.defaultModel?.model;
     if (!selected) throw Error('请先同步 Windows Claude Code 接入');
-    const settings = claudeModelSettings(source.plan.providers, selected);
+    const { modelSettings, ...settings } = claudeModelSettings(source.plan.providers, selected);
     const env = { ...claudeModelEnv(source.plan.providers, selected, source.plan.autoModeModel),
       ANTHROPIC_BASE_URL: base + '/clients/claude/models', ANTHROPIC_AUTH_TOKEN: source.token,
       ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_CUSTOM_HEADERS: '',
@@ -79,6 +79,7 @@ function projection(id, source, info, base) {
       CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     return [{ ...fields('settings.json', settings), fields: [
       ...Object.entries(settings).map(([key, value]) => ({ keys: [key], value })),
+      ...Object.entries(modelSettings).map(([model, value]) => ({ keys: ['modelSettings', model, 'autoCompactWindow'], value: value.autoCompactWindow })),
       ...Object.entries(env).map(([key, value]) => ({ keys: ['env', key], value })),
     ] }];
   }

@@ -30,6 +30,15 @@ float4 sampleAt(float2 p) {
  float2 size=history.z>0?history.zw:viewport.xy+2*viewport.ww;
  return desktop.SampleLevel(linearSampler,(p+viewport.ww)/size,0);
 }
+// Fourth-power corners meet straight edges with zero curvature, matching
+// CSS corner-shape: superellipse(2). Normalize the field near the contour.
+float continuousInside(float2 p,float2 size,float r) {
+ float2 q=abs(p-size*.5)-(size*.5-r),v=max(q,0);
+ if(max(q.x,q.y)<=0)return r-max(q.x,q.y);
+ float2 square=v*v;float n=sqrt(sqrt(dot(square,square)));
+ float gradient=length(v*square)/max(n*n*n,.000001);
+ return (r-n)/max(gradient,.000001);
+}
 float materialBlur(float2 p) {
  float blur=0;
  [unroll]for(int i=0;i<2;i++)if(i<shape.w){
@@ -37,8 +46,8 @@ float materialBlur(float2 p) {
   float2 size=(r.zw-(g.xy-1)*g.zw)/g.xy;
   float2 local=p-r.xy,index=floor(local/(size+g.zw));
   if(all(index>=0)&&all(index<g.xy)){
-   float2 cellPoint=local-index*(size+g.zw),q=abs(cellPoint-size*.5)-(size*.5-min(materialSurface[i].x,min(size.x,size.y)*.5));
-   float inside=min(materialSurface[i].x,min(size.x,size.y)*.5)-length(max(q,0))-min(max(q.x,q.y),0);
+   float2 cellPoint=local-index*(size+g.zw);
+   float inside=continuousInside(cellPoint,size,min(materialSurface[i].x,min(size.x,size.y)*.5));
    blur=max(blur,saturate(inside+.5)*materialSurface[i].y);
   }
  }
@@ -164,8 +173,7 @@ float3 applyColorReflection(float3 baseColor,float4 reflected,float mask,float s
  return lerp(vivid,vividLuma.xxx,softening);
 }
 float sdRoundedRect(float2 p,float2 size) {
- float r=optics.x;float2 q=abs(p-size/2)-(size/2-r);
- return r-length(max(q,0))-min(max(q.x,q.y),0);
+ return continuousInside(p,size,optics.x);
 }
 float2 deformed(float2 p){
  p*=float2(1+.006*shape.z,1-.022*shape.z);
@@ -185,13 +193,15 @@ float4 ProbePS(Vary input):SV_TARGET {
 }
 float4 LensPS(Vary input):SV_TARGET {
  float2 p=input.uv*viewport.xy,center=viewport.xy/2,q=p-center;
- [unroll]for(int i=0;i<2;i++)q-=deformed(q)-(p-center);
+ [branch]if(any(shape.xyz!=0)){
+  [unroll]for(int i=0;i<2;i++)q-=deformed(q)-(p-center);
+ }
  float2 u=q+center;
  float inside=min(sdRoundedRect(u,viewport.xy),sdRoundedRect(p,viewport.xy));
  float alpha=saturate(inside+.5);if(alpha<=0)return 0;
  float radius=optics.x;
  float2 d=abs(u-center)-(viewport.xy/2-radius),o=max(d,0);
- float len=length(o);
+ o=o*o*o;float len=length(o);
  float2 normal=len>.0001?o/len*sign(u-center):(d.x>d.y?float2(sign(q.x),0):float2(0,sign(q.y)));
  float bezel=optics.y,thickness=optics.z,displacement=0;
  if(inside<bezel){
@@ -217,6 +227,13 @@ float4 LensPS(Vary input):SV_TARGET {
  float darkScene=1-smoothstep(.16,.52,light.w);
  float bright=smoothstep(.28,.82,light.w);
  float scale=viewport.z;
+ float local=dot(c,float3(.2126,.7152,.0722));
+ float veil=saturate((appearance.y*(.62+bright*4))*(1-.55*darkScene));
+ float3 veilColor=lerp(float3(.014,.017,.020),float3(.965,.972,.975),bright);
+ c=lerp(c,veilColor,veil);
+ // Past 18 DIP the widest edge lobe is below 1e-7. Keep refraction and
+ // full-resolution local blur, but skip the nine-region edge-light shader.
+ [branch]if(inside>18*scale)return float4(saturate(c)*alpha,alpha);
  // In light scenes keep the visible edge near one physical pixel; the broad
  // kube bloom would otherwise become a heavy painted outline.
  float innerWidth=lerp(.82*scale,.55,bright);
@@ -224,7 +241,6 @@ float4 LensPS(Vary input):SV_TARGET {
  float middle=exp(-pow((inside-1.75*scale)/(1.25*scale),2))*lerp(1,.35,bright);
  float bloom=exp(-pow((inside-4.4*scale)/(3.4*scale),2))*lerp(1,.22,bright);
  float rim=saturate(inner+middle*.52+bloom*.38);
- float local=dot(c,float3(.2126,.7152,.0722));
  float lightPower;float4 surrounding=surroundingLight(p/viewport.xy,normal,lightPower);
  float4 reflected=colorReflection(surrounding,cursorLight(p/viewport.xy,normal));
  float darkContent=saturate(1-local*1.15);
@@ -237,9 +253,6 @@ float4 LensPS(Vary input):SV_TARGET {
  // Colored surroundings suppress the neutral specular component so it
  // cannot wash vivid reflections back toward white.
  highlight*=1-.8*smoothstep(.002,.035,reflected.a);
- float veil=saturate((appearance.y*(.62+bright*4))*(1-.55*darkScene));
- float3 veilColor=lerp(float3(.014,.017,.020),float3(.965,.972,.975),bright);
- c=lerp(c,veilColor,veil);
  c=saturate(c+highlight*appearance.z*(1+.18*bright)*(1-bright));
  // Colored reflections replace the fixed near-white light-scene edge.
  // Bounded blending keeps pastel tint visible without clipping to white.

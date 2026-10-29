@@ -423,6 +423,7 @@ test("weekly hours plus daily-only records reconcile without fabricating midnigh
     assert.equal(s.timeline[24].observations, 0);
     assert.equal(s.dailyOnly[0].day, "2026-09-22");
     assert.equal(s.timeline.at(-1).label, "2026-09-22 12:00–13:00");
+    assert.deepEqual(s.timeline.filter(d => d.current).map(d => d.key), ["2026-09-22T12"]);
     assert.ok(!s.timeline.some((d) => d.hour > 12 && d.day === "2026-09-22"));
   }
   const dsh = summarize(

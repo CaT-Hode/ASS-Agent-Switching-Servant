@@ -27,7 +27,8 @@ before(async () => {
       usage: { inputTokens: 1000, outputTokens: 120, reasoningTokens: 20, cacheReadTokens: 600, cacheWriteTokens: 0 } }));
     window.reads = 0;
     window.ass = { call: async name => { if (name !== 'request-monitor') throw Error('Unexpected IPC'); window.reads++;
-      return { rows: structuredClone(window.rows), active: structuredClone(window.active || []), limit: 5000, error: '' }; } };
+      return { rows: structuredClone(window.rows), active: structuredClone(window.active || []),
+        archive: window.omitArchive ? undefined : structuredClone(window.archive || []), archived: window.archived || 0, limit: 200, error: '' }; } };
   });
   await page.goto('file:///' + path.join(root, 'index.html').replaceAll('\\', '/'));
 });
@@ -137,5 +138,34 @@ test('ongoing row updates TPS/elapsed and selected details every second, freezes
   await page.waitForFunction(() => !document.querySelector('tr[data-in-progress]'));
   assert.equal(await page.getByRole('button', { name: '查看 live-model 请求详情', exact: true }).count(), 1);
   assert.match(await page.getByRole('region', { name: '请求详情' }).textContent(), /可见输出 TPS26\.7/);
+  assert.deepEqual(errors, []);
+});
+
+test('trend and both summaries include archived requests even when the provider has no retained details', async () => {
+  await page.evaluate(() => {
+    const time = new Date(Date.now() - 300000).toISOString();
+    window.rows = Array.from({ length: 200 }, (_, i) => ({ ...window.rows[0], requestId: 'recent-' + i,
+      time, model: 'current/visible', source: 'Current provider', inProgress: false, ok: true, taskOk: true }));
+    window.archive = [{ time, model: 'old/provider/vendor/gemini-4-argon[1m]', source: 'Archived provider', client: 'codex', ok: true,
+      stats: { calls: 50, completed: 50, passed: 50, input: 5000, output: 500, inputSamples: 50, outputSamples: 50,
+        usageSamples: 50, visibleTokens: 500, visibleMs: 10000, tpsSamples: 50 } }];
+    window.archived = 50;window.bump();
+  });
+  await page.getByText('250 个请求', { exact: true }).waitFor();
+  assert.match(await page.getByRole('region', { name: '请求与吞吐趋势' }).getByRole('img').getAttribute('aria-label'), /250 个请求/);
+  await page.getByRole('button', { name: '模型汇总', exact: true }).click();
+  await page.getByText('gemini-4-argon', { exact: true }).waitFor();
+  await page.getByRole('combobox', { name: '筛选供应商' }).selectOption('Archived provider');
+  await page.getByText('50 个请求', { exact: true }).waitFor();
+  assert.equal(await page.locator('tbody > tr').count(), 1);
+  await page.getByRole('button', { name: '供应商汇总', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('tbody > tr > td')?.textContent === 'Archived provider');
+  assert.equal(await page.locator('tbody > tr > td').first().textContent(), 'Archived provider');
+  await page.evaluate(() => { window.omitArchive = true; window.bump(); });
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('tbody > tr > td').first().textContent(), 'Archived provider', 'unchanged IPC revisions retain the archive');
+  await page.getByRole('button', { name: '请求明细', exact: true }).click();
+  await page.getByText('没有符合条件的请求', { exact: true }).waitFor();
+  await page.getByText('50 个请求', { exact: true }).waitFor();
   assert.deepEqual(errors, []);
 });

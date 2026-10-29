@@ -44,11 +44,13 @@ typedef struct DG_Stats {
     int presented_x_px, presented_y_px;
     double render_to_present_ms; /* CPU submit to successful DXGI Present, not display latency */
     int presented_width_px, presented_height_px;
+    uint64_t light_history_resets;
 } DG_Stats;
 
 /* The owner HWND must remain valid. Create/source changes/Present/SetVisible/Destroy on its UI
    thread. Render may use a COM-initialized worker; join it before Destroy.
-   Public operations on one handle are serialized. Stop issuing calls before
+   GPU operations on one handle are serialized. PositionWithOwner touches only
+   UI geometry and may run during worker rendering. Stop/join rendering before
    destroying the handle. The host owns input, foreground, shadows and layout. */
 /* On session lock: stop/join rendering and destroy on the UI thread. On unlock:
    recreate and reselect the SAME authorized monitor/scope. Retry transient
@@ -60,6 +62,10 @@ DG_API HRESULT __cdecl DG_Destroy(DG_Handle handle);
 /* Change the visible viewport within the capacity passed to Create. Keeps the
    capture session, device, swap chain and textures alive during size animation. */
 DG_API HRESULT __cdecl DG_SetViewport(DG_Handle handle, int width_px, int height_px);
+/* UI geometry only: moves the foreground and material together, before capture.
+   inset_px is the foreground's transparent margin around the glass viewport. */
+DG_API HRESULT __cdecl DG_PositionWithOwner(DG_Handle handle, int x_px, int y_px,
+    int width_px, int height_px, int inset_px);
 
 /* Call after the host/user chooses an allowed monitor. Adjacent monitors are
    included only when explicitly requested; prefer_dxgi=0 selects WGC only. */
@@ -74,10 +80,15 @@ DG_API HRESULT __cdecl DG_ClearSource(DG_Handle handle);
 /* x/y are the physical desktop origin of the viewport. S_OK submits/presents a
    frame; S_FALSE means no completed/source frame or no free slot yet. */
 DG_API HRESULT __cdecl DG_Render(DG_Handle handle, int x_px, int y_px, const DG_Parameters* parameters);
+/* Worker-safe viewport and draw submission as one immutable geometry job. */
+DG_API HRESULT __cdecl DG_RenderViewport(DG_Handle handle, int x_px, int y_px,
+    int width_px, int height_px, const DG_Parameters* parameters);
+/* Present returns S_FALSE rather than waiting behind an active render. */
 DG_API HRESULT __cdecl DG_Present(DG_Handle handle);
 /* Hide releases active capture sessions; Show resumes the selected source. */
 DG_API HRESULT __cdecl DG_SetVisible(DG_Handle handle, BOOL visible);
 DG_API HRESULT __cdecl DG_GetStats(DG_Handle handle, DG_Stats* stats);
+DG_API HRESULT __cdecl DG_TryGetStats(DG_Handle handle, DG_Stats* stats);
 DG_API HWND __cdecl DG_GetCompositionWindow(DG_Handle handle);
 DG_API HRESULT __cdecl DG_ExcludeWindowFromCapture(HWND window);
 DG_API void __cdecl DG_LastError(char* destination, int capacity);

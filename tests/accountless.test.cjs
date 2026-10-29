@@ -130,7 +130,10 @@ test("Claude terminal overlay persists, preserves OAuth and unrelated settings, 
 
 test("Claude CLI defaults and auto review sync independently, use applied choices and restore native values", async t => {
   const f = fixture(t), settingsFile = path.join(f.manager.nativeHome, '.claude/settings.json');
-  const original = { model: 'official-original', permissions: { deny: ['Bash(rm *)'] }, env: {
+  const provider = f.store.state.providers[0];
+  f.store.updateProvider({ ...provider, models: provider.models.map(m => ({ ...m,
+    contextWindow: m.model === 'test-chat' ? 200000 : 1000000 })) });
+  const original = { model: 'official-original', autoCompactWindow: 450000, permissions: { deny: ['Bash(rm *)'] }, env: {
     CLAUDE_CODE_AUTO_MODE_MODEL: 'original-review', CLAUDE_CODE_AUTO_MODE_SERVER: '1', KEEP: 'keep' } };
   atomic(settingsFile, JSON.stringify(original));
   const main = modelRef('relay', 'test-chat'), review = modelRef('relay', 'test-claude');
@@ -139,32 +142,41 @@ test("Claude CLI defaults and auto review sync independently, use applied choice
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile)), original, 'ordinary injection leaves native login configuration alone');
   const normal = f.manager.modelPlan('claude', main, 'synthetic-local');
   assert.equal(normal.env.ANTHROPIC_MODEL, 'relay::test-chat');
-  assert.equal(normal.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude');
-  assert.equal(normal.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'relay::test-claude');
+  assert.equal(normal.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude[1m]');
+  assert.equal(normal.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'relay::test-claude[1m]');
   assert.equal(normal.env.CLAUDE_CODE_AUTO_MODE_SERVER, '0');
+  assert.equal(JSON.parse(normal.files.find(([name]) => name === 'settings.json')[1]).autoCompactWindow, 190000);
   assert.ok(!normal.args.some(a => /skip-permissions|permission-mode/.test(a)));
   await f.apply('claude', true);
   let settings = JSON.parse(fs.readFileSync(settingsFile));
   assert.equal(settings.model, 'relay::test-chat');
-  assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude');
+  assert.equal(settings.autoCompactWindow, 190000);
+  assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude[1m]');
+  assert.equal(settings.modelSettings['relay::test-chat'].autoCompactWindow, 190000);
+  assert.equal(settings.modelSettings['relay::test-claude'].autoCompactWindow, 950000);
+  settings.modelSettings['relay::test-chat'].effortLevel = 'high';
+  atomic(settingsFile, JSON.stringify(settings));
   assert.deepEqual(settings.permissions, original.permissions);
   const before = fs.readFileSync(settingsFile);
   f.manager.setInjection('claude', { defaultModel: review, autoModeModel: main });
   assert.equal(f.proxy.status('claude', true).pending, true);
   assert.deepEqual(fs.readFileSync(settingsFile), before, 'drafts do not change the native terminal');
   f.proxy.repair('claude');
-  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude', 'repair keeps the applied reviewer');
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude[1m]', 'repair keeps the applied reviewer');
   await f.apply('claude');
   settings = JSON.parse(fs.readFileSync(settingsFile));
-  assert.equal(settings.model, 'relay::test-claude');
+  assert.equal(settings.model, 'relay::test-claude[1m]');
+  assert.equal(settings.autoCompactWindow, 950000);
   assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-chat');
   const plan = f.manager.accountlessPlan('claude', 'ignored');
-  assert.deepEqual(plan.args.slice(0, 2), ['--model', 'relay::test-claude']);
+  assert.deepEqual(plan.args.slice(0, 2), ['--model', 'relay::test-claude[1m]']);
+  assert.equal(JSON.parse(plan.files.find(([name]) => name === 'settings.json')[1]).autoCompactWindow, 950000);
   assert.equal(plan.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-chat');
   f.manager.setInjection('claude', { autoModeModel: null }); await f.apply('claude');
-  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude');
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude[1m]');
   await f.apply('claude', false);
-  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile)), original);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile)), { ...original,
+    modelSettings: { 'relay::test-chat': { effortLevel: 'high' } } });
 });
 
 test('Claude model terminals pass 1M CLI selections without changing the stored provider ID or ordinary reviewer', async t => {

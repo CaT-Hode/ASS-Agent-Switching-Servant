@@ -1,6 +1,7 @@
 const fs = require('node:fs'), path = require('node:path');
 const { requestTps, visibleOutputTokens } = require('./request-metrics.cjs');
 const { atomic } = require('./config.cjs');
+const { emptyStats, addRequestStats, requestOK } = require('./request-stats.mjs');
 const MAX_RECORDS = 200;
 // The monitor reads only numeric
 // measurements and routing labels; it never exposes raw upstream payloads.
@@ -27,6 +28,26 @@ function publicRecord(record) {
 class RequestHistory {
   constructor(dataDir) {
     this.file = path.join(dataDir, 'requests.jsonl'); this.rows = []; this.revision = 0; this.error = '';
+    this.stateFile = path.join(dataDir, 'request-history.json');
+    this.archive = new Map(); this.archived = 0; this.archiveView = null;
+    try {
+      const state = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
+      if (state.version !== 1 || !Array.isArray(state.rows) || !Array.isArray(state.archive)) throw Error('Invalid history');
+      for (const bucket of state.archive) {
+        if (!bucket.model || !Number.isFinite(Date.parse(bucket.time)) || !Number.isSafeInteger(bucket.stats?.calls) || bucket.stats.calls < 1)
+          throw Error('Invalid archive');
+        const stats = emptyStats(); addRequestStats(stats, bucket);
+        this.archive.set(this.archiveKey(bucket), { ...bucket, stats }); this.archived += stats.calls;
+      }
+      for (const record of state.rows) { const row = publicRecord(record); if (row) this.accept(row); }
+      return;
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        this.archive.clear();this.archived = 0;this.rows = [];
+        this.archiveReadError = '请求归档无法读取，已保留原文件；当前仅显示可读取的明细。';
+        this.error = this.archiveReadError;
+      }
+    }
     let compact = false;
     for (const file of [this.file + '.previous', this.file]) {
       try {
@@ -35,8 +56,8 @@ class RequestHistory {
         for (const line of text.split(/\r?\n/)) {
           if (!line) continue;
           try { const row = publicRecord(JSON.parse(line)); if (row) {
-            this.rows.push(row);
-            if (this.rows.length > MAX_RECORDS) { this.rows.shift();compact = true; }
+            if (this.rows.length >= MAX_RECORDS) compact = true;
+            this.accept(row);
           } }
           catch { this.error = '部分旧请求记录无法读取，已保留其余记录。'; }
         }
@@ -44,21 +65,42 @@ class RequestHistory {
     }
     if (compact) {
       try { this.persist(); }
-      catch { this.error = '旧请求明细清理失败，当前仅显示最近 200 条。'; }
+      catch { this.error = this.archiveReadError || '请求归档保存失败，当前运行的统计仍可用。'; }
     }
   }
+  archiveKey(row) { return JSON.stringify([row.time, row.model, row.source, row.client, row.ok]); }
+  accept(row) {
+    this.rows.push(row);
+    if (this.rows.length <= MAX_RECORDS) return;
+    const retired = this.rows.shift(), timestamp = Date.parse(retired.time);
+    if (!Number.isFinite(timestamp) || retired.operation === 'count_tokens') return;
+    const label = { time: new Date(Math.floor(timestamp / 60000) * 60000).toISOString(), model: retired.model,
+      source: retired.source || '未标注', client: retired.client || 'unknown', ok: requestOK(retired) };
+    const key = this.archiveKey(label);
+    if (!this.archive.has(key)) this.archive.set(key, { ...label, stats: emptyStats() });
+    addRequestStats(this.archive.get(key).stats, retired); this.archived++; this.archiveView = null;
+  }
   persist() {
+    if (this.archiveReadError) throw Error(this.archiveReadError);
+    // One atomic ledger owns both the archive and the retained tail. The JSONL
+    // below is a compatibility mirror, never re-imported once the ledger exists.
+    // This prevents counting an evicted row twice after an interrupted mirror write.
+    atomic(this.stateFile, JSON.stringify({ version: 1, archive: this.snapshot().archive, rows: this.rows },
+      (key, value) => key === 'stats' ? Object.fromEntries(Object.entries(value).filter(([, v]) => v !== 0 && v !== false)) : value));
     atomic(this.file, this.rows.map(row => JSON.stringify(row) + '\n').join(''));
     fs.rmSync(this.file + '.previous', { force: true });
   }
   append(record) {
     const row = publicRecord(record);
     if (!row) return;
-    this.rows.push(row); if (this.rows.length > MAX_RECORDS) this.rows.shift(); this.revision++;
+    this.accept(row); this.revision++;
     try {
       this.persist();
-    } catch { this.error = '请求历史写入失败，当前运行的监控仍可用，重启后可能缺少记录。'; }
+    } catch { this.error = this.archiveReadError || '请求历史写入失败，当前运行的监控仍可用，重启后可能缺少记录。'; }
   }
-  snapshot() { return { rows: this.rows, revision: this.revision, error: this.error, limit: MAX_RECORDS }; }
+  snapshot() {
+    this.archiveView ||= [...this.archive.values()];
+    return { rows: this.rows, archive: this.archiveView, archived: this.archived, revision: this.revision, error: this.error, limit: MAX_RECORDS };
+  }
 }
 module.exports = { RequestHistory, publicRecord };

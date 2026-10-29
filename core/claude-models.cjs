@@ -25,7 +25,7 @@ function claudeModels(providers) {
       // provider routing; no provider name can trigger its vendor exclusion.
       const discoveryId = identity ? `ass-${alias(model).slice(PREFIX.length)}.anthropic.${identity.canonical}` : alias(model);
       const efforts = identity && Array.isArray(m.efforts) ? EFFORTS.filter(e => m.efforts.includes(e)) : [];
-      return { model, cliModel: model + (context1m ? '[1m]' : ''), discoveryId,
+      return { model, cliModel: model + (context1m ? '[1m]' : ''), discoveryId, contextWindow: m.contextWindow,
         label: p.name + " · " + (m.displayName || m.model), description: m.model,
         ...(identity ? { claudeIdentity: identity } : {}),
         // This is the deployment's configured capability, not a claim that we

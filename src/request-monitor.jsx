@@ -5,7 +5,7 @@ import { transitionUI, Presence } from './surface-motion.jsx';
 import { PROTOCOL_NAMES, clientName, providerName, requestOK, requestKey, phaseName, known, fmt, seconds, monitorRows, summarizeRequests,
   aggregateTps, currentTps, cacheRate, meanTtft, requestTimeline } from './request-monitor-view.mjs';
 import './request-monitor.css';
-const EMPTY = { rows: [], active: [], error: '', limit: 200 };
+const EMPTY = { rows: [], active: [], archive: [], archived: 0, error: '', limit: 200 };
 const PAGESIZE = 25;
 const percent = value => known(value) ? fmt(value, 1) + '%' : '—';
 const time = value => new Date(value).toLocaleTimeString('zh-CN', { hour12: false });
@@ -72,7 +72,7 @@ export function RequestMonitor({ state }) {
         const next = await window.ass.call('request-monitor', revision.current);
         if (!cancelled) {
           revision.current = next.revision;
-          setHistory(current => ({ ...next, rows: next.rows || current.rows, active: next.active || [] }));
+          setHistory(current => ({ ...next, rows: next.rows || current.rows, archive: next.archive || current.archive, active: next.active || [] }));
           setLoadError(''); setNow(next.now || Date.now());
         }
       } catch (error) { if (!cancelled) setLoadError(error.message); }
@@ -85,11 +85,13 @@ export function RequestMonitor({ state }) {
   }, [paused]);
   useEffect(() => { refresh.current?.(); }, [state.requestRevision]);
   const allRows = useMemo(() => [...history.active, ...history.rows], [history.active, history.rows]);
+  const allStatsRows = useMemo(() => [...allRows, ...history.archive], [allRows, history.archive]);
   const rows = useMemo(() => monitorRows(allRows, options, now), [allRows, options, now]);
-  const summary = useMemo(() => summarizeRequests(rows, group === 'provider' ? 'provider' : 'model'), [rows, group]);
-  const buckets = useMemo(() => requestTimeline(rows, options.range, now), [rows, options.range, now]);
-  const providers = useMemo(() => [...new Set(allRows.map(providerName))].sort(), [allRows]);
-  const clients = useMemo(() => [...new Set(allRows.map(row => row.client || 'unknown'))].sort(), [allRows]);
+  const statsRows = useMemo(() => monitorRows(allStatsRows, options, now), [allStatsRows, options, now]);
+  const summary = useMemo(() => summarizeRequests(statsRows, group === 'provider' ? 'provider' : 'model'), [statsRows, group]);
+  const buckets = useMemo(() => requestTimeline(statsRows, options.range, now), [statsRows, options.range, now]);
+  const providers = useMemo(() => [...new Set(allStatsRows.map(providerName))].sort(), [allStatsRows]);
+  const clients = useMemo(() => [...new Set(allStatsRows.map(row => row.client || 'unknown'))].sort(), [allStatsRows]);
   const selectedRow = selected && allRows.find(row => requestKey(row) === selected);
   const total = summary.total, maxPage = Math.max(0, Math.ceil(rows.length / PAGESIZE) - 1), currentPage = Math.min(page, maxPage);
   const patch = update => { setOptions(current => ({ ...current, ...update })); setPage(0); setSelected(null); };
@@ -109,9 +111,9 @@ export function RequestMonitor({ state }) {
           <Monitor size={14} />悬浮窗</button>
         <button className="button" onClick={() => setPaused(value => !value)}>{paused ? <Play size={14} /> : <Square size={14} />}{paused ? '继续刷新' : '暂停刷新'}</button></div></header>
     <div className="monitor-toolbar"><div className="monitor-range" role="group" aria-label="监控时间范围">
-      {[['hour', '近 1 小时'], ['day', '近 24 小时'], ['week', '近 7 天'], ['all', '全部保留记录']].map(([value, label]) =>
+      {[['hour', '近 1 小时'], ['day', '近 24 小时'], ['week', '近 7 天'], ['all', '全部历史']].map(([value, label]) =>
         <button key={value} aria-pressed={options.range === value} onClick={() => transitionUI(() => patch({ range: value }))}>{label}</button>)}</div>
-      <span className="monitor-retained">已保留 {fmt(history.rows.length)} 条 · 最多 {fmt(history.limit)} 条</span></div>
+      <span className="monitor-retained">明细 {fmt(history.rows.length)} / {fmt(history.limit)} · 已归档 {fmt(history.archived || 0)} 条</span></div>
     {(loadError || history.error) && <p className="error-box" role="alert">{loadError || history.error}</p>}
     <div className="monitor-kpis">{metrics.map(([label, value, icon, hint]) => <section key={label} className="monitor-kpi" aria-label={label}>
       <div><span>{label}</span>{icon}</div><strong>{value}</strong><small>{hint}</small></section>)}</div>
@@ -125,13 +127,13 @@ export function RequestMonitor({ state }) {
     <section className="monitor-panel monitor-log" aria-label="模型请求记录">
       <div className="monitor-log-heading"><div className="monitor-tabs" role="group" aria-label="监控视图">{[['requests', '请求明细'], ['model', '模型汇总'], ['provider', '供应商汇总']].map(([value, label]) =>
         <button key={value} aria-pressed={group === value} onClick={() => transitionUI(() => { setGroup(value); setPage(0); setSelected(null); })}>{label}</button>)}</div>
-        <span className="muted">{fmt(rows.length)} 个请求</span></div>
+        <span className="muted">{fmt(total.calls)} 个请求</span></div>
       <div className="monitor-filters"><label className="monitor-search"><Search size={16} /><input aria-label="搜索模型或供应商" placeholder="搜索模型、供应商或请求 ID" value={options.search} onChange={event => patch({ search: event.target.value })} /></label>
         <select aria-label="筛选供应商" value={options.provider} onChange={event => patch({ provider: event.target.value })}><option value="all">所有供应商</option>{providers.map(name => <option key={name} value={name}>{name}</option>)}</select>
         <select aria-label="筛选客户端" value={options.client} onChange={event => patch({ client: event.target.value })}><option value="all">所有客户端</option>{clients.map(id => <option key={id} value={id}>{clientName(id)}</option>)}</select>
         <select aria-label="筛选请求状态" value={options.status} onChange={event => patch({ status: event.target.value })}><option value="all">所有状态</option><option value="running">进行中</option><option value="success">成功</option><option value="failed">失败</option></select>
         <label className="monitor-diagnostics"><input type="checkbox" checked={options.diagnostics} onChange={event => patch({ diagnostics: event.target.checked })} />含连接测试</label></div>
-      {!rows.length ? <div className="monitor-empty"><Activity size={28} /><h3>{allRows.length ? '没有符合条件的请求' : '等待第一个模型请求'}</h3><p>{allRows.length ? '调整时间范围或筛选条件查看记录。' : '请求开始后，会在这里实时显示状态、耗时和吞吐。'}</p></div> :
+      {!(group === 'requests' ? rows.length : total.calls) ? <div className="monitor-empty"><Activity size={28} /><h3>{allStatsRows.length ? '没有符合条件的请求' : '等待第一个模型请求'}</h3><p>{allStatsRows.length ? '调整时间范围或筛选条件查看记录。' : '请求开始后，会在这里实时显示状态、耗时和吞吐。'}</p></div> :
         <div className="monitor-table-scroll">{group === 'requests' ? <table className="monitor-table"><thead><tr>
           {['时间', '模型 / 协议', '供应商 / 客户端', '输入 / 输出', '缓存读取', '可见 TPS', '首输出', '总耗时', '状态'].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>
           {rows.slice(currentPage * PAGESIZE, (currentPage + 1) * PAGESIZE).map(row => <tr key={requestKey(row)} data-in-progress={row.inProgress || undefined} className={selectedRow && requestKey(selectedRow) === requestKey(row) ? 'selected' : ''}>
@@ -156,6 +158,6 @@ export function RequestMonitor({ state }) {
       <p>已完成请求使用首个至末个可见输出的接收时长，不计首次可见输出前的等待或最后输出后的用量尾包延迟。进行中每秒更新，包含可见输出之间的停顿；需观察到不同时间的输出并采样一秒。单包、非流式或缺少独立计时的数据不测速。汇总以成功请求的可见 token 总数除以其接收时长之和；估算样本参与时汇总也标“≈”。并发卡片为活跃请求接收速率之和。</p>
       <p>全程吞吐保留在详情中，为全部输出 token ÷ 请求总耗时，包含等待与推理。两项都是客户端侧指标，不能还原服务端真实解码速度。旧日志缺少独立可见计时时，主要 TPS 显示“—”，原日志及可查的全程吞吐保留。</p>
       <p>缓存命中率 = 缓存读取 token ÷ 输入 token，只使用报告了缓存数据的请求。Anthropic 输入统一包含缓存读取和写入，缺失字段显示“—”。模型名称沿用 ASS 的最后一级归并，例如 vendor/model 与 model 合为一项，供应商仍单独展示。</p>
-      <p>请求历史沿用本机滚动日志，并最多展示最近 {fmt(history.limit)} 条；时间范围只筛选保留记录。这里仅保存用量数字与路由标签，不记录提示词或回答正文。</p></details>
+      <p>明细最多保留最近 {fmt(history.limit)} 条，超出后按分钟归档统计。趋势、模型与供应商汇总、指标卡片均包含归档，支持时间、模型、供应商、客户端和状态筛选；请求 ID 仅能检索保留的明细。这里仅保存用量数字与路由标签，不记录提示词或回答正文。</p></details>
   </div>;
 }

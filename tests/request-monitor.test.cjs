@@ -131,7 +131,7 @@ test('history reloads current and rotated logs, tolerates one incomplete record 
   assert.equal(reloaded.rows[1].tps, 2); assert.equal(reloaded.rows[1].tpsEstimated, true);
 });
 
-test('request detail FIFO prunes disk and memory to 200 across upgrades and restarts without changing accumulated usage', async t => {
+test('request detail FIFO archives evictions across upgrades and restarts without changing accumulated usage', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-monitor-fifo-'));t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const rows = Array.from({ length: 250 }, (_, i) => ({ requestId: 'request-' + i, model: 'vendor/model', ok: true,
     time: new Date(2026, 9, 29, 9, 0, 249 - i).toISOString(), usage: { inputTokens: 10, outputTokens: 2 } }));
@@ -142,6 +142,7 @@ test('request detail FIFO prunes disk and memory to 200 across upgrades and rest
   fs.writeFileSync(file, rows.slice(150).map(JSON.stringify).join('\n') + '\n');
   const history = new RequestHistory(root);
   assert.equal(history.snapshot().limit, 200);assert.equal(history.snapshot().rows.length, 200);
+  assert.equal(history.snapshot().archived, 50);
   assert.equal(history.snapshot().rows[0].requestId, 'request-50', 'FIFO follows admission order, not a sort by wall-clock time');
   assert.equal(fs.existsSync(file + '.previous'), false, 'old rotated records are physically removed');
   assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 200);
@@ -149,11 +150,48 @@ test('request detail FIFO prunes disk and memory to 200 across upgrades and rest
   const reloaded = new RequestHistory(root).snapshot();
   assert.equal(reloaded.rows.length, 200);assert.equal(reloaded.rows[0].requestId, 'request-51');
   assert.equal(reloaded.rows.at(-1).requestId, 'request-250');
+  assert.equal(reloaded.archived, 51);
+  const { summarizeRequests, requestTimeline } = await import('../src/request-monitor-view.mjs');
+  const all = [...reloaded.rows, ...reloaded.archive];
+  const summary = summarizeRequests(all);
+  assert.equal(summary.total.calls, 251);assert.equal(summary.total.input, 2510);
+  assert.equal(summary.groups[0].name, 'model');
+  assert.equal(requestTimeline(all, 'all', Date.parse(rows[0].time) + 1000).reduce((sum, b) => sum + b.calls, 0), 251);
   assert.equal(fs.readFileSync(usageFile, 'utf8'), cumulative, 'request retention never edits the independent cumulative cache');
   const { todayHeatmap } = await import('../core/request-widget-view.mjs');
   const now = new Date(2026, 9, 29, 12).getTime();
   const usage = { updatedAt: new Date(now).toISOString(), rows: [{ day: '2026-10-29', hour: 9, input: 2500, output: 500 }] };
   assert.equal(todayHeatmap(usage, reloaded.rows, now).total, 3000, 'heatmap keeps the complete accumulated usage after FIFO deletion');
+});
+
+test('archives preserve filter dimensions and weighted throughput/cache totals with no replay after a mirror failure', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-monitor-archive-'));t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const time = '2026-10-29T01:00:20Z', row = { time, model: 'route::vendor/shared[1m]', source: 'Old provider', client: 'claude',
+    ok: true, visibleTokens: 30, visibleMs: 2000, ttftMs: 100, usage: { inputTokens: 100, outputTokens: 40, cacheReadTokens: 60 } };
+  const records = [row, { ...row, model: 'other/shared', visibleTokens: 10, visibleMs: 1000, tpsEstimated: true },
+    { ...row, source: 'Failed provider', ok: false }, { ...row, client: 'diagnostics' }, { ...row, operation: 'count_tokens' },
+    ...Array.from({ length: 200 }, (_, i) => ({ ...row, time: '2026-10-29T02:00:20Z', requestId: 'tail-' + i, source: 'New provider', model: 'another' }))];
+  const file = path.join(root, 'requests.jsonl');fs.writeFileSync(file, records.map(JSON.stringify).join('\n') + '\n');
+  let snapshot = new RequestHistory(root).snapshot();
+  assert.equal(snapshot.rows.length, 200);assert.equal(snapshot.archived, 4);
+  assert.ok(snapshot.archive.every(bucket => !bucket.requestId && !bucket.usage));
+  const { monitorRows, summarizeRequests, aggregateTps, cacheRate, requestTimeline } = await import('../src/request-monitor-view.mjs');
+  const options = { range: 'all', search: 'shared', provider: 'all', client: 'all', status: 'all' }, now = Date.parse('2026-10-29T03:00:00Z');
+  const selected = monitorRows([...snapshot.rows, ...snapshot.archive], options, now);
+  const summary = summarizeRequests(selected);
+  assert.equal(summary.total.calls, 3);assert.equal(summary.total.passed, 2);assert.equal(summary.groups.length, 1);
+  assert.equal(aggregateTps(summary.total), 40 / 3);assert.equal(summary.total.tpsEstimated, true);
+  assert.equal(cacheRate(summary.total), 60);
+  assert.deepEqual(summarizeRequests(selected, 'provider').groups.map(g => [g.name, g.calls]), [['Old provider', 2], ['Failed provider', 1]]);
+  assert.equal(summarizeRequests(monitorRows(snapshot.archive, { ...options, status: 'failed' }, now)).total.calls, 1);
+  assert.equal(summarizeRequests(monitorRows(snapshot.archive, { ...options, client: 'diagnostics', diagnostics: true }, now)).total.calls, 1);
+  assert.equal(summarizeRequests(monitorRows(snapshot.archive, { ...options, range: 'hour' }, now)).total.calls, 0);
+  assert.equal(requestTimeline(selected, 'all', now).reduce((sum, b) => sum + b.calls, 0), 3);
+  // The ledger already committed this tail. A stale mirror must not replay it.
+  fs.writeFileSync(file, records.map(JSON.stringify).join('\n') + '\n');
+  snapshot = new RequestHistory(root).snapshot();
+  assert.equal(snapshot.archived, 4);assert.equal(snapshot.rows.length, 200);
+  assert.equal(summarizeRequests(monitorRows([...snapshot.rows, ...snapshot.archive], { ...options, search: '' }, now)).total.calls, 203);
 });
 
 test('monitor uses existing leaf-name merging, weighted TPS/cache denominators and excludes diagnostics by default', async () => {

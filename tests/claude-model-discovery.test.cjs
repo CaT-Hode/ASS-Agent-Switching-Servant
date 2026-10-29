@@ -44,6 +44,27 @@ test('CLI marks million-token deployments while keeping routing identities and o
   }
 });
 
+test('CLI auto-compact window follows 95 percent of the selected deployment within native limits', () => {
+  const configured = structuredClone(providers);
+  for (const [context, expected] of [[64000, 100000], [128000, 121600], [200000, 190000],
+    [1000000, 950000], [1048576, 996147], [2000000, 1000000]]) {
+    configured[0].models[0].contextWindow = context;
+    const row = claudeModels(configured)[0];
+    const settings = claudeModelSettings(configured, row.cliModel);
+    assert.equal(settings.autoCompactWindow, expected);
+    assert.equal(settings.modelSettings[row.model].autoCompactWindow, expected);
+  }
+  delete configured[0].models[0].contextWindow;
+  assert.equal(claudeModelSettings(configured, 'relay::kimi/messages').autoCompactWindow, undefined);
+});
+
+test('routed Claude versions use the canonical per-model compact key', () => {
+  const configured = structuredClone(providers);
+  configured[0].models = [{ model: 'claude-opus-4-6-20260101', enabled: true, wireApi: 'anthropic', contextWindow: 1000000 }];
+  assert.deepEqual(claudeModelSettings(configured, 'relay::claude-opus-4-6-20260101').modelSettings,
+    { 'claude-opus-4-6': { autoCompactWindow: 950000 } });
+});
+
 test("discovery aliases really call the original model on its negotiated upstream protocol", async t => {
   const calls = [];
   const router = new Router({ getState: () => ({ providers }), fetchUpstream: async (url, init) => {

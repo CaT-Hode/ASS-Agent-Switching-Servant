@@ -32,7 +32,7 @@ class Preferences {
       next.requestWidget = { ...defaults.requestWidget, ...next.requestWidget };
       const value = input.requestWidget;
       if (typeof value.enabled === 'boolean') next.requestWidget.enabled = value.enabled;
-      for (const [key, min, max] of [['width', 320, 640], ['radius', 8, 48], ['rows', 1, 8], ['x', -100000, 100000], ['y', -100000, 100000]])
+      for (const [key, min, max] of [['width', 320, 640], ['radius', 8, 48], ['rows', 1, 8], ['x', -100000, 100000], ['y', -100000, 100000], ['bottom', -100000, 100000]])
         if (Number.isInteger(value[key]) && value[key] >= min && value[key] <= max) next.requestWidget[key] = value[key];
     }
     if (input.conversations && typeof input.conversations === "object") {

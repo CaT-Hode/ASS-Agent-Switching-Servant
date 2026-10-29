@@ -85,6 +85,7 @@ int main(){try{
     auto lit=gpu.Draw("LightPS",10,1,params,source.view.Get());auto light=gpu.Upload(10,1,lit);
     for(float value:lit)Check(std::isfinite(value),"lighting must stay finite");
     auto flat=gpu.Draw("LensPS",width,height,params,source.view.Get(),light.view.Get());
+    Check(flat[(5*width+5)*4+3]>.99f,"continuous corner shoulder must extend beyond the circular arc");
     DG_MaterialConstants local{};local.rect[0][0]=24;local.rect[0][1]=8;local.rect[0][2]=32;local.rect[0][3]=24;
     local.grid[0][0]=local.grid[0][1]=1;local.surface[0][0]=4;local.surface[0][1]=3;
     params.shape[3]=1;auto frosted=gpu.Draw("LensPS",width,height,params,source.view.Get(),light.view.Get(),nullptr,"",&local);params.shape[3]=0;

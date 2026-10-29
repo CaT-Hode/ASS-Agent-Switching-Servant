@@ -1,41 +1,13 @@
 import { usageModelName, CLIENT_NAMES } from './usage-view.mjs';
+import { known, requestOK, emptyStats, addRequestStats as add } from '../core/request-stats.mjs';
+export { known, requestOK, emptyStats };
 export const PROTOCOL_NAMES = { 'openai-responses': 'Responses', 'openai-chat': 'Chat Completions', anthropic: 'Messages' };
 export const clientName = id => id === 'diagnostics' ? '连接测试' : CLIENT_NAMES[id] || '未记录';
 export const providerName = row => row.source || '未标注';
-export const requestOK = row => row.taskOk ?? row.ok ?? false;
 export const requestKey = row => row.requestId || [row.time, row.model, row.source].join(':');
 export const phaseName = row => row.phase === 'streaming' ? '生成中' : row.phase === 'waiting-output' ? '等待首输出' : '等待上游';
-export const known = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export const fmt = (value, digits = 0) => known(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: digits }) : '—';
 export const seconds = value => known(value) ? (value / 1000).toFixed(2) + ' s' : '—';
-export function emptyStats() {
-  return { calls: 0, completed: 0, running: 0, liveTps: 0, liveTpsSamples: 0, liveEstimated: false, passed: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, usageSamples: 0,
-    inputSamples: 0, outputSamples: 0, cacheReadSamples: 0, cacheWriteSamples: 0,
-    cacheSamples: 0, cachedInput: 0, cacheReadForRate: 0, tpsSamples: 0, visibleTokens: 0, visibleMs: 0, tpsEstimated: false, ttftSamples: 0, ttftTotal: 0 };
-}
-function add(stats, row) {
-  stats.calls++;
-  if (row.inProgress) {
-    stats.running++;
-    if (known(row.tps)) { stats.liveTps += row.tps; stats.liveTpsSamples++; stats.liveEstimated ||= row.tpsEstimated; }
-    return;
-  }
-  stats.completed++; if (requestOK(row)) stats.passed++;
-  const usage = row.usage;
-  if (known(usage?.inputTokens) || known(usage?.outputTokens)) stats.usageSamples++;
-  if (known(usage?.inputTokens)) { stats.input += usage.inputTokens; stats.inputSamples++; }
-  if (known(usage?.outputTokens)) { stats.output += usage.outputTokens; stats.outputSamples++; }
-  if (known(usage?.cacheWriteTokens)) { stats.cacheWrite += usage.cacheWriteTokens; stats.cacheWriteSamples++; }
-  if (known(usage?.cacheReadTokens)) { stats.cacheRead += usage.cacheReadTokens; stats.cacheReadSamples++; }
-  if (known(usage?.cacheReadTokens) && known(usage?.inputTokens)) {
-    stats.cacheSamples++; stats.cacheReadForRate += usage.cacheReadTokens; stats.cachedInput += usage.inputTokens;
-  }
-  if (requestOK(row) && known(row.visibleMs) && row.visibleMs > 0 && known(row.visibleTokens)) {
-    stats.tpsSamples++; stats.visibleTokens += row.visibleTokens; stats.visibleMs += row.visibleMs;
-    stats.tpsEstimated ||= row.tpsEstimated === true;
-  }
-  if (known(row.ttftMs)) { stats.ttftSamples++; stats.ttftTotal += row.ttftMs; }
-}
 export const aggregateTps = stats => stats.visibleMs > 0 ? stats.visibleTokens * 1000 / stats.visibleMs : null;
 export const currentTps = stats => stats.running ? stats.liveTpsSamples ? stats.liveTps : null : aggregateTps(stats);
 export const cacheRate = stats => stats.cacheSamples && stats.cachedInput > 0 ? stats.cacheReadForRate / stats.cachedInput * 100 : null;
@@ -64,7 +36,7 @@ export function summarizeRequests(rows, group = 'model') {
 }
 export function requestTimeline(rows, range, now = Date.now()) {
   const start = range === 'hour' ? now - 3600000 : range === 'day' ? now - 86400000 : range === 'week' ? now - 7 * 86400000 :
-    Math.min(now - 3600000, ...rows.map(row => Date.parse(row.time)));
+    rows.reduce((start, row) => Math.min(start, Date.parse(row.time)), now - 3600000);
   const step = (now - start) / 30 || 1;
   const buckets = Array.from({ length: 30 }, (_, i) => ({ time: start + i * step, end: start + (i + 1) * step, ...emptyStats() }));
   for (const row of rows) {

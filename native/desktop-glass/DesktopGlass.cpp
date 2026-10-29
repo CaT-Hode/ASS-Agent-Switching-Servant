@@ -81,7 +81,7 @@ LRESULT CALLBACK GlassWndProc(HWND window,UINT message,WPARAM wParam,LPARAM lPar
 }
 struct Presenter {
     HWND window=nullptr,owner=nullptr;int width=0,height=0,x=0,y=0;
-    bool visible=true,hasFrame=false;
+    bool visible=true,hasFrame=false,hostGeometry=false;
     ComPtr<IDXGISwapChain1> swap;ComPtr<IDCompositionDevice> composition;
     ComPtr<IDCompositionTarget> target;ComPtr<IDCompositionVisual> visual;
     ~Presenter(){if(window)DestroyWindow(window);}
@@ -107,18 +107,38 @@ struct Presenter {
         winrt::check_hresult(composition->CreateVisual(&visual));winrt::check_hresult(visual->SetContent(swap.Get()));
         winrt::check_hresult(target->SetRoot(visual.Get()));winrt::check_hresult(composition->Commit());
     }
-    HRESULT Present(ID3D11DeviceContext* context,ID3D11Texture2D* source,int sampleX,int sampleY,int w,int h){
+    void Position(int sampleX,int sampleY,int w,int h,int ownerInset=-1){
         DpiScope dpi;
+        bool stackChanged=((GetWindowLongPtrW(window,GWL_EXSTYLE)^GetWindowLongPtrW(owner,GWL_EXSTYLE))&WS_EX_TOPMOST)!=0;
+        bool moveSurface=x!=sampleX||y!=sampleY,resizeSurface=width!=w||height!=h;
+        bool updateSurface=moveSurface||resizeSurface||stackChanged||(hasFrame&&visible&&!IsWindowVisible(window));
+        RECT client{};POINT origin{};bool moveOwner=false,resizeOwner=false;
+        if(ownerInset>=0){GetClientRect(owner,&client);ClientToScreen(owner,&origin);
+            moveOwner=origin.x!=sampleX-ownerInset||origin.y!=sampleY-ownerInset;
+            resizeOwner=client.right!=w+2*ownerInset||client.bottom!=h+2*ownerInset;}
+        if(updateSurface||moveOwner||resizeOwner){
+            HDWP batch=BeginDeferWindowPos(2);winrt::check_bool(batch!=nullptr);
+            if(moveOwner||resizeOwner){
+                UINT flags=SWP_NOACTIVATE|SWP_NOZORDER|(moveOwner?0:SWP_NOMOVE)|(resizeOwner?0:SWP_NOSIZE);
+                batch=DeferWindowPos(batch,owner,nullptr,sampleX-ownerInset,sampleY-ownerInset,w+2*ownerInset,h+2*ownerInset,flags);
+                winrt::check_bool(batch!=nullptr);
+            }
+            if(updateSurface){
+                UINT flags=SWP_NOACTIVATE|(moveSurface?0:SWP_NOMOVE)|(resizeSurface?0:SWP_NOSIZE)|
+                    (hasFrame&&visible?SWP_SHOWWINDOW:0);
+                batch=DeferWindowPos(batch,window,owner,sampleX,sampleY,w,h,flags);winrt::check_bool(batch!=nullptr);
+            }
+            winrt::check_bool(EndDeferWindowPos(batch));
+        }
+        x=sampleX;y=sampleY;width=w;height=h;
+    }
+    HRESULT Present(ID3D11DeviceContext* context,ID3D11Texture2D* source,int sampleX,int sampleY,int w,int h){
         if(!visible)return S_FALSE;
+        if(hostGeometry&&(sampleX!=x||sampleY!=y||w!=width||h!=height))return S_FALSE;
         ComPtr<ID3D11Texture2D> back;winrt::check_hresult(swap->GetBuffer(0,IID_PPV_ARGS(&back)));
         context->CopyResource(back.Get(),source);HRESULT hr=swap->Present(0,DXGI_PRESENT_DO_NOT_WAIT);
         if(hr==DXGI_ERROR_WAS_STILL_DRAWING)return S_FALSE;winrt::check_hresult(hr);
-        bool stackChanged=((GetWindowLongPtrW(window,GWL_EXSTYLE)^GetWindowLongPtrW(owner,GWL_EXSTYLE))&WS_EX_TOPMOST)!=0;
-        if(!hasFrame||x!=sampleX||y!=sampleY||width!=w||height!=h||!IsWindowVisible(window)||stackChanged){
-            winrt::check_bool(SetWindowPos(window,owner,sampleX,sampleY,w,h,SWP_NOACTIVATE|SWP_SHOWWINDOW));
-            x=sampleX;y=sampleY;width=w;height=h;
-        }
-        hasFrame=true;return S_OK;
+        hasFrame=true;Position(sampleX,sampleY,w,h);return S_OK;
     }
 };
 struct Slot {
@@ -339,6 +359,13 @@ struct Renderer {
         data.shape[0]=p.shape_x_px;data.shape[1]=p.shape_y_px;data.shape[2]=p.pressure;
         data.shape[3]=float(p.material_count);data.history[2]=float(capacityWidth+2*halo);data.history[3]=float(capacityHeight+2*halo);
         double now=Now(),dt=std::clamp(now-lastLight,0.,.1);data.history[0]=float(1-std::exp(-dt/.020));data.history[1]=historyValid?1.f:0.f;
+        // Small translations retain temporal filtering; clearing it on every
+        // pixel amplifies capture noise into slow-drag flicker. Reset jumps.
+        if(current>=0){auto const& prior=slots[current];
+            float jump=std::max(32.f,p.sensing_radius_dip*.5f)*p.dpi_scale;
+            if(std::abs(prior.x-x)>jump||std::abs(prior.y-y)>jump||
+               std::abs(prior.width-width)>jump||std::abs(prior.height-height)>jump)data.history[1]=0;}
+        if(data.history[1]<.5f)++stats.light_history_resets;
         lastLight=now;historyValid=true;double pointerBlend=1-std::exp(-std::clamp(now-lastPointer,0.,.1)/.025);lastPointer=now;
         if(!pointerReady){pointerX=p.pointer_screen_x_px;pointerY=p.pointer_screen_y_px;pointerReady=true;}
         pointerX+=(p.pointer_screen_x_px-pointerX)*pointerBlend;pointerY+=(p.pointer_screen_y_px-pointerY)*pointerBlend;
@@ -392,6 +419,9 @@ HRESULT __cdecl DG_Destroy(DG_Handle handle){return Boundary([&]{auto& r=Object(
 HRESULT __cdecl DG_SetViewport(DG_Handle handle,int width,int height){return Boundary([&]{auto& r=Object(handle);r.RequireUi();std::lock_guard guard(r.mutex);
     if(width<1||height<1||width>r.capacityWidth||height>r.capacityHeight)return E_INVALIDARG;
     r.width=width;r.height=height;return S_OK;});}
+HRESULT __cdecl DG_PositionWithOwner(DG_Handle handle,int x,int y,int width,int height,int inset){return Boundary([&]{auto& r=Object(handle);r.RequireUi();
+    if(width<1||height<1||width>r.capacityWidth||height>r.capacityHeight||inset<0)return E_INVALIDARG;
+    r.presenter.hostGeometry=true;r.presenter.Position(x,y,width,height,inset);return S_OK;});}
 HRESULT __cdecl DG_SelectMonitor(DG_Handle handle,HMONITOR monitor,BOOL adjacent,BOOL preferDxgi){
     return Boundary([&]{auto& r=Object(handle);r.RequireUi();std::lock_guard guard(r.mutex);
         GraphicsCaptureItem item{nullptr};auto factory=winrt::get_activation_factory<GraphicsCaptureItem,IGraphicsCaptureItemInterop>();
@@ -410,7 +440,13 @@ HRESULT __cdecl DG_ClearSource(DG_Handle handle){return Boundary([&]{auto& r=Obj
 HRESULT __cdecl DG_Render(DG_Handle handle,int x,int y,const DG_Parameters* p){
     if(!p)return E_POINTER;return Boundary([&]{auto& r=Object(handle);std::lock_guard guard(r.mutex);return r.Render(x,y,*p);});
 }
-HRESULT __cdecl DG_Present(DG_Handle handle){return Boundary([&]{auto& r=Object(handle);r.RequireUi();std::lock_guard guard(r.mutex);
+HRESULT __cdecl DG_RenderViewport(DG_Handle handle,int x,int y,int width,int height,const DG_Parameters* p){
+    if(!p)return E_POINTER;return Boundary([&]{auto& r=Object(handle);std::lock_guard guard(r.mutex);
+        if(width<1||height<1||width>r.capacityWidth||height>r.capacityHeight)return E_INVALIDARG;
+        r.width=width;r.height=height;return r.Render(x,y,*p);});
+}
+HRESULT __cdecl DG_Present(DG_Handle handle){return Boundary([&]{auto& r=Object(handle);r.RequireUi();
+    std::unique_lock guard(r.mutex,std::try_to_lock);if(!guard.owns_lock())return S_FALSE;
     // Copy and Present use the same immediate GPU queue as Draw. Their ordering
     // already protects the texture; a CPU fence here adds a whole timer tick.
     r.Complete();int ready=-1;for(int i=0;i<3;++i)if((r.slots[i].state==1||r.slots[i].state==2)&&(ready<0||r.slots[i].serial>r.slots[ready].serial))ready=i;
@@ -422,6 +458,8 @@ HRESULT __cdecl DG_Present(DG_Handle handle){return Boundary([&]{auto& r=Object(
 HRESULT __cdecl DG_SetVisible(DG_Handle handle,BOOL visible){return Boundary([&]{auto& r=Object(handle);r.RequireUi();std::lock_guard guard(r.mutex);
     r.presenter.visible=visible!=FALSE;if(!visible)r.ResetFrames();return S_OK;});}
 HRESULT __cdecl DG_GetStats(DG_Handle handle,DG_Stats* stats){if(!stats)return E_POINTER;return Boundary([&]{auto& r=Object(handle);std::lock_guard guard(r.mutex);*stats=r.stats;return S_OK;});}
+HRESULT __cdecl DG_TryGetStats(DG_Handle handle,DG_Stats* stats){if(!stats)return E_POINTER;return Boundary([&]{auto& r=Object(handle);
+    std::unique_lock guard(r.mutex,std::try_to_lock);if(!guard.owns_lock())return S_FALSE;*stats=r.stats;return S_OK;});}
 HWND __cdecl DG_GetCompositionWindow(DG_Handle handle){if(!handle)return nullptr;auto& r=Object(handle);std::lock_guard guard(r.mutex);return r.presenter.window;}
 HRESULT __cdecl DG_ExcludeWindowFromCapture(HWND window){return SetWindowDisplayAffinity(window,WDA_EXCLUDEFROMCAPTURE)?S_OK:HRESULT_FROM_WIN32(GetLastError());}
 void __cdecl DG_LastError(char* destination,int capacity){if(!destination||capacity<1)return;size_t n=std::min(diagnostic.size(),size_t(capacity-1));std::memcpy(destination,diagnostic.data(),n);destination[n]=0;}

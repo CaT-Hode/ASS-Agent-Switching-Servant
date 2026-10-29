@@ -66,19 +66,20 @@ function DayDetail({ data }) {
     </span>
   );
 }
-function HeatCell({ data, max, selected, onSelect, children }) {
+function HeatCell({ data, max, onSelect, children }) {
   return (
     <button
-      className={
-        "heatmap-cell" + (selected?.key === data.key ? " selected" : "")
-      }
+      className="heatmap-cell"
+      data-current={data.current || undefined}
+      aria-current={data.current ? 'time' : undefined}
       data-level={
         data.calls ? Math.max(1, Math.ceil((data.calls / max) * 4)) : 0
       }
       aria-label={`${data.label || data.day} · ${data.observations ? count(data.calls) + " 次调用 · " + count(data.input + data.output) + " Tokens" : "无记录"}`}
       onMouseEnter={() => onSelect(data)}
+      onMouseLeave={() => onSelect(null)}
       onFocus={() => onSelect(data)}
-      onClick={() => onSelect(data)}
+      onBlur={() => onSelect(null)}
     >
       {children}
     </button>

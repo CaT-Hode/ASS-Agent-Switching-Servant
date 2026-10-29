@@ -1213,13 +1213,14 @@ else {
       requestWidget = new RequestWidget({ electron: require('electron'), preferences,
         model: await import('../core/request-widget-view.mjs'),
         read: () => ({ active: router.monitorSnapshot(), history: requestHistory.snapshot(), usage: usageHistory.public() }),
-        refreshUsage: () => usageHistory.refresh(), onChange: () => { updateTrayMenu();push(); } });
+        refreshUsage: () => usageHistory.refresh({ automatic: true }), onChange: () => { updateTrayMenu();push(); } });
       if (preferences.state.requestWidget.enabled) requestWidget.open();
       register("snapshot", () => snapshot());
       register('request-widget', input => requestWidget.configure(input));
       register('request-monitor', revision => {
         const history = requestHistory.snapshot();
         return { ...history, rows: revision === history.revision ? undefined : history.rows,
+          archive: revision === history.revision ? undefined : history.archive,
           active: router.monitorSnapshot(), now: Date.now() };
       });
       register("window-action", (action) => {

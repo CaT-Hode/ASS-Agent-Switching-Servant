@@ -4,7 +4,9 @@ const number = v => known(v) ? v : 0;
 const key = row => row.requestId || [row.time, row.source, row.model].join(':');
 const dayKey = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 const eligible = row => row.model && row.client !== 'diagnostics' && row.operation !== 'count_tokens';
-export const widgetHeight = (count, capacity) => 130 + Math.max(1, Math.min(capacity, count)) * 29;
+export const widgetWidth = width => width - 16;
+export const widgetHeight = (count, capacity) => 110 + Math.max(1, Math.min(capacity, count)) * 29;
+export const widgetDuration = ms => Number.isFinite(ms) && ms >= 0 ? Math.floor(ms / 1000) + 's' : '—';
 export function motionRows(previous, rows) {
   const incoming = new Map(rows.map((row, index) => [row.id, { row, index, exiting: false }]));
   const next = previous.map(item => incoming.get(item.row.id) || { ...item, exiting: true });
@@ -70,5 +72,6 @@ export function todayHeatmap(usage, requests, now) {
   return { day, unallocated, total: bins.reduce((sum, bin) => sum + bin.tokens, unallocated), cells: bins.map(bin => ({ ...bin,
     level: bin.tokens ? Math.max(1, Math.ceil(Math.sqrt(bin.tokens / maximum) * 4)) : 0,
     future: bin.hour > date.getHours(),
+    current: bin.hour === date.getHours(),
   })) };
 }

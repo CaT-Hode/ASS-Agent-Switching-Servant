@@ -6,7 +6,7 @@ const { document, edit, read } = require("./native-fields.cjs");
 const { claudeModelSettings, claudeModelEnv, CLAUDE_MODEL_ENV: MODEL_ENV } = require("./accountless.cjs");
 const CLEAR_ENV = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"];
 const CLOUD_ENV = ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"];
-const SETTING_KEYS = ["model", "availableModels", "enforceAvailableModels", "modelPicker", "apiKeyHelper"];
+const SETTING_KEYS = ["model", "autoCompactWindow", "availableModels", "enforceAvailableModels", "modelPicker", "apiKeyHelper"];
 const ENV_KEYS = [...MODEL_ENV, ...CLEAR_ENV, ...CLOUD_ENV, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "CLAUDE_CODE_AUTO_MODE_SERVER"];
 const present = value => ({ exists: true, value });
@@ -39,7 +39,9 @@ function validate(record) {
     const allowed = f.file === t.profile ? equal(f.path, ["hasCompletedOnboarding"])
       : f.file === t.settings && Array.isArray(f.path) &&
         ((f.path.length === 1 && SETTING_KEYS.includes(f.path[0])) ||
-         (f.path.length === 2 && f.path[0] === "env" && ENV_KEYS.includes(f.path[1])));
+         (f.path.length === 2 && f.path[0] === "env" && ENV_KEYS.includes(f.path[1])) ||
+         (f.path.length === 3 && f.path[0] === "modelSettings" && typeof f.path[1] === "string" &&
+          !!f.path[1] && !["__proto__", "constructor", "prototype"].includes(f.path[1]) && f.path[2] === "autoCompactWindow"));
     const key = JSON.stringify([f.file, f.path]);
     if (!allowed || seen.has(key) || [f.before, f.after].some(v => !v || typeof v.exists !== "boolean" || (v.exists && !Object.hasOwn(v, "value"))))
       throw Error("CC 原生接入字段无效");
@@ -49,7 +51,7 @@ function validate(record) {
 function specs(manager, plan) {
   if (!plan?.accountless) return [];
   const t = targets(manager), selected = plan.defaultModel.model;
-  const settings = claudeModelSettings(plan.providers, selected);
+  const { modelSettings, ...settings } = claudeModelSettings(plan.providers, selected);
   const base = `http://127.0.0.1:${manager.options?.port || 25819}/clients/claude/models`;
   const env = { ANTHROPIC_BASE_URL: base, ANTHROPIC_AUTH_TOKEN: plan.localToken,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1",
@@ -57,6 +59,8 @@ function specs(manager, plan) {
     ...Object.fromEntries(CLEAR_ENV.map(k => [k, ""])), ...Object.fromEntries(CLOUD_ENV.map(k => [k, "0"])) };
   return [
     ...Object.entries(settings).map(([key, value]) => ({ file: t.settings, path: [key], after: present(value) })),
+    ...Object.entries(modelSettings).map(([model, value]) => ({ file: t.settings,
+      path: ["modelSettings", model, "autoCompactWindow"], after: present(value.autoCompactWindow) })),
     { file: t.settings, path: ["apiKeyHelper"], after: { exists: false } },
     ...Object.entries(env).map(([key, value]) => ({ file: t.settings, path: ["env", key], after: present(value) })),
     { file: t.profile, path: ["hasCompletedOnboarding"], after: present(true) },
@@ -119,12 +123,25 @@ function plan(manager, route, previous, { repair = false } = {}) {
     entries.set(key(f), f);
   }
   const fields = desired.map(f => {
-    const before = entries.get(key(f))?.before || valueAt(document(get(f.file).after, "json").data, f.path);
-    return { ...f, before };
+    const prior = entries.get(key(f)), data = document(get(f.file).after, "json").data;
+    const before = prior?.before || valueAt(data, f.path);
+    return { ...f, before, ...(f.path[0] === 'modelSettings'
+      ? { createdModel: prior?.createdModel ?? !Object.hasOwn(data.modelSettings || {}, f.path[1]) } : {}) };
   });
-  for (const f of [...(previous?.fields || []).filter(f => !desired.some(d => key(d) === key(f))).map(f => ({ ...f, after: f.before })), ...fields]) {
+  const restoring = (previous?.fields || []).filter(f => !desired.some(d => key(d) === key(f)));
+  for (const f of [...restoring.map(f => ({ ...f, after: f.before })), ...fields]) {
     const file = get(f.file);
     file.after = edit(file.after, "json", f.path, f.after);
+  }
+  const createdModelSettings = previous?.createdModelSettings ?? (desired.some(f => f.path[0] === 'modelSettings')
+    ? !Object.hasOwn(document(get(t.settings).before, 'json').data, 'modelSettings') : false);
+  for (const f of restoring.filter(f => f.createdModel)) {
+    const file = get(f.file), model = document(file.after, 'json').data.modelSettings?.[f.path[1]];
+    if (model && !Object.keys(model).length) file.after = edit(file.after, 'json', ['modelSettings', f.path[1]], { exists: false });
+  }
+  if (!desired.length && createdModelSettings) {
+    const file = get(previous.targets.settings), models = document(file.after, 'json').data.modelSettings;
+    if (models && !Object.keys(models).length) file.after = edit(file.after, 'json', ['modelSettings'], { exists: false });
   }
   const createdEnv = previous?.createdEnv ?? (desired.length ? !Object.hasOwn(document(get(t.settings).before, "json").data, "env") : false);
   if (!desired.length && previous?.createdEnv) {
@@ -135,7 +152,7 @@ function plan(manager, route, previous, { repair = false } = {}) {
     const record = get(file), data = document(record.after, 'json').data, cleared = clearRoutedSelections(data);
     if (!equal(data, cleared)) record.after = JSON.stringify(cleared, null, 2) + '\n';
   }
-  return { record: desired.length ? { version: 1, targets: t, createdEnv, fields } : undefined,
+  return { record: desired.length ? { version: 1, targets: t, createdEnv, createdModelSettings, fields } : undefined,
     files: [...files.values()].filter(f => f.after !== f.before) };
 }
 function check(record) {

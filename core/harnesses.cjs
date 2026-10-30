@@ -77,11 +77,6 @@ const SPECS = [
   ...additional.SPECS,
 ];
 const ACTIVE_SPECS = SPECS.filter((spec) => !spec.retired);
-const APIS = {
-  "openai-responses": "openai-responses",
-  "openai-chat": "openai-completions",
-  anthropic: "anthropic-messages",
-};
 const validModelProtocols = (protocols) => protocols && typeof protocols === 'object' && !Array.isArray(protocols) &&
   Object.keys(protocols).length <= 5000 && Object.entries(protocols).every(([ref, protocol]) => validToolRef(ref) && PROTOCOLS.includes(protocol));
 const json = (file) => {
@@ -198,121 +193,15 @@ function authSummary(harness, dir) {
 }
 function routeConfig(harness, p, m, dir, token, catalog, port = 25819) {
   const clientBase = `http://127.0.0.1:${port}/clients/${harness === "codex" ? "ASS" : harness}`;
-  const base = clientBase + "/harness/" + p.id;
   const env = { ASS_LOCAL_TOKEN: token },
     files = [],
     args = [];
-  const model = {
-    id: m.model,
-    name: m.displayName,
-    api: APIS[m.wireApi],
-    contextWindow: m.contextWindow,
-    maxTokens: m.maxOutputTokens,
-    reasoning: true,
-    input: ["text"],
-  };
   if (harness === "claude") {
     Object.assign(env, {
-      ANTHROPIC_BASE_URL: base,
+      ANTHROPIC_BASE_URL: clientBase + "/models",
       ANTHROPIC_AUTH_TOKEN: token,
-      ANTHROPIC_MODEL: m.model,
-      ANTHROPIC_DEFAULT_OPUS_MODEL: m.model,
-      ANTHROPIC_DEFAULT_SONNET_MODEL: m.model,
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: m.model,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     });
-    args.push("--model", m.model);
-  }
-  if (harness === "opencode") {
-    const npm = {
-      "openai-responses": "@ai-sdk/openai",
-      "openai-chat": "@ai-sdk/openai-compatible",
-      anthropic: "@ai-sdk/anthropic",
-    }[m.wireApi];
-    const id =
-      p.brand === "opencode-go" ||
-      new URL(p.baseUrl).pathname.startsWith("/zen/go")
-        ? "opencode-go"
-        : "ASS";
-    env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
-      $schema: "https://opencode.ai/config.json",
-      model: id + "/" + m.model,
-      provider: {
-        [id]: {
-          name: p.name,
-          npm,
-          options: { baseURL: base + "/v1", apiKey: "{env:ASS_LOCAL_TOKEN}" },
-          models: {
-            [m.model]: {
-              name: m.displayName,
-              limit: { context: m.contextWindow, output: m.maxOutputTokens },
-              variants: Object.fromEntries(
-                m.efforts.map((e) => [e, { reasoningEffort: e }]),
-              ),
-            },
-          },
-        },
-      },
-    });
-    args.push("--model", id + "/" + m.model);
-  }
-  if (harness === "pi") {
-    files.push([
-      "models.json",
-      JSON.stringify(
-        {
-          providers: {
-            ASS: {
-              baseUrl: base + "/v1",
-              api: APIS[m.wireApi],
-              apiKey: "$ASS_LOCAL_TOKEN",
-              models: [model],
-            },
-          },
-        },
-        null,
-        2,
-      ),
-    ]);
-    args.push("--provider", "ASS", "--model", m.model);
-  }
-  if (harness === "dsh") {
-    // JSON is valid YAML; only the ASS-owned per-account settings file is generated.
-    const provider = "ASS-api";
-    files.push([
-      "settings.yaml",
-      JSON.stringify(
-        {
-          "llm-pi-ai": {
-            providers: {
-              [provider]: {
-                displayName: p.name,
-                apiKeyEnv: "ASS_LOCAL_TOKEN",
-                baseURL: base + "/v1",
-                api: APIS[m.wireApi],
-                models: [
-                  {
-                    id: m.model,
-                    name: m.displayName,
-                    contextWindow: m.contextWindow,
-                    maxTokens: m.maxOutputTokens,
-                    reasoningEfforts: dshConfig.reasoning(m),
-                  },
-                ],
-              },
-            },
-          },
-          "agent-default-model": {
-            provider,
-            model: m.model,
-            reasoningEffort: m.defaultEffort,
-          },
-        },
-        null,
-        2,
-      ),
-    ]);
-    args.push("--profile", "web");
   }
   if (harness === "codex") {
     const name = codexModelId(p.id, m.model);
@@ -1330,23 +1219,20 @@ class HarnessManager {
     if (applied?.accountless) token = applied.localToken;
     const id = crypto.createHash("sha256").update("model\0" + ref).digest("hex").slice(0, 24);
     const dir = this.root(harness, id);
-    const config = routeConfig(harness, p, m, dir, token,
+    const catalog = harness === 'codex' ?
       // An API-only model window must not advertise subscription models: its
       // local route token is not a ChatGPT credential and must never fall back.
       makeCatalog([], this.effectiveProviders(harness).map((provider) => ({ ...provider,
         models: provider.models.filter((model) => this.injection(harness).models.some((row) => row.included && row.ref === modelRef(provider.id, model.model))),
-      })), {}), this.options.port || 25819);
-    if (harness === "codex") {
-      const entry = config.files.find(([name]) => name === "catalog.json");
-      const catalog = JSON.parse(entry[1]);
+      })), {}) : null;
+    if (catalog) {
       // makeCatalog supplies an official template when its source cache is
       // empty; retain that only as a template, never as an API-window choice.
-      entry[1] = JSON.stringify({ ...catalog, models: catalog.models.filter((m) => m.slug.includes("::")) });
+      catalog.models = catalog.models.filter((m) => m.slug.includes("::"));
     }
+    const config = routeConfig(harness, p, m, dir, token, catalog, this.options.port || 25819);
     if (harness === "claude") {
       const name = codexModelId(p.id, m.model);
-      config.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${this.options.port || 25819}/clients/claude/models`;
-      config.args = [];
       const cliModel = configureClaudeModels(config, applied?.providers || this.getState().providers, name, dir, applied?.autoModeModel);
       config.args.unshift('--model', cliModel);
     }

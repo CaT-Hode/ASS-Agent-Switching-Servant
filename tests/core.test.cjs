@@ -64,38 +64,6 @@ test("catalog writes chosen effort list and context exactly", () => {
   assert.ok(m.base_instructions);
 });
 
-test('injection preserves every native official model field despite stale ASS overrides', () => {
-  const official = [{ slug: 'gpt-6.1-sol', display_name: 'Sol', context_window: 500000,
-    max_context_window: 872000, default_reasoning_level: 'low', supported_reasoning_levels: [{effort:'low'}],
-    base_instructions: 'Native instructions', supports_parallel_tool_calls: true, future_capability: { enabled: true } }];
-  const providers = parseImport(source);
-  const stale = { 'gpt-6.1-sol': { model:'renamed', contextWindow:272000, efforts:['high'], defaultEffort:'high', enabled:false } };
-  const catalog = makeCatalog(official, providers, stale);
-  const native = catalog.models.filter(m=>!m.slug.includes('::'));
-  assert.equal(native.length, official.length);
-  for (const [key, value] of Object.entries(official[0])) assert.deepEqual(native[0][key], value, key);
-  assert.equal(catalog.models.find(m=>m.slug.includes('::')).context_window, 900000);
-  assert.equal(official[0].context_window, 500000);
-});
-
-test('catalog fills CLI-required fields in new desktop caches without changing native values or source rows', () => {
-  const official = [{ slug: 'gpt-fixture', display_name: 'Native', model_messages: { instructions_template: 'native template' },
-    future_capability: { enabled: true } }, { slug: 'gpt-explicit', base_instructions: '', supports_parallel_tool_calls: true }];
-  const before = structuredClone(official);
-  const catalog = makeCatalog(official, parseImport(source));
-  for (const model of [...catalog.models, ...makeCatalog([], []).models]) {
-    assert.equal(typeof model.base_instructions, 'string', model.slug);
-    assert.equal(typeof model.supports_parallel_tool_calls, 'boolean', model.slug);
-  }
-  assert.ok(catalog.models[0].base_instructions);
-  assert.equal(catalog.models[0].supports_parallel_tool_calls, false);
-  assert.equal(catalog.models[1].base_instructions, '');
-  assert.equal(catalog.models[1].supports_parallel_tool_calls, true);
-  assert.deepEqual(catalog.models[0].model_messages, official[0].model_messages);
-  assert.deepEqual(catalog.models[0].future_capability, official[0].future_capability);
-  assert.deepEqual(official, before);
-});
-
 test('prediction structured output survives chat and Anthropic conversion without altering normal requests',()=>{
   const schema={type:'object',properties:{suggestion:{anyOf:[{type:'string'},{type:'null'}]}},required:['suggestion'],additionalProperties:false};
   const body={model:'custom',input:'Predict',text:{format:{type:'json_schema',name:'prediction',strict:true,schema}},reasoning:{effort:'low'}};

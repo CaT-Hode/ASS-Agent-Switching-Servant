@@ -154,8 +154,8 @@ test("DeepSeek and Go are API accounts; Claude filters incompatible models", () 
     ),
   );
 });
-test("five harness config generators never embed upstream keys", () => {
-  for (const id of ["codex", "claude", "opencode", "pi", "dsh"]) {
+test("proxy harness config generators never embed upstream keys", () => {
+  for (const id of ["codex", "claude"]) {
     const p = providers[id === "claude" ? 2 : 0];
     const plan = routeConfig(id, p, p.models[0], "C:\\temp", "local-token", {
       models: [],
@@ -167,14 +167,6 @@ test("five harness config generators never embed upstream keys", () => {
         assert.equal(config.model_providers.ASS.env_key, "ASS_LOCAL_TOKEN");
         assert.equal(config.model_providers.ASS.requires_openai_auth, false);
       }
-    if (id === "dsh")
-      assert.equal(
-        JSON.parse(plan.files[0][1])["llm-pi-ai"].providers["ASS-api"]
-          .apiKeyEnv,
-        "ASS_LOCAL_TOKEN",
-      );
-    if (id === "opencode")
-      assert.ok(JSON.parse(plan.env.OPENCODE_CONFIG_CONTENT).provider.ASS);
   }
 });
 test("native profiles are isolated; official launch clears third-party auth environment", (t) => {

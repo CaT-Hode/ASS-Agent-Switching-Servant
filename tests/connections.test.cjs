@@ -8,7 +8,6 @@ const { Connections } = require("../core/connections.cjs");
 const { InjectionFiles, hash } = require("../core/injection-files.cjs");
 const { ConfigManager, atomic } = require("../core/config.cjs");
 const { Router } = require("../core/router.cjs");
-const { routeConfig } = require("../core/harnesses.cjs");
 const { parseImport } = require("../core/models.cjs");
 
 function temp(t) {
@@ -546,20 +545,6 @@ const providers = parseImport({ providers: [{ id: "deep", name: "Deep", baseUrl:
 function request(port, url, options = {}) {
   return fetch(`http://127.0.0.1:${port}${url}`, options);
 }
-
-test("scoped routeConfig paths isolate pi from disabled dsh", async (t) => {
-  const allowed = new Set(["pi"]), calls = [];
-  const router = new Router({ getState: () => ({ providers }), allowClient: (id) => allowed.has(id), fetchUpstream: async (url) => { calls.push(url); return new Response('{"ok":true}'); } });
-  await router.start(0); router.port = router.server.address().port; t.after(() => router.stop());
-  const p = providers[0], pi = routeConfig("pi", p, p.models[0], "C:\\fake", router.clientToken, {}, router.port);
-  const piBase = JSON.parse(pi.files[0][1]).providers.ass.baseUrl;
-  assert.match(piBase, new RegExp(`/clients/pi/harness/deep/v1$`));
-  const body = JSON.stringify({ model: "chat", messages: [] });
-  let response = await fetch(piBase + "/chat/completions", { method: "POST", headers: { authorization: `Bearer ${router.clientToken}`, "content-type": "application/json" }, body });
-  assert.equal(response.status, 200); assert.equal(calls.length, 1);
-  response = await request(router.port, "/clients/dsh/harness/deep/v1/chat/completions", { method: "POST", headers: { authorization: `Bearer ${router.clientToken}`, "content-type": "application/json" }, body });
-  assert.equal(response.status, 503); assert.equal(calls.length, 1);
-});
 
 test("request is counted at admission while body uploads; disable gate refuses the next request without cancelling current", async (t) => {
   let enabled = true, releaseUpstream;

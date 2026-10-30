@@ -1,7 +1,7 @@
 {
   "name": "agent-switching-servant",
   "productName": "ASS",
-  "version": "0.6.9",
+  "version": "0.6.11",
   "private": true,
   "license": "MIT",
   "repository": {

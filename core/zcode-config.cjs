@@ -66,8 +66,10 @@ function validate(data) {
     throw Error("ZCode 默认模型配置无效，未覆盖");
 }
 function validField(e) {
+  if (e.format === 'json' && e.replace && !e.selector &&
+      JSON.stringify(e.path) === JSON.stringify(['config', 'defaultModelSelection'])) return true;
   if (e.format !== "json" || e.replace || !object(e.selector) ||
-      !/^ass-[a-f0-9]{16}-(chat|responses|messages)$/.test(e.selector.providerId || "")) return false;
+      !/^ass-[a-f0-9]{16}-(chat|responses|messages)$/i.test(e.selector.providerId || "")) return false;
   const keys = Object.keys(e.selector).sort().join(","), field = JSON.stringify(e.path);
   const ok = field === JSON.stringify(PROVIDERS) ? keys === "providerId" :
     field === JSON.stringify(MODELS) && keys === "modelId,providerId" && string(e.selector.modelId);
@@ -88,9 +90,10 @@ function assertDefaultPreserved(before, after) {
   if (!selected) return;
   const rows = (d) => d.config.providerConfigRules.providerRules;
   const was = rows(before).find((p) => p.providerId === selected.providerId);
-  const next = rows(after).find((p) => p.providerId === selected.providerId);
+  const chosen = after.config.defaultModelSelection || selected;
+  const next = rows(after).find((p) => p.providerId === chosen.providerId);
   if (was?.config.personalModelIds?.includes(selected.modelId) &&
-      !next?.config.personalModelIds?.includes(selected.modelId))
+      !next?.config.personalModelIds?.includes(chosen.modelId))
     throw Error("ZCode 默认模型仍属于待移除的供应商，请先在 ZCode 切换模型");
 }
 module.exports = { PROVIDERS, MODELS, empty, locations, target, validate, validField, modelConfig, assertDefaultPreserved };

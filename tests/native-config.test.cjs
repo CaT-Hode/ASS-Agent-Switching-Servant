@@ -6,7 +6,7 @@ const os = require("node:os");
 const { parseImport } = require("../core/models.cjs");
 const { HarnessManager } = require("../core/harnesses.cjs");
 const { modelRef } = require("../core/client-policy.cjs");
-const { NativeFields, document } = require("../core/native-fields.cjs");
+const { NativeFields, document, edit } = require("../core/native-fields.cjs");
 const {
   NativeConfig,
   locations,
@@ -69,6 +69,34 @@ const grant = {
   expires: 2100000000000,
 };
 
+test('all native harnesses rename legacy ASS namespaces and keep the same selected model without owning later choices', t => {
+  const f = fixture(t);
+  for (const id of ['opencode', 'pi', 'dsh', 'kimi', 'zcode']) {
+    const oldFields = JSON.parse(JSON.stringify(f.native.desired(id).fields).replace(/ASS-([a-f0-9]{16})/g, 'ass-$1'));
+    f.native.fields.apply(id, oldFields);
+    const target = locations(id, f.manager), format = id === 'kimi' ? 'toml' : target.format || (id === 'opencode' ? 'jsonc' : 'json');
+    const config = document(fs.readFileSync(target.config, 'utf8'), format).data;
+    const legacy = providerId(f.providers[0], 'openai-chat').replace(/^ASS-/, 'ass-');
+    const alias = id === 'kimi' ? Object.keys(config.models).find(key => key.startsWith(legacy)) : legacy;
+    const file = id === 'pi' ? target.settings : target.config;
+    const keys = id === 'pi' ? ['defaultProvider'] : id === 'dsh' ? ['agent-default-model', 'provider']
+      : id === 'kimi' ? ['default_model'] : id === 'zcode' ? ['config', 'defaultModelSelection'] : ['model'];
+    const value = id === 'opencode' ? legacy + '/chat' : id === 'zcode' ? { providerId: legacy, modelId: 'chat' } : alias;
+    const source = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    write(file, id === 'kimi' ? '\uFEFFdefault_model = ' + JSON.stringify(value) + ' # keep selection\n' + source
+      : edit(source, format, keys, { exists: true, value }));
+    f.native.sync(id);
+    const updated = document(fs.readFileSync(file, 'utf8'), format).data;
+    const actual = keys.reduce((data, key) => data[key], updated);
+    assert.deepEqual(actual, id === 'zcode' ? { providerId: 'ASS-' + legacy.slice(4), modelId: 'chat' }
+      : 'ASS-' + value.slice(4), id);
+    assert.equal(f.native.status(id, true).applied, true, id);
+    assert.ok(!f.native.fields.entries.some(e => e.harness === id && e.renameOnly), id);
+    write(file, edit(fs.readFileSync(file, 'utf8'), format, keys, { exists: false }));
+    f.native.restore([id]);
+  }
+});
+
 test("three native formats separate wire protocols, use real origins and preserve default OAuth unless selected", (t) => {
   const f = fixture(t),
     p = f.providers[0];
@@ -114,8 +142,10 @@ test("three native formats separate wire protocols, use real origins and preserv
         : id === "pi"
           ? config.providers
           : config.provider;
-    for (const wire of ["openai-chat", "openai-responses", "anthropic"])
+    for (const wire of ["openai-chat", "openai-responses", "anthropic"]) {
       assert.ok(collection[providerId(p, wire)]);
+      assert.match(providerId(p, wire), /^ASS-[a-f0-9]{16}-(chat|responses|messages)$/);
+    }
     assert.doesNotMatch(
       JSON.stringify(config),
       /127\.0\.0\.1|ASS_LOCAL_TOKEN|synthetic-key/,

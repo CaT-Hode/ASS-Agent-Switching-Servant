@@ -2,6 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path"), crypto = require("node:crypto");
 const { claudeModels, resolveClaudeModel, claudeIdentity } = require("../core/claude-models.cjs");
+const { codexModelId } = require('../core/models.cjs');
 const { desired, ClaudeDesktopGateway } = require("../core/claude-desktop-gateway.cjs");
 const { Router } = require("../core/router.cjs");
 const { claudeModelSettings } = require("../core/accountless.cjs");
@@ -28,9 +29,6 @@ test("native recognition keeps provider routes unique, stable and exact includin
     assert.match(row.discoveryId, /^ass-[a-f0-9]{32}\.anthropic\.claude-/);
     assert.equal(resolveClaudeModel(providers, row.discoveryId), row.model);
     assert.equal(resolveClaudeModel(providers, row.discoveryId + "[1m]"), row.model);
-    const oldId = "claude-ass-" + crypto.createHash("sha256").update(row.model).digest("hex").slice(0, 32);
-    assert.equal(resolveClaudeModel(providers, oldId), row.model);
-    assert.equal(resolveClaudeModel(providers, oldId + "[1m]"), row.model);
   }
   providers[0].name = "renamed"; providers[0].models[0].displayName = "new label";
   assert.equal(claudeModels(providers)[0].discoveryId, rows[0].discoveryId);
@@ -50,7 +48,7 @@ test("desktop caps follow configured native effort range without ultra; global d
   const changed = desired(token, 25819, [native]);
   assert.equal(changed.inferenceModels[0].maxEffort, "max");
   assert.equal(changed.defaultModelEffort, "high");
-  const cli = claudeModelSettings([native], "a::claude-sonnet-4-6");
+  const cli = claudeModelSettings([native], codexModelId('a', 'claude-sonnet-4-6'));
   assert.deepEqual(Object.keys(cli.modelPicker.options[0]).sort(), ["description", "label", "model"]);
 });
 
@@ -72,7 +70,7 @@ test("desktop receives explicit 1M flags only for native Claude with configured 
     assert.equal(entries[0].prefer1m, true);
     assert.equal(entries[1].supports1m, undefined);
     assert.equal(entries[1].prefer1m, undefined);
-    const cli = claudeModelSettings([native], "a::claude-opus-4-6");
+    const cli = claudeModelSettings([native], codexModelId('a', 'claude-opus-4-6'));
     assert.deepEqual(Object.keys(cli.modelPicker.options[0]).sort(), ["description", "label", "model"]);
   }
 });

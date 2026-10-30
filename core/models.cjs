@@ -8,7 +8,7 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const PROTOCOLS = ["openai-responses", "openai-chat", "anthropic"];
 const normalizeEffort = (x) => (x === "middle" ? "medium" : x);
 const displayEffort = (x) => (x === "middle" ? "medium" : x);
-// Public Codex IDs use ASS branding. Keep storage IDs stable so account
+// Public gateway model IDs use ASS branding. Keep storage IDs stable so account
 // bindings, key identity, test history and old conversations remain intact.
 const codexProviderId = (id) => "ASS_" + crypto.createHash("sha256").update(id).digest("hex").slice(0, 24);
 const codexModelId = (provider, model) => codexProviderId(provider) + "::" + model;

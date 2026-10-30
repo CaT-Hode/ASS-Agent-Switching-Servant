@@ -3,10 +3,11 @@ const { createHash } = require("node:crypto");
 const { isDeepStrictEqual: equal } = require("node:util");
 
 // Kimi owns its document. ASS only appends/removes individually marked tables;
-// never round-trip the user's comments, defaults, OAuth references or formatting.
+// never round-trip the user's comments, OAuth references or formatting. A
+// namespace upgrade may rename the existing default_model scalar in place.
 function validPath(keys) {
-  return Array.isArray(keys) && keys.length === 2 &&
-    ["providers", "models"].includes(keys[0]) && /^ass-[a-z0-9-]+$/.test(keys[1]);
+  return Array.isArray(keys) && (keys.length === 1 && keys[0] === 'default_model' || keys.length === 2 &&
+    ["providers", "models"].includes(keys[0]) && /^ass-[a-z0-9-]+$/i.test(keys[1]));
 }
 function parse(text) {
   try { return TOML.parse((text || "").replace(/^\uFEFF/, "")); }
@@ -82,6 +83,14 @@ function removeReformattedTable(source, keys) {
 }
 function edit(text, keys, target) {
   const source = text || "", before = parse(source), [root, key] = keys;
+  if (keys.length === 1 && root === 'default_model') {
+    const result = source.replace(/^(\uFEFF?[\t ]*(?:default_model|"default_model"|'default_model')[\t ]*=[\t ]*)("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')(?=[\t ]*(?:#[^\r\n]*)?\r?$)/m,
+      (_, prefix) => target.exists ? prefix + JSON.stringify(target.value) : '');
+    if (target.exists) before.default_model = target.value;
+    else delete before.default_model;
+    if (!equal(before, parse(result))) throw Error('Kimi 默认模型字段无法单独重命名，未覆盖');
+    return result;
+  }
   const [start, end] = markers(keys), current = before[root]?.[key];
   let result;
   if (current !== undefined) {
@@ -112,5 +121,5 @@ function edit(text, keys, target) {
     throw Error("TOML 编辑会影响非 ASS 字段，未写入");
   return result;
 }
-function assertOwned(text, keys) { edit(text, keys, { exists: false }); }
+function assertOwned(text, keys) { if (keys.length > 1) edit(text, keys, { exists: false }); }
 module.exports = { parse, edit, validPath, assertOwned };

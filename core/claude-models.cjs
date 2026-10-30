@@ -1,9 +1,10 @@
 const crypto = require("node:crypto");
+const { codexModelId } = require("./models.cjs");
 // Claude Desktop checks the entire gateway route, including provider and model
 // segments, for non-Anthropic vendor names. Keep the picker ID opaque; the
 // visible label and the upstream model remain the actual provider/model.
 const PREFIX = "claude-ass-";
-const qualified = (provider, model) => provider.id + "::" + model.model;
+const qualified = (provider, model) => codexModelId(provider.id, model.model);
 const alias = model => PREFIX + crypto.createHash("sha256").update(model).digest("hex").slice(0, 32);
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 function claudeIdentity(value) {
@@ -43,9 +44,7 @@ function resolveClaudeModel(providers, value) {
   const rows = claudeModels(providers);
   // An exact real ID wins; never strip arbitrary text and silently pick a model.
   if (rows.some(m => m.model === value)) return value;
-  // Existing desktop conversations can still hold the previous exact ASS ID.
-  // Resolve it only against enabled configured models, never arbitrary aliases.
-  const matches = (row, id) => row.discoveryId === id || alias(row.model) === id;
+  const matches = (row, id) => row.discoveryId === id;
   const entry = rows.find(m => matches(m, value));
   if (entry) return entry.model;
   if (/\[1m\]$/i.test(value)) {

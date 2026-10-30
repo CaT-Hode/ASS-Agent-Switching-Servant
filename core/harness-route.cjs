@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 const { RequestMetrics } = require('./request-metrics.cjs');
 const { readTaskJSON } = require('./task-outcome.cjs');
-const { endpoint } = require("./models.cjs");
+const { endpoint, codexProviderId } = require("./models.cjs");
 const { sseMessages } = require("./adapters.cjs");
 const { write: writeResponse } = require("./stream-write.cjs");
 const { messagesTransport, providerSessionHeaders } = require("./provider-transport.cjs");
@@ -20,9 +20,10 @@ function harnessRoute(url, body, state) {
     body.model = resolveClaudeModel(state.providers, body.model);
     const split = typeof body.model === "string" ? body.model.indexOf("::") : -1;
     if (split < 1) throw Object.assign(new Error("请选择完整的供应商::模型 ID"), { status: 400 });
-    const provider = body.model.slice(0, split);
+    const provider = state.providers.find(p => p.enabled && codexProviderId(p.id) === body.model.slice(0, split));
+    if (!provider) throw Object.assign(new Error("请选择 ASS 注入的模型 ID"), { status: 404 });
     body.model = body.model.slice(split + 2);
-    url = url.replace("/models/", "/harness/" + provider + "/");
+    url = url.replace("/models/", "/harness/" + provider.id + "/");
   }
   const match =
     /^\/harness\/([\w-]+)\/v1\/(responses(?:\/compact)?|messages(?:\/count_tokens)?|chat\/completions)(?:\?[^#]*)?$/.exec(

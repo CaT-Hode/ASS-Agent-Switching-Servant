@@ -121,7 +121,7 @@ function edit(text, keys, value) {
 }
 function validField(e) {
   return e.harness === "dsh" && !e.selector && Array.isArray(e.path) &&
-    (e.path.length === 3 && e.path[0] === "llm-pi-ai" && e.path[1] === "providers" && /^ass-[a-f0-9]{16}-(chat|responses|messages)$/.test(e.path[2]) ||
+    (e.path.length === 3 && e.path[0] === "llm-pi-ai" && e.path[1] === "providers" && /^ass-[a-f0-9]{16}-(chat|responses|messages)$/i.test(e.path[2]) ||
      e.path.length === 2 && e.path[0] === "agent-default-model" && ["provider", "model", "reasoningEffort"].includes(e.path[1]));
 }
 function readSettings(dir, readLegacy) {

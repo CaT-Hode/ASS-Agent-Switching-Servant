@@ -7,6 +7,7 @@ const { ConfigManager } = require("../core/config.cjs");
 const { ProxyConfig } = require("../core/proxy-config.cjs");
 const { ClaudeDesktopGateway } = require("../core/claude-desktop-gateway.cjs");
 const { claudeModels } = require("../core/claude-models.cjs");
+const { codexModelId } = require("../core/models.cjs");
 const crypt = { isEncryptionAvailable: () => true, encryptString: s => Buffer.from(s), decryptString: b => b.toString() };
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ass-claude-integrated-"));
@@ -35,7 +36,7 @@ test("one accountless sync applies terminal and desktop; off restores both and p
     ...claudeModels(f.proxy.clients.claude.providers).map(m => m.discoveryId),
   ]);
   const settings = JSON.parse(fs.readFileSync(f.settings));
-  assert.deepEqual(settings.availableModels, ["relay::kimi-messages", "relay::gpt-fixture"]);
+  assert.deepEqual(settings.availableModels, ['kimi-messages', 'gpt-fixture'].map(model => codexModelId('relay', model)));
   assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, token);
   const loaded = new ProxyConfig(f.data, crypt, f.manager, f.store, f.config, f.desktop);
   assert.equal(loaded.status("claude", true).applied, true);

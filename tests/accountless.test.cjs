@@ -85,7 +85,7 @@ test("Claude has a credential-isolated home, only injected model choices, no acc
   const f = fixture(t); await f.apply("claude"); await f.apply("claude", true);
   const plan = f.manager.accountlessPlan("claude", "ephemeral-token"); f.manager.materialize(plan);
   const settings = JSON.parse(fs.readFileSync(path.join(plan.dir, "settings.json")));
-  assert.deepEqual(settings.availableModels, ["relay::test-claude", "relay::test-chat"]);
+  assert.deepEqual(settings.availableModels, ["ASS_682fbae20f3428bcec4c117c::test-claude", "ASS_682fbae20f3428bcec4c117c::test-chat"]);
   assert.equal(settings.enforceAvailableModels, true); assert.equal(settings.modelPicker.replaceBuiltInOptions, true);
   assert.equal(plan.env.ANTHROPIC_AUTH_TOKEN, f.proxy.clients.claude.localToken);
   assert.equal(plan.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
@@ -113,7 +113,7 @@ test("Claude terminal overlay persists, preserves OAuth and unrelated settings, 
   assert.equal(injected.env.ANTHROPIC_API_KEY, "");
   assert.equal(injected.apiKeyHelper, undefined);
   assert.equal(injected.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:25819/clients/claude/models");
-  assert.deepEqual(injected.availableModels, ["relay::test-claude", "relay::test-chat"]);
+  assert.deepEqual(injected.availableModels, ["ASS_682fbae20f3428bcec4c117c::test-claude", "ASS_682fbae20f3428bcec4c117c::test-chat"]);
   assert.equal(fs.readFileSync(oauth, "utf8"), credentials);
   assert.equal(f.proxy.status("claude", true).runtimeStatus, "terminal-ready");
   const reloaded = new ProxyConfig(f.data, crypt, f.manager, f.store, f.config);
@@ -141,20 +141,20 @@ test("Claude CLI defaults and auto review sync independently, use applied choice
   await f.apply('claude');
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile)), original, 'ordinary injection leaves native login configuration alone');
   const normal = f.manager.modelPlan('claude', main, 'synthetic-local');
-  assert.equal(normal.env.ANTHROPIC_MODEL, 'relay::test-chat');
-  assert.equal(normal.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude[1m]');
-  assert.equal(normal.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'relay::test-claude[1m]');
+  assert.equal(normal.env.ANTHROPIC_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-chat');
+  assert.equal(normal.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-claude[1m]');
+  assert.equal(normal.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-claude[1m]');
   assert.equal(normal.env.CLAUDE_CODE_AUTO_MODE_SERVER, '0');
   assert.equal(JSON.parse(normal.files.find(([name]) => name === 'settings.json')[1]).autoCompactWindow, 190000);
   assert.ok(!normal.args.some(a => /skip-permissions|permission-mode/.test(a)));
   await f.apply('claude', true);
   let settings = JSON.parse(fs.readFileSync(settingsFile));
-  assert.equal(settings.model, 'relay::test-chat');
+  assert.equal(settings.model, 'ASS_682fbae20f3428bcec4c117c::test-chat');
   assert.equal(settings.autoCompactWindow, 190000);
-  assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude[1m]');
-  assert.equal(settings.modelSettings['relay::test-chat'].autoCompactWindow, 190000);
-  assert.equal(settings.modelSettings['relay::test-claude'].autoCompactWindow, 950000);
-  settings.modelSettings['relay::test-chat'].effortLevel = 'high';
+  assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-claude[1m]');
+  assert.equal(settings.modelSettings['ass_682fbae20f3428bcec4c117c::test-chat'].autoCompactWindow, 190000);
+  assert.equal(settings.modelSettings['ass_682fbae20f3428bcec4c117c::test-claude'].autoCompactWindow, 950000);
+  settings.modelSettings['ass_682fbae20f3428bcec4c117c::test-chat'].effortLevel = 'high';
   atomic(settingsFile, JSON.stringify(settings));
   assert.deepEqual(settings.permissions, original.permissions);
   const before = fs.readFileSync(settingsFile);
@@ -162,21 +162,44 @@ test("Claude CLI defaults and auto review sync independently, use applied choice
   assert.equal(f.proxy.status('claude', true).pending, true);
   assert.deepEqual(fs.readFileSync(settingsFile), before, 'drafts do not change the native terminal');
   f.proxy.repair('claude');
-  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude[1m]', 'repair keeps the applied reviewer');
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-claude[1m]', 'repair keeps the applied reviewer');
   await f.apply('claude');
   settings = JSON.parse(fs.readFileSync(settingsFile));
-  assert.equal(settings.model, 'relay::test-claude[1m]');
+  assert.equal(settings.model, 'ASS_682fbae20f3428bcec4c117c::test-claude[1m]');
   assert.equal(settings.autoCompactWindow, 950000);
-  assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-chat');
+  assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-chat');
   const plan = f.manager.accountlessPlan('claude', 'ignored');
-  assert.deepEqual(plan.args.slice(0, 2), ['--model', 'relay::test-claude[1m]']);
+  assert.deepEqual(plan.args.slice(0, 2), ['--model', 'ASS_682fbae20f3428bcec4c117c::test-claude[1m]']);
   assert.equal(JSON.parse(plan.files.find(([name]) => name === 'settings.json')[1]).autoCompactWindow, 950000);
-  assert.equal(plan.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-chat');
+  assert.equal(plan.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-chat');
   f.manager.setInjection('claude', { autoModeModel: null }); await f.apply('claude');
-  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude[1m]');
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile)).env.CLAUDE_CODE_AUTO_MODE_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-claude[1m]');
   await f.apply('claude', false);
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile)), { ...original,
-    modelSettings: { 'relay::test-chat': { effortLevel: 'high' } } });
+    modelSettings: { 'ass_682fbae20f3428bcec4c117c::test-chat': { effortLevel: 'high' } } });
+});
+
+test('legacy Claude injection upgrades to ASS names on sync and still restores native settings', async t => {
+  const f = fixture(t), file = path.join(f.manager.nativeHome, '.claude/settings.json');
+  const original = { model: 'original', permissions: { deny: ['Bash(rm *)'] } };
+  atomic(file, JSON.stringify(original));
+  await f.apply('claude');
+  await f.apply('claude', true);
+  const legacy = text => text.replaceAll('ASS_682fbae20f3428bcec4c117c::', 'relay::')
+    .replaceAll('ass_682fbae20f3428bcec4c117c::', 'relay::');
+  atomic(file, legacy(fs.readFileSync(file, 'utf8')));
+  f.proxy.persist(JSON.parse(legacy(JSON.stringify(f.proxy.clients))));
+  const proxy = new ProxyConfig(f.data, crypt, f.manager, f.store, f.config);
+  assert.equal(proxy.error, '');
+  assert.equal(proxy.status('claude', true).pending, true);
+  proxy.sync('claude');
+  const updated = JSON.parse(fs.readFileSync(file));
+  assert.ok(updated.availableModels.every(id => /^ASS_[a-f0-9]{24}::/.test(id)));
+  assert.ok(!Object.hasOwn(updated.modelSettings, 'relay::test-chat'));
+  assert.deepEqual(updated.permissions, original.permissions);
+  assert.equal(proxy.status('claude', true).applied, true);
+  proxy.restore(['claude']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), original);
 });
 
 test('Claude model terminals pass 1M CLI selections without changing the stored provider ID or ordinary reviewer', async t => {
@@ -185,11 +208,11 @@ test('Claude model terminals pass 1M CLI selections without changing the stored 
   f.manager.setInjection('claude', { defaultModel: modelRef('relay', 'test-chat'), autoModeModel: modelRef('relay', 'test-claude') });
   await f.apply('claude');
   const plan = f.manager.modelPlan('claude', modelRef('relay', 'test-chat'), 'synthetic-local');
-  assert.deepEqual(plan.args.slice(0, 2), ['--model', 'relay::test-chat[1m]']);
-  assert.equal(plan.env.ANTHROPIC_MODEL, 'relay::test-chat[1m]');
-  assert.equal(plan.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'relay::test-claude');
-  assert.equal(JSON.parse(plan.files.find(([name]) => name === 'settings.json')[1]).model, 'relay::test-chat[1m]');
-  assert.equal(f.proxy.clients.claude.defaultModel.model, 'relay::test-chat');
+  assert.deepEqual(plan.args.slice(0, 2), ['--model', 'ASS_682fbae20f3428bcec4c117c::test-chat[1m]']);
+  assert.equal(plan.env.ANTHROPIC_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-chat[1m]');
+  assert.equal(plan.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'ASS_682fbae20f3428bcec4c117c::test-claude');
+  assert.equal(JSON.parse(plan.files.find(([name]) => name === 'settings.json')[1]).model, 'ASS_682fbae20f3428bcec4c117c::test-chat[1m]');
+  assert.equal(f.proxy.clients.claude.defaultModel.model, 'ASS_682fbae20f3428bcec4c117c::test-chat');
   assert.ok(f.store.state.providers[0].models.every(m => !m.model.includes('[1m]')));
 });
 
@@ -204,7 +227,7 @@ test("Claude native drift is visible, blocks disable/quit, and repair uses appli
   f.store.updateProvider({ ...f.store.state.providers[0], models: [{ model: "draft-model" }] });
   f.proxy.repair("claude");
   const repaired = JSON.parse(fs.readFileSync(settings));
-  assert.deepEqual(repaired.availableModels, ["relay::test-claude", "relay::test-chat"]);
+  assert.deepEqual(repaired.availableModels, ["ASS_682fbae20f3428bcec4c117c::test-claude", "ASS_682fbae20f3428bcec4c117c::test-chat"]);
   assert.equal(repaired.theme, "dark");
   f.proxy.restore(["claude"]);
   assert.deepEqual(JSON.parse(fs.readFileSync(settings)), { theme: "dark" });
@@ -290,7 +313,7 @@ test("accountless router rejects unknown OAuth, non-injected and subscription mo
   const f = fixture(t); await f.apply("codex"); await f.apply("codex", true); await f.apply("claude"); await f.apply("claude", true);
   const base = `http://127.0.0.1:${f.router.port}`;
   const send = (client, token, model) => fetch(base + `/clients/${client === "codex" ? "ASS" : client}/v1/responses`, { method: "POST", headers: { authorization: "Bearer " + token }, body: JSON.stringify({ model, input: "OK" }) });
-  assert.equal((await send("codex", "synthetic-oauth", "relay::test-chat")).status, 401);
+  assert.equal((await send("codex", "synthetic-oauth", "ASS_682fbae20f3428bcec4c117c::test-chat")).status, 401);
   assert.equal((await send("codex", f.proxy.clients.codex.localToken, "gpt-official")).status, 403);
   assert.equal((await send("codex", f.proxy.clients.codex.localToken, "foreign::model")).status, 404);
   assert.equal(f.calls.length, 0);

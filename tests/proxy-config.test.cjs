@@ -680,13 +680,13 @@ test("Claude global Messages range works without account binding; switching mode
   assert.match(plan.env.ANTHROPIC_BASE_URL, /clients\/claude\/models$/);
   assert.equal(plan.env.ANTHROPIC_API_KEY, undefined);
   assert.equal(plan.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-  assert.deepEqual(plan.args.slice(0, 2), ["--model", "relay::two"]);
+  assert.deepEqual(plan.args.slice(0, 2), ["--model", "ASS_682fbae20f3428bcec4c117c::two"]);
   assert.ok(plan.args.includes("--settings"));
-  const body = { model: "relay::two" };
+  const body = { model: "ASS_682fbae20f3428bcec4c117c::two" };
   const route = harnessRoute("/models/v1/messages", body, f.proxy.routingState("claude"));
   assert.equal(body.model, "two");
   assert.equal(route.p.id, "relay");
-  assert.equal(harnessRoute("/models/v1/messages", { model: "relay::one" }, f.proxy.routingState("claude")).adapted, true);
+  assert.equal(harnessRoute("/models/v1/messages", { model: "ASS_682fbae20f3428bcec4c117c::one" }, f.proxy.routingState("claude")).adapted, true);
   assert.deepEqual(f.manager.state.accountBindings.claude || [], []);
 });
 test("Codex isolated OAuth launches receive the applied catalog without changing auth or applying drafts", (t) => {

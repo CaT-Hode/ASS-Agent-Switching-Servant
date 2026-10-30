@@ -194,7 +194,7 @@ function inspectCredentials(
     try {
       const adapter = require('./opencode-version.cjs'), major = adapter.version(launcher, dataDir), entries = major === 2 ? adapter.credentials(dataDir) : null;
       if (major === 2) {
-        const rows = (entries || []).filter(r => typeof r.integrationID === 'string' && !/^ass-/.test(r.integrationID)).map(r => {
+        const rows = (entries || []).filter(r => typeof r.integrationID === 'string' && !/^ass-/i.test(r.integrationID)).map(r => {
           const row = r.value.type === 'key' ? api(r.integrationID, r.value.key)
             : r.value.type === 'oauth' ? oauth(r.integrationID, r.value.access, r.value.refresh, r.value.expires, now)
             : { provider: r.integrationID, authType: 'unknown', ready: false, status: 'external', message: '原生凭据类型尚未支持' };

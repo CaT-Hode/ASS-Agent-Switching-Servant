@@ -24,7 +24,7 @@ const NPMS = {
 };
 const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const providerId = (p, protocol) =>
-  "ass-" +
+  "ASS-" +
   createHash("sha256").update(p.id).digest("hex").slice(0, 16) +
   "-" +
   {
@@ -108,7 +108,7 @@ function reasoning(model) {
 }
 function compose(harness, manager, selection, targetOverride) {
   const target = targetOverride || locations(harness, manager),
-    fields = [];
+    fields = [], renames = new Map();
   if (harness === "zcode") {
     const text = read(target.config);
     if (text !== null) zcode.validate(document(text, "json").data);
@@ -137,6 +137,7 @@ function compose(harness, manager, selection, targetOverride) {
       if (!APIS[wire]) throw Error("原生接入不支持此模型协议");
       const id = providerId(p, wire),
         base = baseUrl(harness, p, wire);
+      renames.set('ass-' + id.slice(4), id);
       const headers = p.extraHeaders || {};
       if (harness === "opencode") {
         if (target.major === 2 && require('./opencode-version.cjs').credentials(target.dir)?.some(r => r.integrationID === id &&
@@ -225,6 +226,7 @@ function compose(harness, manager, selection, targetOverride) {
         }, { credentialProvider: id });
         for (const m of models) {
           const alias = id + "-" + createHash("sha256").update(m.model).digest("hex").slice(0, 16);
+          renames.set('ass-' + alias.slice(4), alias);
           field(target.config, "toml", ["models", alias], {
             provider: id, model: m.model, display_name: m.displayName,
             max_context_size: m.contextWindow,
@@ -312,6 +314,29 @@ function compose(harness, manager, selection, targetOverride) {
     }
   }
   if (selectedRef && !selected) throw Error("默认接入模型不可用，请重新选择或保留客户端默认模型");
+  // Renaming a namespace keeps the native selection on the same model. These
+  // one-time edits do not take ownership of a user's later model choices.
+  const rename = (file, format, keys, value) => {
+    if (!fields.some(f => f.file === file && JSON.stringify(f.path) === JSON.stringify(keys)))
+      field(file, format, keys, value, { replace: true, renameOnly: true });
+  };
+  const current = document(read(target.config), target.format || (harness === 'kimi' ? 'toml' : harness === 'opencode' ? 'jsonc' : 'json')).data;
+  if (harness === 'opencode' && typeof current.model === 'string') {
+    const split = current.model.indexOf('/'), id = renames.get(current.model.slice(0, split));
+    if (id) rename(target.config, 'jsonc', ['model'], id + current.model.slice(split));
+  } else if (harness === 'pi') {
+    const settings = document(read(target.settings), 'json').data, id = renames.get(settings.defaultProvider);
+    if (id) rename(target.settings, 'json', ['defaultProvider'], id);
+  } else if (harness === 'dsh') {
+    const id = renames.get(current['agent-default-model']?.provider);
+    if (id) rename(target.config, target.format || 'yaml', ['agent-default-model', 'provider'], id);
+  } else if (harness === 'kimi') {
+    const model = renames.get(current.default_model);
+    if (model) rename(target.config, 'toml', ['default_model'], model);
+  } else if (harness === 'zcode') {
+    const selection = current.config?.defaultModelSelection, id = renames.get(selection?.providerId);
+    if (id) rename(target.config, 'json', ['config', 'defaultModelSelection'], { ...selection, providerId: id });
+  }
   return { target, fields, selected, modelCount: included.size,
     nativeModelCount: catalog.filter((m) => m.native).length };
 }

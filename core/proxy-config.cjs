@@ -191,13 +191,13 @@ class ProxyConfig {
     const defaultModel = id === "codex" && selected
       ? { model: selected.official ? selected.model.model : codexModelId(selected.provider.id, selected.model.model), effort }
       : (accountless || id === 'claude') && selected
-        ? { model: selected.provider.id + "::" + selected.model.model, effort }
+        ? { model: codexModelId(selected.provider.id, selected.model.model), effort }
         : null;
     const review = id === 'claude' && available.find(row => modelRef(row.provider.id, row.model.model) === injection.autoModeModel);
     return {
       providers,
       defaultModel,
-      ...(review ? { autoModeModel: review.provider.id + '::' + review.model.model } : {}),
+      ...(review ? { autoModeModel: codexModelId(review.provider.id, review.model.model) } : {}),
       // Codex's archive page filters by the default provider. Keep OAuth
       // injection on OpenAI so native archives stay visible. The persisted
       // compatibility flag also keeps older applied plans distinguishable.

@@ -37,10 +37,10 @@ test("verified native APIs become encrypted, persistent suppliers for all client
 });
 test("Claude uses DeepSeek's native Messages endpoint and adapts Go chat without protocol relabeling", () => {
   const p = { id: "p", enabled: true, apiKey: "synthetic", baseUrl: "https://api.deepseek.com", models: [{ model: "deepseek-chat", wireApi: "openai-chat", enabled: true }] };
-  let route = harnessRoute("/models/v1/messages", { model: "p::deepseek-chat" }, { providers: [p] });
+  let route = harnessRoute("/models/v1/messages", { model: "ASS_148de9c5a7a44d19e56cd9ae::deepseek-chat" }, { providers: [p] });
   assert.equal(route.url, "https://api.deepseek.com/anthropic/v1/messages"); assert.equal(route.adapted, false);
   p.baseUrl = "https://opencode.ai/zen/go/v1";
-  route = harnessRoute("/models/v1/messages", { model: "p::deepseek-chat" }, { providers: [p] });
+  route = harnessRoute("/models/v1/messages", { model: "ASS_148de9c5a7a44d19e56cd9ae::deepseek-chat" }, { providers: [p] });
   assert.equal(route.protocol, "openai-chat"); assert.equal(route.adapted, true);
   const headers = providerSessionHeaders(p, { session_id: "conversation-a", authorization: "Bearer official", "chatgpt-account-id": "other" });
   assert.equal(headers["x-opencode-session"], "conversation-a"); assert.equal(headers.authorization, undefined);
@@ -70,7 +70,7 @@ test("real loopback Claude relay converts text and tools, preserves session, and
   await router.start(0); t.after(() => router.stop());
   for (const streaming of [true, false]) {
     const r = await fetch(`http://127.0.0.1:${router.server.address().port}/clients/claude/models/v1/messages`, { method: "POST", headers: { "x-api-key": router.clientToken, "content-type": "application/json", "x-session-id": "conversation-one" },
-      body: JSON.stringify({ model: "go::glm", messages: [{ role: "user", content: "Say OK" }], stream: streaming, max_tokens: 32 }) });
+      body: JSON.stringify({ model: require('../core/models.cjs').codexModelId('go', 'glm'), messages: [{ role: "user", content: "Say OK" }], stream: streaming, max_tokens: 32 }) });
     assert.equal(r.status, 200); const text = await r.text();
     assert.match(text, /OK/); assert.doesNotMatch(text, /synthetic-upstream-key/);
     if (streaming) assert.match(text, /message_stop/); else assert.equal(JSON.parse(text).content[0].text, "OK");

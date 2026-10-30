@@ -109,7 +109,7 @@ test("native Kimi reserialization still permits withdrawal without touching new 
   const f = fixture(t, true); f.native.sync("kimi");
   const config = managedToml.parse(fs.readFileSync(f.file, "utf8"));
   config.user_setting = { note: 'multi\n[providers.ass-fake]\nnot a table', values: [[1, 2], [3, 4]] };
-  const alias = Object.keys(config.models).find((key) => key.startsWith("ass-"));
+  const alias = Object.keys(config.models).find((key) => key.startsWith("ASS-"));
   config.default_model = alias;
   put(f.file, TOML.stringify(config));
   assert.throws(() => f.native.restore(["kimi"]), /先在 Kimi 切换模型/);

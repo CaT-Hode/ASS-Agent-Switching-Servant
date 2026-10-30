@@ -149,7 +149,7 @@ function validField(e) {
     !["dsh", "opencode", "pi", "kimi", "zcode"].includes(e.harness) ||
     !path.isAbsolute(e.file || "") ||
     !(e.format === "dsh-patch" ? dsh.validField(e) : e.harness === "zcode" ? zcode.validField(e) : !e.selector && (e.harness === "kimi"
-      ? e.format === "toml" && managedToml.validPath(e.path) && !e.replace : ["json", "jsonc", "yaml"].includes(e.format))) ||
+      ? e.format === "toml" && managedToml.validPath(e.path) && (e.path.length === 1 ? e.replace : !e.replace) : ["json", "jsonc", "yaml"].includes(e.format))) ||
     !Array.isArray(e.path) ||
     !e.path.length ||
     e.path.some(
@@ -300,8 +300,8 @@ class NativeFields {
         file.after = edit(file.after, e.format, e.path, target, e.selector);
       else if (old && e.format === "toml")
         managedToml.assertOwned(file.after, e.path);
-      if (next) {
-        const { value: _, before: __, after: ___, ...metadata } = next;
+      if (next && (!next.renameOnly || old)) {
+        const { value: _, before: __, after: ___, renameOnly: _renameOnly, ...metadata } = next;
         entries.push({
           ...metadata,
           before: old ? old.before : current,
@@ -317,7 +317,7 @@ class NativeFields {
     if (harness === "kimi") for (const file of files.values()) {
       const current = document(file.before, "toml").data, next = document(file.after, "toml").data;
       if (previous.some((e) => e.file === file.file && e.path[0] === "models" && e.path[1] === current.default_model) &&
-          !Object.hasOwn(next.models || {}, current.default_model))
+          !Object.hasOwn(next.models || {}, next.default_model))
         throw Error("Kimi 默认模型仍属于待移除的供应商，请先在 Kimi 切换模型");
     }
     return {

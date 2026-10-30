@@ -34,7 +34,7 @@ class RequestWidget {
     const display = this.screen.getDisplayNearestPoint({ x: settings.x ?? area.x + area.width - width - 24, y: settings.y ?? area.y + 50 }).workArea;
     const x = Math.max(display.x, Math.min(display.x + display.width - width, settings.x ?? area.x + area.width - width - 24));
     const y = Math.max(display.y, Math.min(display.y + display.height - height, settings.bottom !== undefined ? settings.bottom - height : settings.y ?? area.y + 50));
-    this.window = new this.BrowserWindow({ width, height, x, y, frame: false, transparent: true,
+    this.window = new this.BrowserWindow({ width, height, x, y, type: 'toolbar', frame: false, transparent: true,
       // Keep size constraints open for native animation. resizable:false also
       // clamps direct Win32 resize requests to the initial client size.
       resizable: true, maximizable: false, minimizable: false, fullscreenable: false, hasShadow: false, useContentSize: true, thickFrame: false,

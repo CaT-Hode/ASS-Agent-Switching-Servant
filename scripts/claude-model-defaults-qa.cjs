@@ -7,6 +7,7 @@ const { ConfigManager } = require('../core/config.cjs');
 const { ProxyConfig } = require('../core/proxy-config.cjs');
 const { Router } = require('../core/router.cjs');
 const { modelRef } = require('../core/client-policy.cjs');
+const { codexModelId } = require('../core/models.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-claude-defaults-'));
 const home = path.join(root, 'home'), data = path.join(root, 'data'), codex = path.join(home, '.codex');
 const crypt = { isEncryptionAvailable: () => true, encryptString: s => Buffer.from(s), decryptString: b => b.toString() };
@@ -67,11 +68,11 @@ const router = new Router({ getState: id => proxy.routingState(id), allowClient:
   fs.writeFileSync(path.join(root, 'stdout.json'), stdout); fs.writeFileSync(path.join(root, 'stderr.log'), stderr);
   assert.equal(code, 0, stderr.slice(-500) || stdout.slice(-500));
   assert.deepEqual(JSON.parse(stdout).permission_denials, [], 'The classifier must approve the isolated tool call');
-  assert.ok(Object.hasOwn(JSON.parse(stdout).modelUsage, 'main::claude-opus-4-6[1m]'), 'The native CLI must load the 1M selection');
+  assert.ok(Object.hasOwn(JSON.parse(stdout).modelUsage, codexModelId('main', 'claude-opus-4-6') + '[1m]'), 'The native CLI must load the ASS-prefixed 1M selection');
   assert.ok(calls.some(c => c.host === 'main.invalid' && c.model === 'claude-opus-4-6'), JSON.stringify(calls));
   assert.ok(calls.some(c => c.host === 'review.invalid' && c.model === reviewModel), 'Classifier must reach its independently selected provider: ' + JSON.stringify(calls));
   const debug = fs.readFileSync(path.join(root, 'debug.log'), 'utf8');
-  assert.ok(debug.split('\n').some(line => line.includes('classifier_request_started') && line.includes('model=review::' + reviewModel + '[1m]')));
+  assert.ok(debug.split('\n').some(line => line.includes('classifier_request_started') && line.includes('model=' + codexModelId('review', reviewModel) + '[1m]')));
   assert.equal(fs.readFileSync(path.join(root, 'qa-marker.txt'), 'utf8'), 'ASS_QA');
   console.log(JSON.stringify({ passed: true, defaultModel: true, independentClassifierRoute: true, nativeAutoMode: true, context1m: true,
     reviewProtocol, upstreamSuffixRemoved: true, realCloudCalls: 0, root }));

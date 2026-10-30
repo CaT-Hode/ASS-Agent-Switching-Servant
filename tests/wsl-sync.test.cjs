@@ -1,5 +1,6 @@
 const { test } = require('node:test'), assert = require('node:assert/strict');
 const { projection, planFiles } = require('../core/wsl-sync.cjs');
+const { codexModelId } = require('../core/models.cjs');
 const TOML = require('@iarna/toml');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const { WslSync } = require('../core/wsl-sync.cjs');
@@ -22,10 +23,10 @@ test('WSL projections use Linux paths and gateway auth, keep CC 1M choices and p
   assert.equal(config.mcp_servers.local.command, 'node');
   assert.ok(plan.files.every(f => !/sessions|state_\d|history/.test(f.file)));
   const cc = projection('claude', { token: 'synthetic-local', plan: { providers: [provider],
-    defaultModel: { model: 'relay::claude-sonnet-4-6' } } }, info, base);
+    defaultModel: { model: codexModelId('relay', 'claude-sonnet-4-6') } } }, info, base);
   const ccPlan = planFiles(cc, [], { [cc[0].file]: '{"env":{"KEEP":"kept"},"permissions":{"deny":["Bash(rm *)"]}}' });
   const settings = JSON.parse(ccPlan.files[0].after);
-  assert.equal(settings.model, 'relay::claude-sonnet-4-6[1m]');
+  assert.equal(settings.model, codexModelId('relay', 'claude-sonnet-4-6') + '[1m]');
   assert.equal(settings.autoCompactWindow, 950000);
   assert.equal(settings.modelSettings['claude-sonnet-4-6'].autoCompactWindow, 950000);
   assert.equal(settings.env.ANTHROPIC_BASE_URL, base + '/clients/claude/models');
@@ -46,6 +47,9 @@ test('WSL field updates and withdrawal preserve unrelated edits and refuse to ov
   assert.equal(JSON.parse(restored.files[0].after).theme, 'dark');
   assert.throws(() => planFiles(desired, applied.records, { [desired[0].file]: '{"model":"external"}' }), /外部修改/);
   assert.equal(planFiles([], applied.records, { [desired[0].file]: applied.files[0].after }).files[0].after, original);
+  const replaced = [{ ...desired[0], fields: [{ keys: ['model'], value: 'ASS-replaced' }] }];
+  const adopted = planFiles(replaced, applied.records, { [desired[0].file]: '{"model":"ASS-replaced"}' });
+  assert.equal(adopted.records[0].fields[0].after.value, 'ASS-replaced');
 });
 
 test('pi retains public provider routes and maps Windows localhost HTTP providers with their paths intact', async () => {

@@ -15,8 +15,9 @@ const fieldAt = (data, keys) => {
   return present(data);
 };
 function change(text, format, keys, value) {
+  const data = document(text, format).data;
+  if (equal(fieldAt(data, keys), value)) return text;
   if (format !== 'toml') return edit(text, 'json', keys, value);
-  const data = document(text, 'toml').data;
   let parent = data;
   for (const key of keys.slice(0, -1)) parent = parent[key] ||= {};
   if (value.exists) parent[keys.at(-1)] = value.value;
@@ -36,8 +37,12 @@ function planFiles(desired, previous = [], contents) {
       if (next) records.push({ ...next, before: old ? old.before : before, after });
     } else {
       const data = document(before, format).data;
-      for (const field of old?.fields || []) if (!equal(fieldAt(data, field.keys), field.after))
-        throw Error('WSL 受管配置被外部修改：' + field.keys.join('.'));
+      for (const field of old?.fields || []) {
+        const current = fieldAt(data, field.keys), desired = next?.fields.find(f => equal(f.keys, field.keys));
+        if (!equal(current, field.after) && !(next && equal(current,
+          desired?.value === undefined ? { exists: false } : present(desired.value))))
+          throw Error('WSL 受管配置被外部修改：' + field.keys.join('.'));
+      }
       if (!next && old && before === old.after) after = old.before;
       else {
         for (const field of old?.fields || []) if (!next?.fields.some(f => equal(f.keys, field.keys)))

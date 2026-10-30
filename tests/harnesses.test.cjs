@@ -169,12 +169,12 @@ test("five harness config generators never embed upstream keys", () => {
       }
     if (id === "dsh")
       assert.equal(
-        JSON.parse(plan.files[0][1])["llm-pi-ai"].providers["ass-api"]
+        JSON.parse(plan.files[0][1])["llm-pi-ai"].providers["ASS-api"]
           .apiKeyEnv,
         "ASS_LOCAL_TOKEN",
       );
     if (id === "opencode")
-      assert.ok(JSON.parse(plan.env.OPENCODE_CONFIG_CONTENT).provider.ass);
+      assert.ok(JSON.parse(plan.env.OPENCODE_CONFIG_CONTENT).provider.ASS);
   }
 });
 test("native profiles are isolated; official launch clears third-party auth environment", (t) => {

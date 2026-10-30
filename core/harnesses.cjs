@@ -233,7 +233,7 @@ function routeConfig(harness, p, m, dir, token, catalog, port = 25819) {
       p.brand === "opencode-go" ||
       new URL(p.baseUrl).pathname.startsWith("/zen/go")
         ? "opencode-go"
-        : "ass";
+        : "ASS";
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
       $schema: "https://opencode.ai/config.json",
       model: id + "/" + m.model,
@@ -262,7 +262,7 @@ function routeConfig(harness, p, m, dir, token, catalog, port = 25819) {
       JSON.stringify(
         {
           providers: {
-            ass: {
+            ASS: {
               baseUrl: base + "/v1",
               api: APIS[m.wireApi],
               apiKey: "$ASS_LOCAL_TOKEN",
@@ -274,11 +274,11 @@ function routeConfig(harness, p, m, dir, token, catalog, port = 25819) {
         2,
       ),
     ]);
-    args.push("--provider", "ass", "--model", m.model);
+    args.push("--provider", "ASS", "--model", m.model);
   }
   if (harness === "dsh") {
     // JSON is valid YAML; only the ASS-owned per-account settings file is generated.
-    const provider = "ass-api";
+    const provider = "ASS-api";
     files.push([
       "settings.yaml",
       JSON.stringify(
@@ -1344,7 +1344,7 @@ class HarnessManager {
       entry[1] = JSON.stringify({ ...catalog, models: catalog.models.filter((m) => m.slug.includes("::")) });
     }
     if (harness === "claude") {
-      const name = p.id + "::" + m.model;
+      const name = codexModelId(p.id, m.model);
       config.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${this.options.port || 25819}/clients/claude/models`;
       config.args = [];
       const cliModel = configureClaudeModels(config, applied?.providers || this.getState().providers, name, dir, applied?.autoModeModel);
@@ -1365,7 +1365,7 @@ class HarnessManager {
     this.options.proxyConfig.requireApplied(harness);
     const selected = applied.defaultModel
       ? applied.providers.flatMap((provider) => provider.models.filter((model) => model.enabled !== false).map((model) => ({ provider, model })))
-        .find(({ provider, model }) => (harness === "codex" ? codexModelId(provider.id, model.model) : provider.id + "::" + model.model) === applied.defaultModel.model)
+        .find(({ provider, model }) => codexModelId(provider.id, model.model) === applied.defaultModel.model)
       : null;
     const p = selected?.provider || applied.providers.find((provider) => provider.models.some((model) => model.enabled !== false));
     const m = selected?.model || p?.models.find((model) => model.enabled !== false);

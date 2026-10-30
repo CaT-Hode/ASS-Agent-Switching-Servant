@@ -9,6 +9,7 @@ class UsageHistory {
     this.getOptions = getOptions;
     this.onChange = onChange;
     this.cache = {};
+    this.locations = {};
     this.state = { rows: [], sources: [], updatedAt: null };
     this.job = null;
     try {
@@ -23,6 +24,7 @@ class UsageHistory {
           Intl.DateTimeFormat().resolvedOptions().timeZone
       ) {
         this.cache = value.cache || {};
+        this.locations = value.locations || {};
         this.state = value.snapshot;
       }
     } catch {
@@ -38,7 +40,7 @@ class UsageHistory {
       return Promise.resolve();
     this.job = new Promise((resolve) => {
       const worker = new Worker(path.join(__dirname, "usage-worker.cjs"), {
-        workerData: { options: this.getOptions(), cache: this.cache },
+        workerData: { options: { ...this.getOptions(), automatic }, cache: this.cache, locations: this.locations },
       });
       let settled = false;
       const finish = (value) => {
@@ -47,6 +49,7 @@ class UsageHistory {
         clearTimeout(timer);
         if (value) {
           this.cache = value.cache;
+          this.locations = value.locations || {};
           this.state = value.snapshot;
           try {
             if (!this.crypto.isEncryptionAvailable()) throw Error("encryption");

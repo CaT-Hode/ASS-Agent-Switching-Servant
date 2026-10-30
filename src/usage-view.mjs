@@ -10,7 +10,8 @@ export const CLIENT_NAMES = {
   zcode: "ZCode",
 };
 export const detectedClients = (state) => state.harnesses.clients.filter((c) =>
-  c.detected === true || (c.detected === undefined && !!(c.executable || c.launcher?.installed || c.desktop)));
+  c.detected === true || (c.detected === undefined && !!(c.executable || c.launcher?.installed || c.desktop)) ||
+  state.usage?.sources?.some(source => source.client === c.id && source.records > 0));
 export const dayKey = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 export function rangeBounds(range, now = new Date()) {

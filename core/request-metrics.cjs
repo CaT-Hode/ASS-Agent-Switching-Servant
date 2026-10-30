@@ -1,4 +1,5 @@
 const { SseParser } = require('./sse-parser.cjs');
+const { visibleTps } = require('./request-stats.mjs');
 const tokenCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const requestTps = (tokens, ms) => tokenCount(tokens) !== null && Number.isFinite(ms) && ms > 0 ? tokens * 1000 / ms : null;
 const visibleOutputTokens = usage => tokenCount(usage?.outputTokens) !== null && tokenCount(usage?.reasoningTokens) !== null &&
@@ -104,7 +105,7 @@ class RequestMetrics {
     return { usage: live && (this.usage || outputTokens) ? { ...this.usage, ...(outputTokens ? { outputTokens } : {}) } : this.usage,
       ttftMs: this.first === null ? null : Math.max(0, this.first - this.began), generationMs,
       visibleTokens, visibleMs,
-      tps: live && (visibleMs === null || visibleMs < 1000) ? null : requestTps(visibleTokens, visibleMs), tpsEstimated: visibleEstimated,
+      tps: visibleTps(visibleTokens, visibleMs), tpsEstimated: visibleEstimated,
       endToEndTps: requestTps(outputTokens, elapsedMs),
       ...(live ? { outputEstimated: estimated } : {}) };
   }

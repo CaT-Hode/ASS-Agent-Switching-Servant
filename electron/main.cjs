@@ -1081,6 +1081,8 @@ else {
           home: harnesses.nativeHome,
           env: harnesses.nativeEnv,
           codexDir,
+          discover: !testMode,
+          projects: [harnesses.state.workspace].filter(Boolean),
           overrides: harnesses.state.credentialHomes,
           profiles: harnesses.state.profiles.map(({ id, harness }) => ({
             id,

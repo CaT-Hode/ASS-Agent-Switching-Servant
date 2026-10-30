@@ -683,7 +683,7 @@ export function Overview({ state, act, setView, setClientTarget }) {
         </summary>
         <p>
           Token
-          来自本机记录；输入包含缓存读取与写入，推理包含于输出。订阅额度为各账户上次查询结果，不折算
+          来自 Windows、WSL 与项目隔离目录的本地记录；输入包含缓存读取与写入，推理包含于输出。订阅额度为各账户上次查询结果，不折算
           Token、不跨账户相加。时间按 {usage.timeZone || "本机时区"} 统计。
         </p>
         {filteredSources.map((s) => (

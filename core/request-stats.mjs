@@ -1,4 +1,7 @@
 export const known = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+// Sub-second bursts do not provide the one-second receive sample used by live
+// TPS. Apply the same rule to completed rows and their archive aggregates.
+export const visibleTps = (tokens, ms) => known(tokens) && known(ms) && ms >= 1000 ? tokens * 1000 / ms : null;
 export const requestOK = row => row.taskOk ?? row.ok ?? false;
 export function emptyStats() {
   return { calls: 0, completed: 0, running: 0, liveTps: 0, liveTpsSamples: 0, liveEstimated: false, passed: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, usageSamples: 0,
@@ -29,7 +32,7 @@ export function addRequestStats(stats, row) {
   if (known(usage?.cacheReadTokens) && known(usage?.inputTokens)) {
     stats.cacheSamples++; stats.cacheReadForRate += usage.cacheReadTokens; stats.cachedInput += usage.inputTokens;
   }
-  if (requestOK(row) && known(row.visibleMs) && row.visibleMs > 0 && known(row.visibleTokens)) {
+  if (requestOK(row) && visibleTps(row.visibleTokens, row.visibleMs) !== null) {
     stats.tpsSamples++; stats.visibleTokens += row.visibleTokens; stats.visibleMs += row.visibleMs;
     stats.tpsEstimated ||= row.tpsEstimated === true;
   }

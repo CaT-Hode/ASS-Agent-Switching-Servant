@@ -1,7 +1,7 @@
 const fs = require('node:fs'), path = require('node:path');
 const { requestTps, visibleOutputTokens } = require('./request-metrics.cjs');
 const { atomic } = require('./config.cjs');
-const { emptyStats, addRequestStats, requestOK } = require('./request-stats.mjs');
+const { emptyStats, addRequestStats, requestOK, visibleTps } = require('./request-stats.mjs');
 const MAX_RECORDS = 200;
 // The monitor reads only numeric
 // measurements and routing labels; it never exposes raw upstream payloads.
@@ -21,7 +21,7 @@ function publicRecord(record) {
   result.tpsEstimated = hasVisibleCount && record.tpsEstimated === true;
   // Older logs did not separate visible timing from reasoning. Keep that speed
   // unknown, rather than reuse a whole-request or mixed reasoning interval.
-  result.tps = requestTps(result.visibleTokens, result.visibleMs);
+  result.tps = visibleTps(result.visibleTokens, result.visibleMs);
   result.endToEndTps = requestTps(result.usage?.outputTokens, result.ms);
   return result;
 }
@@ -37,6 +37,12 @@ class RequestHistory {
         if (!bucket.model || !Number.isFinite(Date.parse(bucket.time)) || !Number.isSafeInteger(bucket.stats?.calls) || bucket.stats.calls < 1)
           throw Error('Invalid archive');
         const stats = emptyStats(); addRequestStats(stats, bucket);
+        if (state.tpsVersion !== 2) {
+          // Old aggregates mixed measured streams with sub-second buffered
+          // bursts. Their individual timings no longer exist; retain all token
+          // and request totals, but do not present the mixed speed as measured.
+          stats.tpsSamples = stats.visibleTokens = stats.visibleMs = 0; stats.tpsEstimated = false;
+        }
         this.archive.set(this.archiveKey(bucket), { ...bucket, stats }); this.archived += stats.calls;
       }
       for (const record of state.rows) { const row = publicRecord(record); if (row) this.accept(row); }
@@ -85,7 +91,7 @@ class RequestHistory {
     // One atomic ledger owns both the archive and the retained tail. The JSONL
     // below is a compatibility mirror, never re-imported once the ledger exists.
     // This prevents counting an evicted row twice after an interrupted mirror write.
-    atomic(this.stateFile, JSON.stringify({ version: 1, archive: this.snapshot().archive, rows: this.rows },
+    atomic(this.stateFile, JSON.stringify({ version: 1, tpsVersion: 2, archive: this.snapshot().archive, rows: this.rows },
       (key, value) => key === 'stats' ? Object.fromEntries(Object.entries(value).filter(([, v]) => v !== 0 && v !== false)) : value));
     atomic(this.file, this.rows.map(row => JSON.stringify(row) + '\n').join(''));
     fs.rmSync(this.file + '.previous', { force: true });

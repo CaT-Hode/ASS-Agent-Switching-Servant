@@ -102,7 +102,34 @@ test('passive stream measurement preserves split UTF8, CRLF, heartbeats and raw 
   const response = metrics.observe(new Response(body, { headers: { 'content-type': 'text/event-stream', 'x-fixture': 'keep' } }));
   assert.equal(await response.text(), events); assert.equal(response.headers.get('x-fixture'), 'keep');
   assert.equal(metrics.snapshot().usage.inputTokens, 40); assert.equal(metrics.snapshot().usage.cacheReadTokens, 30);
-  assert.ok(metrics.snapshot().tps > 0); assert.equal(JSON.stringify(metrics.snapshot()).includes('你好'), false);
+  assert.equal(metrics.snapshot().tps, null, 'sub-second transport fragments do not qualify as a receive-rate sample');
+  assert.equal(JSON.stringify(metrics.snapshot()).includes('你好'), false);
+});
+
+test('completed sub-second visible bursts stay unknown and cannot inflate archived TPS', async t => {
+  let now = 0; const metrics = new RequestMetrics({ now: () => now });
+  now = 1183; metrics.event({ type: 'response.reasoning_text.delta', delta: 'reasoning' });
+  now = 2200; metrics.event({ type: 'response.function_call_arguments.delta', delta: 'a'.repeat(336) });
+  now = 2229; metrics.event({ type: 'response.function_call_arguments.delta', delta: 'b'.repeat(336) });
+  now = 2352; metrics.event({ type: 'response.completed', response: { usage: {
+    input_tokens: 29851, output_tokens: 202, output_tokens_details: { reasoning_tokens: 34 } } } });
+  const measured = metrics.snapshot();
+  assert.equal(measured.visibleTokens, 168); assert.equal(measured.visibleMs, 29);
+  assert.equal(measured.tps, null); assert.equal(measured.usage.outputTokens, 202);
+  const { emptyStats, addRequestStats } = await import('../core/request-stats.mjs');
+  const stats = emptyStats(); addRequestStats(stats, { ok: true, ...measured });
+  assert.equal(stats.output, 202); assert.equal(stats.tpsSamples, 0);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-monitor-burst-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'request-history.json'), JSON.stringify({ version: 1, rows: [
+    { time: '2026-10-30T08:00:00Z', model: 'deepseek', ok: true, ...measured }], archive: [
+    { time: '2026-10-30T07:00:00Z', model: 'deepseek', ok: true, stats: {
+      calls: 3, completed: 3, passed: 3, input: 90000, output: 606, visibleTokens: 504, visibleMs: 87, tpsSamples: 3 } }] }));
+  const history = new RequestHistory(root), current = history.snapshot();
+  assert.equal(current.rows[0].tps, null); assert.equal(current.archive[0].stats.tpsSamples, 0);
+  assert.equal(current.archive[0].stats.calls, 3); assert.equal(current.archive[0].stats.output, 606);
+  history.append({ model: 'deepseek', ok: true, visibleTokens: 168, visibleMs: 2000 });
+  assert.equal(new RequestHistory(root).snapshot().rows.at(-1).tps, 84);
 });
 
 test('JSON reports whole-request throughput without inventing streaming timings; invalid streams do not change transport', async () => {

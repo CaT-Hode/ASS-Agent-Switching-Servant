@@ -7,6 +7,7 @@ const { nativeLocations } = require("./credential-status.cjs");
 const { safePath } = require("./native-fields.cjs");
 const { hash, num, known, label, dayKey, localHour, normalized } = require("./usage-common.cjs");
 const extra = require("./usage-extra.cjs");
+const locations = require('./usage-locations.cjs');
 const CLIENTS = ["codex", "claude", "opencode", "pi", "dsh", "kimi", "zcode"];
 function codexUsage(u) {
   return normalized(
@@ -309,9 +310,15 @@ function rootsFor(client, options) {
   for (const p of options.profiles || [])
     if (p.harness === client)
       dirs.push(path.join(options.dataDir, "clients", client, p.id));
+  // Retired account cards can leave valid isolated histories behind.
+  const owned = path.join(options.dataDir, 'clients', client);
+  try {
+    for (const entry of fs.readdirSync(owned, { withFileTypes: true }))
+      if (entry.isDirectory() && !entry.isSymbolicLink() && /^[a-f0-9]{24}$/.test(entry.name)) dirs.push(path.join(owned, entry.name));
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
   return [...new Set(dirs)];
 }
-async function scan(options, previousCache = {}) {
+async function scan(options, previousCache = {}, previousLocations = {}) {
   const cache = {},
     records = new Map(),
     sources = [];
@@ -321,9 +328,15 @@ async function scan(options, previousCache = {}) {
   const from = dayKey(earliest),
     to = dayKey(now);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let codexRoots = [];
+  try { codexRoots = rootsFor('codex', options); } catch { /* Per-client status below reports inaccessible roots. */ }
+  const discovery = await locations.discover({ ...options, codexRoots }, previousLocations);
   let bytes = 0;
   const putRecord = (row, fileUpdatedAt) => {
     if (row.day < from || row.day > to) return;
+    // Claude Code writes zero-usage synthetic assistant placeholders on errors;
+    // these are not model calls, including when read from an older cache.
+    if (row.client === 'claude' && row.model === '<synthetic>' && row.input + row.output === 0) return;
     const candidate = { ...row, fileUpdatedAt };
     if (newerUsage(candidate, records.get(row.key))) records.set(row.key, candidate);
   };
@@ -332,7 +345,7 @@ async function scan(options, previousCache = {}) {
       client,
       files: 0,
       records: 0,
-      partial: false,
+      partial: discovery.partial && ['codex', 'claude', 'pi'].includes(client),
       status: "empty",
       format:
         client === "dsh"
@@ -344,8 +357,11 @@ async function scan(options, previousCache = {}) {
             : "本机会话 JSONL",
     };
     const files = client === "zcode" ? extra.zcodeFiles(options, source) : [];
+    if (client === 'pi' && options.env?.PI_CODING_AGENT_SESSION_DIR)
+      filesUnder(path.resolve(options.env.PI_CODING_AGENT_SESSION_DIR.replace(/^~(?=[/\\]|$)/, options.home)), files, 0, source);
     let roots;
-    try { roots = rootsFor(client, options); } catch { roots = []; source.partial = true; }
+    try { roots = [...new Set([...rootsFor(client, options), ...discovery.roots.filter(r => r.client === client && !r.sessionDir).map(r => r.dir)])]; } catch { roots = []; source.partial = true; }
+    for (const root of discovery.roots.filter(r => r.client === client && r.sessionDir)) filesUnder(root.dir, files, 0, source);
     for (const dir of roots) {
       try { safePath(dir); } catch { source.partial = true; continue; }
       if (client === "opencode") files.push(path.join(dir, "opencode.db"));
@@ -415,6 +431,7 @@ async function scan(options, previousCache = {}) {
           };
         }
         if (client === "zcode") entry = extra.retainZCodeHistory(entry, previousCache[key], now);
+        entry = { ...entry, client, distro: locations.distroOf(file) };
         cache[key] = entry;
         if (entry.malformed) source.partial = true;
         for (const row of entry.rows) putRecord(row, stat.mtimeMs);
@@ -429,6 +446,14 @@ async function scan(options, previousCache = {}) {
         }
       }
     }
+    // Sleeping/offline WSL roots retain their last observed metadata. Reuse the
+    // same record keys so a Windows copy still cannot add a second charge.
+    for (const [key, entry] of Object.entries(previousCache))
+      if (entry.client === client && discovery.unavailable.has(entry.distro) &&
+          entry.signature?.startsWith(`3:${timeZone}:`)) {
+        source.partial = true; cache[key] = entry;
+        for (const row of entry.rows || []) putRecord(row, Number(entry.signature.split(':').at(3)) || 0);
+      }
     source.records = [...records.values()].filter(
       (r) => r.client === client,
     ).length;
@@ -472,6 +497,7 @@ async function scan(options, previousCache = {}) {
   // Session digests are used only for distinct counts across model/day groups.
   return {
     cache,
+    locations: discovery.saved,
     snapshot: {
       rows: [...buckets.values()].map((b) => ({
         ...b,

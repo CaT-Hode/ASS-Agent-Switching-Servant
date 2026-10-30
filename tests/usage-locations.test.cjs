@@ -96,3 +96,28 @@ test('offline WSL metadata survives refresh and shares deduplication with a read
   assert.equal(offline.snapshot.rows[0].calls, 1);
   assert.equal(offline.snapshot.sources.find(s => s.client === 'claude').status, 'partial');
 });
+
+test('large project discovery resumes past the first batch after serializing its progress', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-usage-project-batches-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const project = path.join(home, 'project'), last = path.join(project, 'd30039');
+  write(path.join(last, 'private-config/projects/p/session.jsonl'), [{ type: 'assistant', sessionId: 'late-session', timestamp: when,
+    message: { id: 'late-message', model: 'deepseek', usage: { input_tokens: 21, output_tokens: 8 } } }]);
+  const original = fs.promises.readdir;
+  t.mock.method(fs.promises, 'readdir', async (dir, options) => {
+    if (dir === project) return Array.from({ length: 30040 }, (_, n) => ({
+      name: 'd' + n, isDirectory: () => true, isSymbolicLink: () => false }));
+    if (dir.startsWith(last)) return original.call(fs.promises, dir, options);
+    return [];
+  });
+  const options = { home, dataDir: home, env: {}, projects: [project], automatic: true, now: Date.parse(when) };
+  const first = await scan(options);
+  assert.ok(first.locations.projectScan.pending.length > 0);
+  assert.equal(first.snapshot.rows.length, 0);
+  const saved = JSON.parse(JSON.stringify(first.locations));
+  const second = await scan({ ...options, now: options.now + 60000 }, first.cache, saved);
+  assert.equal(second.locations.projectScan, null);
+  assert.equal(second.locations.projectPartial, false);
+  assert.equal(second.snapshot.rows[0].calls, 1);
+  assert.equal(second.snapshot.rows[0].input, 21);
+});

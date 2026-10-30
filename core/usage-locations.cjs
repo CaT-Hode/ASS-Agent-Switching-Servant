@@ -2,6 +2,7 @@
 const fs = require('node:fs'), path = require('node:path');
 const { execFile } = require('node:child_process');
 const { displayPath, pathKey } = require('./conversation-paths.cjs');
+const { hash } = require('./usage-common.cjs');
 const CLIENTS = ['codex', 'claude', 'pi'];
 const SKIP = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', '.cache',
   'dist', 'build', 'release', 'target', 'coverage', 'tests', 'test', 'fixtures', 'qa']);
@@ -49,40 +50,43 @@ function sessionClient(dir, budget = { left: 40 }) {
   return '';
 }
 
-async function projectRoots(projects, home) {
-  const roots = [], seen = new Set(), queue = []; let partial = false;
-  const enqueue = (dir, depth) => {
-    const key = pathKey(dir); if (seen.has(key)) return; seen.add(key);
-    if (queue.length >= 30000 || depth > 16) { partial = true; return; }
-    queue.push({ dir, depth });
+async function projectRoots(projects, home, previous = {}) {
+  const roots = [], seen = new Set(previous.seen || []), queue = [...(previous.pending || [])];
+  let partial = previous.partial || false;
+  const enqueue = dir => {
+    const key = hash(pathKey(dir)); if (seen.has(key)) return; seen.add(key);
+    queue.push(dir);
   };
   // A selected project is a scan boundary. Never turn a home/drive selection
   // into an automatic crawl of every application or mounted filesystem.
   for (const project of projects) {
     if (!path.isAbsolute(project) || pathKey(project) === pathKey(home) || path.parse(project).root === path.resolve(project)) continue;
     try { if (fs.lstatSync(project).isSymbolicLink()) continue; } catch { continue; }
-    enqueue(project, 0);
+    enqueue(project);
   }
   // Directory reads overlap on the filesystem worker pool; no project walk runs
   // on the Electron UI thread. Batches also keep large repositories bounded.
-  for (let offset = 0; offset < queue.length;) {
-    const batch = queue.slice(offset, offset + 32);
+  let offset = 0;
+  for (; offset < queue.length && offset < 30000;) {
+    const batch = queue.slice(offset, Math.min(offset + 32, 30000));
     offset += batch.length;
-    const lists = await Promise.all(batch.map(async ({ dir }) => {
+    const lists = await Promise.all(batch.map(async dir => {
       try { return await fs.promises.readdir(dir, { withFileTypes: true }); }
       catch (error) { if (error.code !== 'ENOENT') partial = true; return []; }
     }));
     for (let index = 0; index < batch.length; index++) for (const entry of lists[index]) {
       if (!entry.isDirectory() || entry.isSymbolicLink() || SKIP.has(entry.name.toLowerCase())) continue;
-      const { dir, depth } = batch[index], child = path.join(dir, entry.name);
+      const dir = batch[index], child = path.join(dir, entry.name);
       if (['projects', 'sessions', 'archived_sessions'].includes(entry.name)) {
         const client = sessionClient(child);
         if (client) { roots.push({ client, dir }); continue; }
       }
-      enqueue(child, depth + 1);
+      enqueue(child);
     }
   }
-  return { roots, partial };
+  const pending = queue.slice(offset);
+  return { roots, partial: partial || pending.length > 0,
+    scan: { pending, seen: [...seen], partial } };
 }
 
 async function discover(options, previous = {}, run = execute) {
@@ -108,21 +112,26 @@ async function discover(options, previous = {}, run = execute) {
       } catch { if (roots.some(r => distroOf(r.dir))) partial = true; }
     }
   }
-  let scannedAt = previous.scannedAt || 0, projectPartial = previous.projectPartial || false;
+  let scannedAt = previous.scannedAt || 0, projectPartial = previous.projectPartial || false, projectScan = previous.projectScan || null;
   if (options.discover || options.projects?.length) {
+    const available = dir => !distroOf(dir) || running.has(distroOf(dir)) && !unavailable.has(distroOf(dir));
     const activeProjects = projects.filter(p => typeof p === 'string' && !homes.has(pathKey(p)) &&
-      (!distroOf(p) || running.has(distroOf(p)) && !unavailable.has(distroOf(p))));
+      available(p));
     const prior = new Set((previous.projects || []).map(pathKey)), now = options.now || Date.now();
-    if (!options.automatic || now - scannedAt >= 10 * 60000 || activeProjects.some(p => !prior.has(pathKey(p)))) {
-      const found = await projectRoots(activeProjects, options.home);
-      roots.push(...found.roots); scannedAt = now; projectPartial = found.partial;
+    if (projectScan || !options.automatic || now - scannedAt >= 10 * 60000 || activeProjects.some(p => !prior.has(pathKey(p)))) {
+      const deferred = (projectScan?.pending || []).filter(dir => !available(dir));
+      const resume = projectScan && { ...projectScan, pending: projectScan.pending.filter(available) };
+      const found = await projectRoots(activeProjects, options.home, resume || {});
+      roots.push(...found.roots); scannedAt = now; projectPartial = found.partial || deferred.length > 0;
+      projectScan = { ...found.scan, pending: [...deferred, ...found.scan.pending] };
+      if (!projectScan.pending.length) projectScan = null;
     }
     partial ||= projectPartial;
   }
   const unique = new Map();
   for (const root of roots) if (CLIENTS.includes(root.client) && typeof root.dir === 'string' && path.isAbsolute(root.dir))
     unique.set(root.client + '\0' + pathKey(root.dir) + '\0' + !!root.sessionDir, root);
-  const saved = { roots: [...unique.values()], projects: [...new Map(projects.filter(p => typeof p === 'string' && path.isAbsolute(p)).map(p => [pathKey(p), p])).values()], scannedAt, projectPartial };
+  const saved = { roots: [...unique.values()], projects: [...new Map(projects.filter(p => typeof p === 'string' && path.isAbsolute(p)).map(p => [pathKey(p), p])).values()], scannedAt, projectPartial, projectScan };
   const active = saved.roots.filter(r => {
     const distro = distroOf(r.dir);
     if (!distro || !options.discover || running.has(distro) && !unavailable.has(distro)) return true;

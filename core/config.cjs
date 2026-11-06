@@ -49,8 +49,7 @@ function withoutOwn(text) {
     "",
   );
 }
-function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/ASS/v1", defaultModel = null, localToken = "", gatewayAuth = false, predictionCompatibility = false) {
-  if (predictionCompatibility && !gatewayAuth) throw Error('提示词预测兼容需要原生 OAuth 接入');
+function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/ASS/v1", defaultModel = null, localToken = "", gatewayAuth = false) {
   if (text.includes("aimami-relay codex-router top start"))
     throw new Error(
       "检测到其他路由工具仍接管 Codex。请先关闭旧路由，再点击接入。",
@@ -74,6 +73,7 @@ function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/
   let top = clean.slice(0, first),
     rest = clean.slice(first);
   const managedTopKeys = ["model_provider", "model_catalog_json", "openai_base_url",
+    ...(localToken && !gatewayAuth ? ["cli_auth_credentials_store"] : []),
     ...(defaultModel ? ["model", "model_reasoning_effort"] : [])];
   for (const key of managedTopKeys) {
     replaced[key] = parsed[key] ?? null;
@@ -89,9 +89,11 @@ function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/
   // chatgpt_base_url also controls workspace authentication and unrelated
   // official services. Its backend requires HTTPS; keep the user's value (or
   // native default) independent from our loopback inference endpoint.
-  const block = `${START}\nmodel_provider = "${predictionCompatibility ? 'openai' : 'ASS'}"\nmodel_catalog_json = ${JSON.stringify(catalog)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n${model}${END}\n`;
-  // Keep the native ChatGPT account visible for ordinary gateway routing.
-  // The local bearer is only written for the explicit accountless mode.
+  // Provider identity belongs to the conversation, independently of login or
+  // prediction eligibility. Keep it stable across every connection mode.
+  const credentials = localToken && !gatewayAuth ? 'cli_auth_credentials_store = "file"\n' : '';
+  const block = `${START}\nmodel_provider = "openai"\nmodel_catalog_json = ${JSON.stringify(catalog)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n${credentials}${model}${END}\n`;
+  // Retain the ASS definition for existing threads until their binding repair.
   const auth = gatewayAuth
     ? "requires_openai_auth = true\n"
     : localToken
@@ -106,6 +108,7 @@ function prepareConfig(text, catalog, baseUrl = "http://127.0.0.1:25819/clients/
 class ConfigManager {
   constructor(codexDir, dataDir, port = 25819) {
     this.file = path.join(codexDir, "config.toml");
+    this.auth = path.join(codexDir, "auth.json");
     this.dataDir = dataDir;
     this.catalog = path.join(dataDir, "catalog.json");
     this.record = path.join(dataDir, "codex-attachment.json");
@@ -125,7 +128,7 @@ class ConfigManager {
           : "unknown";
       return {
         attached:
-          (c.model_provider === "ASS" || c.model_provider === 'openai' && authMode === 'oauth') &&
+          (c.model_provider === "ASS" || c.model_provider === 'openai' && ['oauth', 'accountless'].includes(authMode)) &&
           provider?.base_url === this.baseUrl &&
           provider?.supports_websockets === false &&
           c.openai_base_url === this.baseUrl &&
@@ -141,14 +144,14 @@ class ConfigManager {
       return { attached: false, provider: "unknown" };
     }
   }
-  prepareAttach(defaultModel = null, localToken = "", gatewayAuth = false, predictionCompatibility = false) {
+  prepareAttach(defaultModel = null, localToken = "", gatewayAuth = false) {
     const old = fs.existsSync(this.file) ? fs.readFileSync(this.file, "utf8") : "";
     // Validate ownership, restore the baseline in memory, then apply the new
     // desired default. Never strip an externally edited managed block.
     const baseline = old.includes(START) ? this.preflightDetach().next : old;
     const attached = old.includes(START) ? TOML.parse(managedBlocks(old)[0]) : null;
     const selection = !defaultModel && attached?.model && attached.model_reasoning_effort === undefined ? attached.model : null;
-    const prepared = prepareConfig(baseline, this.catalog, this.baseUrl, defaultModel, localToken, gatewayAuth, predictionCompatibility);
+    const prepared = prepareConfig(baseline, this.catalog, this.baseUrl, defaultModel, localToken, gatewayAuth);
     if (selection) {
       // Keep an already-owned selection, including its original rollback value.
       // Accountless defaults own effort too and must restore their baseline.
@@ -193,11 +196,14 @@ class ConfigManager {
     try { owned = expected.map(s => TOML.parse(s)); }
     catch { throw Error("Codex 管理区段记录无效，未覆盖"); }
     const top = owned[0], provider = owned[1].model_providers?.ASS;
-    const topKeys = ["model_provider", "model_catalog_json", "openai_base_url", "chatgpt_base_url", "model", "model_reasoning_effort"];
+    const topKeys = ["model_provider", "model_catalog_json", "openai_base_url", "chatgpt_base_url", "cli_auth_credentials_store", "model", "model_reasoning_effort"];
     const providerKeys = ["name", "base_url", "wire_api", "requires_openai_auth", "supports_websockets", "experimental_bearer_token"];
     if (Object.keys(top).some(k => !topKeys.includes(k)) ||
-        !(top.model_provider === 'ASS' || top.model_provider === 'openai' && provider?.requires_openai_auth === true && provider.experimental_bearer_token === undefined) ||
+        !(top.model_provider === 'ASS' || top.model_provider === 'openai' &&
+          (provider?.requires_openai_auth === true && provider.experimental_bearer_token === undefined ||
+           provider?.requires_openai_auth === false && typeof provider.experimental_bearer_token === 'string' && provider.experimental_bearer_token.length > 0)) ||
         top.model_catalog_json !== this.catalog || top.openai_base_url !== this.baseUrl ||
+        (top.cli_auth_credentials_store !== undefined && top.cli_auth_credentials_store !== 'file') ||
         (top.chatgpt_base_url !== undefined && (top.chatgpt_base_url !== this.legacyChatgptBaseUrl ||
           !Object.hasOwn(record.replaced || {}, "chatgpt_base_url"))) ||
         (top.model !== undefined && !(/^ASS_[a-f0-9]{24}::.+$/.test(top.model) ||
@@ -250,9 +256,16 @@ class ConfigManager {
           ? { model: live.model, effort: live.model_reasoning_effort || top.model_reasoning_effort } : null;
         const provider = live.model_providers?.ASS;
         const prepared = prepareConfig(baseline, this.catalog, this.baseUrl, defaultModel,
-          provider?.experimental_bearer_token || '', provider?.requires_openai_auth === true, live.model_provider === 'openai');
+          provider?.experimental_bearer_token || '', provider?.requires_openai_auth === true);
         let expected = prepared.text.match(/# >>> ass managed start[\s\S]*?# <<< ass managed end/g);
         const replaced = prepared.replaced;
+        // Reconstruct the historical attachment, including pre-unification
+        // provider ids. Recovery must not silently upgrade a saved baseline.
+        expected[0] = expected[0].replace(/^model_provider = .*$/m, `model_provider = ${JSON.stringify(top.model_provider)}`);
+        if (top.cli_auth_credentials_store === undefined) {
+          expected[0] = expected[0].replace(/^cli_auth_credentials_store = .*\n/m, '');
+          delete replaced.cli_auth_credentials_store;
+        }
         if (top.model && !defaultModel) {
           replaced.model = before.model ?? null;
           expected[0] = expected[0].replace(END, `model = ${JSON.stringify(live.model)}\n${END}`);

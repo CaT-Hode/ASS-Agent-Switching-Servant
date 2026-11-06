@@ -142,7 +142,9 @@ class Connections {
               applied: native.applied,
               runtimeStatus: native.runtimeStatus,
               accountless: this.proxyConfig?.clients[id]?.accountless === true,
-              ...(id === 'codex' ? { predictionCompatibility: this.proxyConfig?.clients.codex?.predictionCompatibility === true } : {}),
+              ...(id === 'codex' ? {
+                predictionLoginAvailable: this.proxyConfig?.predictionAvailable?.() === true,
+              } : {}),
               ...(id === 'codex' && this.sessionHandoff ? { resumeRecovery: this.sessionHandoff.status() } : {}),
               accountlessAvailable: ["codex", "claude"].includes(id) && this.enabled[id] && native.applied === true && native.modelCount > 0,
               configAttached:
@@ -391,8 +393,8 @@ class Connections {
       this.revision++;
       // A confirmed desktop stop is the safe point to migrate old bindings.
       // Ordinary sync never writes a live Codex history or closes a client.
-      if (desktopStopped && plan.enabled && plan.scope === 'codex' && this.proxyConfig?.clients.codex?.predictionCompatibility)
-        await this.sessionHandoff?.restorePrediction();
+      if (desktopStopped && plan.enabled && plan.scope === 'codex' && this.config.status().provider === 'openai')
+        await this.sessionHandoff?.restoreBindings();
       let restarted;
       if (restart) {
         try { restarted = await this.restarter[restartFirst ? "launch" : "restart"](plan.restart, () => {
@@ -540,8 +542,8 @@ class Connections {
       // Ensure a stopped proxy is available again, without stopping or replacing
       // an existing listener. Only explicit Codex restart can close a desktop.
       if (this.proxyConfig?.supports(id)) await this.router.start(this.port);
-      if (desktopStopped && id === 'codex' && this.proxyConfig?.clients.codex?.predictionCompatibility)
-        await this.sessionHandoff?.restorePrediction();
+      if (desktopStopped && id === 'codex' && this.config.status().provider === 'openai')
+        await this.sessionHandoff?.restoreBindings();
       this.revision++;
       if (restart) {
         let restarted;
@@ -564,21 +566,21 @@ class Connections {
       this.onChange();
     }
   }
-  async repairPrediction() {
+  async repairCodexSessions() {
     if (this.busy) throw Error('已有接入操作正在执行');
-    const applied = this.proxyConfig?.clients.codex;
-    if (!this.enabled.codex || !applied?.predictionCompatibility || applied.accountless || !this.sessionHandoff)
-      throw Error('请先更新并同步普通 OAuth 接入');
+    if (!this.enabled.codex || !this.sessionHandoff)
+      throw Error('请先更新并同步 Codex 续聊兼容接入');
+    this.proxyConfig.requireApplied('codex');
     this.busy = true;
     this.blocked.add('codex');
     try {
-      if (this.router.clientActive('codex')) throw Error('Codex 仍有请求正在进行，请在任务结束并正常退出 Codex 后修复旧对话预测');
+      if (this.router.clientActive('codex')) throw Error('Codex 仍有请求正在进行，请在任务结束并正常退出 Codex 后修复旧对话续聊');
       this.preflight(['codex'], true);
-      const result = await this.sessionHandoff.restorePrediction();
+      const result = await this.sessionHandoff.restoreBindings();
       this.revision++;
       return { ok: true, count: result.count, message: result.count
-        ? `已修复 ${result.count} 个旧对话的预测通道，原模型与聊天内容保留。重新打开 Codex 后生效；预测仍取决于官方功能开放与模型支持。`
-        : '没有需要修复的旧对话。预测仍取决于官方功能开放与模型支持。' };
+        ? `已修复 ${result.count} 个旧对话的续聊绑定，原模型与聊天内容保留。重新打开 Codex 后生效。`
+        : '没有需要修复的旧对话。' };
     } finally {
       this.blocked.delete('codex'); this.busy = false; this.onChange();
     }

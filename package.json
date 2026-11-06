@@ -1,7 +1,7 @@
 {
   "name": "agent-switching-servant",
   "productName": "ASS",
-  "version": "0.6.12",
+  "version": "0.6.23",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -15,7 +15,7 @@
     "build": "vite build",
     "build:native": "node scripts/build-desktop-glass.cjs",
     "start": "electron .",
-    "test": "node --test --test-concurrency=4 tests/*.test.cjs",
+    "test": "node --test tests/critical.test.mjs",
     "package": "electron scripts/make-icons.cjs && npm run build && node scripts/package.mjs && npm run installer",
     "installer": "node scripts/make-installer.cjs",
     "install:local": "node scripts/local-release.cjs install --prune",

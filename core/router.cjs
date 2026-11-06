@@ -18,12 +18,9 @@ const { CodexCompaction, requested: compactionRequested } = require('./codex-com
 const { CodexReasoning } = require('./codex-reasoning.cjs');
 const { officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
   summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexImagesRequest, codexWorkspaceRequest } = require('./http-passthrough.cjs');
-// A pre-accountless conversation keeps the provider id stored when it was
-// created. Codex stores that id on the thread, not per request, so a thread
-// created under the built-in `openai` provider keeps authenticating with the
-// native ChatGPT grant even after ASS switches the client to accountless mode.
-// That grant authenticates the local client only; it is never forwarded upstream
-// and still only serves injected models.
+// The stable OpenAI provider can use native ChatGPT/API credentials or an ASS
+// local fallback. They authenticate this loopback client only; injected model
+// requests always use the selected supplier's own upstream credentials.
 function looksLikeNativeGrant(value) {
   return /^[\w-]+\.[\w-]+\.[\w-]+$/.test(value);
 }
@@ -626,7 +623,7 @@ class Router {
       });
     } catch (error) {
       if (controller.signal.reason?.name === 'TimeoutError') error = controller.signal.reason;
-      const diagnostic = client === 'diagnostics'
+      const diagnostic = client === 'diagnostics' || error?.diagnostic
         ? classifyFailure(error, { httpStatus, layer: httpStatus ? 'upstream' : route ? 'network' : 'local' }) : null;
       const responseStatus = diagnostic?.httpStatus >= 400 ? diagnostic.httpStatus : error.status || 502;
       let message = controller.signal.aborted && error.name !== 'TimeoutError'
@@ -635,6 +632,7 @@ class Router {
           ? "请求或上游流中的 JSON 数据无效"
           : error.message;
       message = redact(message, secrets);
+      if (diagnostic?.failure?.kind && diagnostic.failure.kind !== 'unknown') message = diagnostic.message;
       if (forwardingError) {
         // The original HTTP error was already forwarded. Never append an SSE
         // error or replace HTML/JSON with a second ASS-generated response.

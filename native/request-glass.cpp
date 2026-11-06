@@ -21,8 +21,9 @@ struct DpiScope {
 };
 HWND owner=nullptr;DG_Handle glass=nullptr;HMONITOR monitor=nullptr;
 UINT_PTR timer=0;ULONGLONG retryAt=0,lastTick=0;int width=0,height=0,anchorBottom=0;
-float radius=36,inset=10,targetWidth=0,targetHeight=0,visualWidth=0,visualHeight=0,widthVelocity=0,heightVelocity=0;
-int requestRows=0;bool dragging=false,moving=false,reduced=false;
+float radius=36,inset=6,targetWidth=0,targetHeight=0,heatHeight=43,visualWidth=0,visualHeight=0,widthVelocity=0,heightVelocity=0;
+float rowHeight=27,contentInset=10,sectionGap=4,heatBottom=10,heatRadius=6;
+int requestRows=0,heatColumns=12;bool dragging=false,moving=false,reduced=false;
 POINT grip{},targetOrigin{};HRESULT failure=S_OK;
 uint64_t creates=0,moves=0;
 // WM_TIMER rounds to the system tick: 30/10 ms target about 30/60 Hz
@@ -112,7 +113,7 @@ void CALLBACK Frame(HWND,UINT,UINT_PTR,DWORD){
     else if(moving){x=targetOrigin.x;y=targetOrigin.y;anchorBottom=y+h+pad;}
     else y=anchorBottom-h-pad;
     RECT target{x,y,x+w,y+h};HMONITOR current=MonitorFromRect(&target,MONITOR_DEFAULTTONEAREST);
-    int capacityWidth=int(std::ceil((std::max(640.f,targetWidth)+32)*dpi))-2*pad;
+    int capacityWidth=int(std::ceil((std::max(480.f,targetWidth)+32)*dpi))-2*pad;
     int capacityHeight=int(std::ceil((std::max(362.f,targetHeight)+32)*dpi))-2*pad;
     if(!glass||capacityWidth!=width||capacityHeight!=height){
         Release();HRESULT hr=DG_Create(owner,capacityWidth,capacityHeight,&glass);if(FAILED(hr)){Fail(hr);return;}
@@ -128,9 +129,14 @@ void CALLBACK Frame(HWND,UINT,UINT_PTR,DWORD){
     p.probe_count=3;p.probe_interval=10;
     for(unsigned i=0;i<3;++i)p.probes[i]={w*(.2f+.3f*i),h*.5f};
     float inner=std::clamp(radius-16.f,0.f,10.f)*dpi;
-    if(requestRows){float rowsHeight=(requestRows*29-4)*dpi;
-        p.materials[p.material_count++]={16*dpi,h-78*dpi-rowsHeight,w-32*dpi,rowsHeight,1,float(requestRows),0,4*dpi,inner,2.8f*dpi};}
-    p.materials[p.material_count++]={16*dpi,h-68*dpi,w-32*dpi,52*dpi,12,2,4*dpi,4*dpi,5*dpi,3.2f*dpi};
+    if(requestRows){float rowsHeight=(requestRows*rowHeight-4)*dpi;
+        p.materials[p.material_count++]={contentInset*dpi,h-heatBottom*dpi-heatHeight*dpi-sectionGap*dpi-rowsHeight,
+            w-2*contentInset*dpi,rowsHeight,1,float(requestRows),0,4*dpi,inner,2.8f*dpi};}
+    // Blur only elapsed hour columns. Future cells stay sharp and never enter
+    // the native Gaussian material sample.
+    float heatGap=3*dpi,heatWidth=w-2*contentInset*dpi;
+    if(heatColumns<12){float cellWidth=(heatWidth-11*heatGap)/12;heatWidth=heatColumns*cellWidth+(heatColumns-1)*heatGap;}
+    p.materials[p.material_count++]={contentInset*dpi,h-heatBottom*dpi-heatHeight*dpi,std::max(1.f,heatWidth),heatHeight*dpi,float(heatColumns),2,heatGap,3*dpi,heatRadius*dpi,2.8f*dpi};
     // Geometry is committed before capture/presentation. Empty or busy GPU
     // frames no longer hold back foreground input or bottom-anchored sizing.
 #ifdef ASS_GLASS_REVIEW
@@ -158,6 +164,13 @@ napi_value Options(napi_env env,napi_callback_info info){
     if(n){radius=float(std::clamp(Number(env,args[0],"radius",radius),8.,48.));inset=float(Number(env,args[0],"inset",inset));
         targetWidth=float(Number(env,args[0],"width",targetWidth));targetHeight=float(Number(env,args[0],"height",targetHeight));
         requestRows=int(std::clamp(Number(env,args[0],"rows",requestRows),0.,8.));
+        heatColumns=int(std::clamp(Number(env,args[0],"heatColumns",heatColumns),1.,12.));
+        heatHeight=float(std::clamp(Number(env,args[0],"heatHeight",heatHeight),32.,56.));
+        rowHeight=float(std::clamp(Number(env,args[0],"rowHeight",rowHeight),20.,36.));
+        contentInset=float(std::clamp(Number(env,args[0],"contentInset",contentInset),4.,24.));
+        sectionGap=float(std::clamp(Number(env,args[0],"sectionGap",sectionGap),0.,12.));
+        heatBottom=float(std::clamp(Number(env,args[0],"heatBottom",heatBottom),4.,24.));
+        heatRadius=float(std::clamp(Number(env,args[0],"heatRadius",heatRadius),4.,12.));
         reduced=Number(env,args[0],"reducedMotion",reduced?1:0)!=0;}
     return Undefined(env);
 }

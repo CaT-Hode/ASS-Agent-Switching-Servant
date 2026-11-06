@@ -238,7 +238,9 @@ function inspectCredentials(
       claudeUpdatedAt = (session.data ? session : adjacent).updatedAt;
     }
   }
-  const rows = parseRecords(harness, result.data || {}, now, {
+  const localCodex = harness === 'codex' && require('./codex-local-auth.cjs').isFallback(
+    read(path.join(dir, 'config.toml'), 'toml').data, result.data);
+  const rows = localCodex ? [] : parseRecords(harness, result.data || {}, now, {
     savedAt: result.updatedAt,
     claudeIdentity,
     claudeUpdatedAt,
@@ -351,7 +353,7 @@ function configuredNativeApiProviders(harness, dir, { home, env = {}, authData =
         expand(p.experimental_bearer_token) || expand(p.api_key) || (p.requires_openai_auth ? expand(authData.OPENAI_API_KEY) || expand(env.OPENAI_API_KEY) : "");
       add(id, p.name, key, file);
     }
-    if ((config.model_provider || "openai") === "openai")
+    if ((config.model_provider || "openai") === "openai" && !require('./codex-local-auth.cjs').isFallback(config, authData))
       add("openai", "OpenAI", expand(authData.OPENAI_API_KEY) || expand(env.OPENAI_API_KEY), file);
   } else if (harness === "claude") {
     const file = path.join(dir, "settings.json"), settings = read(file).data || {}, runtime = settings.env || {};

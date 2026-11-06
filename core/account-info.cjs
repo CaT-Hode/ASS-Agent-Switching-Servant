@@ -5,9 +5,12 @@ const crypto = require("node:crypto");
 const { atomic } = require("./config.cjs");
 const { parseSubscription } = require("./subscription-usage.cjs");
 const oauthInfo = require("./oauth-info.cjs");
+const { canQueryBalance, isOpenAIApi } = require('./balance.cjs');
 const { withReadScope } = require("./read-scope.cjs");
 
 const ACCOUNT_DOCS = {
+  "openai-api-usage": { label: "OpenAI API 用量面板", url: "https://platform.openai.com/usage" },
+  "openai-api-billing": { label: "OpenAI API 账单", url: "https://platform.openai.com/settings/organization/billing/overview" },
   "kimi-info": { label: "Kimi Code 账户与额度接口", url: "https://github.com/MoonshotAI/kimi-code/blob/6451f1e056e90037bbf832f3578955cf8e55db64/packages/oauth/src/managed-usage.ts" },
   "zcode-info": { label: "ZCode 套餐与额度接口", url: "https://github.com/zai-org/ZCode/blob/872ad960de7ec172591f7e1952f7849229f94521/packages/services/src/usage-stats/providers/bigmodelUsageQuotaProvider.ts" },
   kimi: { label: "Kimi Code 配置目录", url: "https://moonshotai.github.io/kimi-code/en/configuration/data-locations.html" },
@@ -277,6 +280,8 @@ function apiProfile(provider, nativeConnection = false) {
     host = new URL(provider.baseUrl).host;
   } catch {}
   const id = adapter(provider);
+  const openaiApi = isOpenAIApi(provider);
+  const balanceQueryable = canQueryBalance(provider);
   if (id?.endsWith("-subscription"))
     return {
       source: "订阅额度 · 上次查询",
@@ -288,12 +293,22 @@ function apiProfile(provider, nativeConnection = false) {
   const oc = id === "opencode" || id === "opencode-go";
   return {
     source: provider.nativeProvider ? "原生 API 登录记录" : "已保存的 API 配置",
-    docs: oc ? ["opencode-go", "opencode-zen"] : id ? [id] : [],
+    docs: openaiApi ? ['openai-api-usage', 'openai-api-billing'] : oc ? ["opencode-go", "opencode-zen"] : id ? [id] : [],
+    balanceQueryable,
+    ...(openaiApi ? {
+      quotaMode: balanceQueryable ? 'api' : 'console',
+      infoLinks: [
+        { id: 'openai-api-usage', label: 'API 用量' },
+        { id: 'openai-api-billing', label: 'API 账单' },
+      ],
+    } : {}),
     consoleService:
       id === "deepseek" ? "deepseek" : oc ? "opencode" : undefined,
     canRefresh: !!id && !!provider.apiKey,
     note: oc
       ? "查询 Go 订阅用量；Zen 充值余额、邮箱和工作区资料请到官方控制台查看。"
+      : openaiApi
+        ? "普通模型 Key 不支持余额查询；请到 OpenAI 用量与账单页面查看。"
       : id === "deepseek"
         ? "余额接口提供可用、赠金和充值余额，不返回邮箱或账户 ID。"
         : id

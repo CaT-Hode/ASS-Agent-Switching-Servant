@@ -205,10 +205,11 @@ function routeConfig(harness, p, m, dir, token, catalog, port = 25819) {
   }
   if (harness === "codex") {
     const name = codexModelId(p.id, m.model);
+    env.OPENAI_API_KEY = token;
     files.push(["catalog.json", JSON.stringify(catalog)]);
     files.push([
       "config.toml",
-      `model = ${JSON.stringify(name)}\nmodel_provider = "ASS"\nmodel_reasoning_effort = ${JSON.stringify(m.defaultEffort)}\nmodel_catalog_json = ${JSON.stringify(path.join(dir, "catalog.json"))}\n[model_providers.ASS]\nname = "ASS API"\nbase_url = ${JSON.stringify(clientBase + "/v1")}\nwire_api = "responses"\nrequires_openai_auth = false\nenv_key = "ASS_LOCAL_TOKEN"\nsupports_websockets = false\n`,
+      `model = ${JSON.stringify(name)}\nmodel_provider = "openai"\nopenai_base_url = ${JSON.stringify(clientBase + "/v1")}\nmodel_reasoning_effort = ${JSON.stringify(m.defaultEffort)}\nmodel_catalog_json = ${JSON.stringify(path.join(dir, "catalog.json"))}\n[model_providers.ASS]\nname = "ASS API"\nbase_url = ${JSON.stringify(clientBase + "/v1")}\nwire_api = "responses"\nrequires_openai_auth = false\nenv_key = "ASS_LOCAL_TOKEN"\nsupports_websockets = false\n`,
     ]);
   }
   return { env, files, args };
@@ -1029,11 +1030,10 @@ class HarnessManager {
           // Keep native OAuth visible in account launches. The local gateway
           // still dispatches a later switch to an injected model.
           const providerId = applied?.gatewayAuth ? "ASS" : "ass_official";
-          const selectedProvider = applied?.predictionCompatibility ? 'openai' : providerId;
           const auth = "requires_openai_auth = true\n";
           files.push([
             "config.toml",
-            `cli_auth_credentials_store = "file"\n${catalog}${defaultModel}model_provider = ${JSON.stringify(selectedProvider)}\nopenai_base_url = ${JSON.stringify(baseUrl)}\n[model_providers.${providerId}]\nname = "ASS"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\n${auth}supports_websockets = false\n`,
+            `cli_auth_credentials_store = "file"\n${catalog}${defaultModel}model_provider = "openai"\nopenai_base_url = ${JSON.stringify(baseUrl)}\n[model_providers.${providerId}]\nname = "ASS"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\n${auth}supports_websockets = false\n`,
           ]);
         } else if (!fs.existsSync(path.join(dir, "config.toml"))) {
           files.push(["config.toml", 'cli_auth_credentials_store = "file"\n']);

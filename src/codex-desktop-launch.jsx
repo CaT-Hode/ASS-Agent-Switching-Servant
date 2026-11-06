@@ -31,7 +31,7 @@ export function CodexDesktopLaunch({ desktop, connection, busy, onLaunch }) {
           <li>Could not load project chats</li>
         </ul>
       </> : <p>{connection?.accountless
-        ? "按已注入的无账号配置启动，不使用官方 OAuth。"
+        ? "按已注入的无账号配置启动，模型推理使用供应商 API。"
         : "当前未开启接入，仅打开原生客户端；开启接入后可使用官方服务连接修复通道。"}</p>}
     </div>
     {unavailable && <p className="codex-launch-detection">请先同步无账号接入配置。</p>}

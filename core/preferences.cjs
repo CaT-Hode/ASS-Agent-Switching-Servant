@@ -9,7 +9,7 @@ const defaults = {
   officialService: "openai",
   providerOrder: [],
   quotaAccounts: {},
-  requestWidget: { enabled: false, width: 380, radius: 36, rows: 5, materialVersion: 1 },
+  requestWidget: { enabled: false, width: 340, radius: 36, rows: 5, materialVersion: 1, layoutVersion: 2 },
   conversations: { harness: "codex", pinned: false, scope: "projects", project: "", columns: { projects: 235, threads: 205 } },
   usage: { client: "all", range: "month", tab: "activity", group: "client" },
 };
@@ -21,8 +21,13 @@ class Preferences {
       const saved = JSON.parse(fs.readFileSync(this.file, "utf8"));
       const upgrade = saved.requestWidget?.radius === 24 && !saved.requestWidget.materialVersion;
       if (upgrade) saved.requestWidget.radius = 36;
+      const layoutUpgrade = saved.requestWidget && saved.requestWidget.layoutVersion !== 2;
+      if (layoutUpgrade) {
+        if (saved.requestWidget.width === undefined || saved.requestWidget.width === 380) saved.requestWidget.width = 340;
+        saved.requestWidget.layoutVersion = 2;
+      }
       this.state = this.validate(saved);
-      if (upgrade) atomic(this.file, JSON.stringify(this.state, null, 2));
+      if (upgrade || layoutUpgrade) atomic(this.file, JSON.stringify(this.state, null, 2));
     } catch {}
   }
   validate(input) {

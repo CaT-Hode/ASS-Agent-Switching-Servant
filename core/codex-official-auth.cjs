@@ -4,14 +4,25 @@ const fs = require('node:fs'), path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createInterface } = require('node:readline');
 
-function read(file) {
+function readAuth(file) {
   if (fs.statSync(file).size > 1024 * 1024) throw Error('Codex 登录记录过大');
-  const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+}
+function chatgptTokens(data) {
   if (data.auth_mode && data.auth_mode !== 'chatgpt' || typeof data.tokens?.access_token !== 'string' ||
       !data.tokens.access_token || /\s/.test(data.tokens.access_token) ||
       data.tokens.account_id !== undefined && (typeof data.tokens.account_id !== 'string' || /[\r\n]/.test(data.tokens.account_id)))
     throw Error('未找到 ChatGPT OAuth，请在客户端账户中登录');
   return data.tokens;
+}
+const read = file => chatgptTokens(readAuth(file));
+// Native credentials authenticate only the loopback client. The router uses
+// the selected supplier's credential for third-party inference.
+function nativeCredential(data) {
+  try { return chatgptTokens(data).access_token; } catch {}
+  return (!data.auth_mode || data.auth_mode === 'apikey') &&
+    typeof data.OPENAI_API_KEY === 'string' && data.OPENAI_API_KEY && !/\s/.test(data.OPENAI_API_KEY)
+    ? data.OPENAI_API_KEY : '';
 }
 function expiry(token) {
   try { const value = JSON.parse(Buffer.from(token.split('.')[1], 'base64url')).exp;
@@ -71,8 +82,11 @@ class CodexOfficialAuth {
   // Read-only snapshot of the current grant for local request authentication.
   // Never refreshes: the native client owns rotation, and a refresh here would
   // duplicate its network work and race its own auth.json write.
-  currentAccessToken() {
-    try { return read(path.join(this.codexDir, 'auth.json')).access_token || ''; } catch { return ''; }
+  currentCredential() {
+    try { return nativeCredential(readAuth(path.join(this.codexDir, 'auth.json'))); } catch { return ''; }
+  }
+  hasChatGptLogin() {
+    try { read(path.join(this.codexDir, 'auth.json')); return true; } catch { return false; }
   }
   async headers({ signal } = {}) {
     const file = path.join(this.codexDir, 'auth.json');
@@ -96,4 +110,4 @@ class CodexOfficialAuth {
     return { authorization: 'Bearer ' + grant.access_token, ...(grant.account_id ? { 'chatgpt-account-id': grant.account_id } : {}) };
   }
 }
-module.exports = { CodexOfficialAuth, refreshNative, expiry };
+module.exports = { CodexOfficialAuth, refreshNative, expiry, nativeCredential };

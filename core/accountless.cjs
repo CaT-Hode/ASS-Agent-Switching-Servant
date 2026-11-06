@@ -1,5 +1,6 @@
 const path = require("node:path");
 const { execFile } = require("node:child_process");
+const { compactTokenLimit } = require('./context-budget.cjs');
 const CLAUDE_MODEL_ENV = ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
   "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_AUTO_MODE_MODEL"];
 function claudeModelEnv(providers, selected, review = selected) {
@@ -56,8 +57,10 @@ function claudeModelSettings(providers, selected) {
     label: label + (cliModel !== model ? ' [1m]' : ''), description }));
   const entry = rows.find(m => m.model === selected || m.cliModel === selected);
   if (!entry) throw Error("启动模型不在已注入的模型列表中");
-  const window = row => Number.isSafeInteger(row.contextWindow) && row.contextWindow > 0
-    ? Math.max(100000, Math.min(1000000, Math.floor(row.contextWindow * 95 / 100))) : undefined;
+  const window = row => {
+    const limit = compactTokenLimit(row.contextWindow);
+    return limit === undefined ? undefined : Math.max(100000, Math.min(1000000, limit));
+  };
   // CC keys known Claude models by canonical name, including routed/[1m] IDs.
   // Keep the selected deployment last when multiple routes share that identity.
   const modelSettings = Object.fromEntries([...rows.filter(row => row !== entry), entry]
@@ -67,8 +70,7 @@ function claudeModelSettings(providers, selected) {
     ]));
   return {
     model: entry.cliModel,
-    // Claude Code accepts 100K–1M here and reserves its own output/summary
-    // headroom. Set the window itself; a percentage override would compound it.
+    // Claude Code accepts 100K–1M here. Clamp only to its supported range.
     ...(window(entry) !== undefined ? { autoCompactWindow: window(entry) } : {}),
     modelSettings,
     availableModels: options.map((m) => m.model),

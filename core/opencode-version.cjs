@@ -54,7 +54,7 @@ function command(major, action, argument) {
 }
 function encode({ id, cwd, title, messages, createdAt, model = '' }) {
   const time = Date.parse(createdAt), zero = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
-  const target = model ? require('./opencode-resume-model.cjs').modelRef(model) : { providerID: 'ASS-history', modelID: 'unassigned' };
+  const target = model ? require('./opencode-resume-model.cjs').modelRef(model) : { providerID: 'ass-history', modelID: 'unassigned' };
   const ref = { id: target.modelID, providerID: target.providerID };
   const rows = messages.map((m, i) => {
     const when = Date.parse(m.timestamp || createdAt), base = { id: 'msg_' + id.slice(4) + '_' + i.toString(16).padStart(8, '0'), time: { created: when } };

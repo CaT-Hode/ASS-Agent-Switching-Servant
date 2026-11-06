@@ -131,7 +131,7 @@ function AccountCard({
   const service = state.officialServices.find(
     (s) => s.id === state.officialProviderIds[a.providerId],
   );
-  const balance = state.balances[a.providerId];
+  const balance = a.profile?.balanceQueryable === false ? null : state.balances[a.providerId];
   return (
     <article
       className={"client-account-card" + (selected ? " selected" : "")}
@@ -165,7 +165,7 @@ function AccountCard({
                 icon: ChevronRight,
                 action: () => openProvider(a.providerId),
               },
-              {
+              a.profile?.balanceQueryable !== false && {
                 label: "查询余额",
                 icon: Wallet,
                 action: () =>

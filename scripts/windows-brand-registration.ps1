@@ -25,12 +25,14 @@ $entries = @(
     @{ Key=$application; Name='FriendlyAppName'; Value='ASS' },
     @{ Key=$defaultIcon; Name=''; Value="$icon,0" }
 )
-# Preserve the startup preference. Update only an existing, plain ASS command;
-# never enable startup, alter approval state, or execute the stored command.
+# Preserve the startup preference. Electron uses the AppUserModelId as the Run
+# value name, while older ASS releases wrote a legacy `ASS` value. Update any
+# existing owned command in place; never enable startup or execute it.
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 if (Test-Path -LiteralPath $runKey) {
-    $runValue = (Get-Item -LiteralPath $runKey).GetValue('ASS', $null)
-    if ($null -ne $runValue) {
+    foreach ($runName in @('local.ass.desktop', 'ASS')) {
+        $runValue = (Get-Item -LiteralPath $runKey).GetValue($runName, $null)
+        if ($null -eq $runValue) { continue }
         if ([string]$runValue -notmatch '^(?:"([^"]+)"|([^\s"]+))( --hidden)?$') { throw 'Refusing custom ASS startup command' }
         $runExe = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
         $runSuffix = $Matches[3]
@@ -39,7 +41,7 @@ if (Test-Path -LiteralPath $runKey) {
             $runRelative -notmatch '^(?:current|v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\\ASS-win32-x64)\\ASS\.exe$') {
             throw 'Refusing foreign ASS startup command'
         }
-        $entries += @{ Key=$runKey; Name='ASS'; Value=('"' + $exe + '"' + $runSuffix) }
+        $entries += @{ Key=$runKey; Name=$runName; Value=('"' + $exe + '"' + $runSuffix) }
     }
 }
 $before = @(); $created = @()
@@ -66,7 +68,7 @@ try {
         $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($entry.Key.Substring(6), $true)
         try {
             $key.SetValue($entry.Name, $entry.Value, [Microsoft.Win32.RegistryValueKind]::String)
-            if ($key.GetValue($entry.Name) -ne $entry.Value) { throw 'ASS registry icon readback mismatch' }
+            if ($key.GetValue($entry.Name) -ne $entry.Value) { throw 'ASS registry readback mismatch' }
         } finally { $key.Dispose() }
     }
 } catch {

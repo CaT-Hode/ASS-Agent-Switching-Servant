@@ -12,7 +12,8 @@ const { OUTPUT_DEFAULTS_VERSION, upgradeModelOutput } = require('./output-tokens
 const { officialDefaultModels } = require('./codex-default-models.cjs');
 const { CodexRecovery } = require('./codex-recovery.cjs');
 const { codexApiMetadata } = require('./deepseek-compat.cjs');
-const routeOnly = (plan) => { if (!plan) return null; const { nativeClaude, attachment, ...route } = plan; return route; };
+const codexLocalAuth = require('./codex-local-auth.cjs');
+const routeOnly = (plan) => { if (!plan) return null; const { nativeClaude, localAuth, attachment, predictionCompatibility, ...route } = plan; return route; };
 const IDS = ["codex", "claude"];
 const read = (file) => fs.existsSync(file) ? fs.readFileSync(file) : null;
 function validateCodexPlan(plan) {
@@ -37,8 +38,8 @@ function validateCodexPlan(plan) {
 // A draft edit never changes the running route. Persist applied routing secrets
 // with the same OS encryption as provider settings, not in a second plaintext DB.
 class ProxyConfig {
-  constructor(dataDir, crypto, manager, store, config, desktop) {
-    Object.assign(this, { crypto, manager, store, config, desktop });
+  constructor(dataDir, crypto, manager, store, config, desktop, { hasCodexLogin = () => false } = {}) {
+    Object.assign(this, { crypto, manager, store, config, desktop, hasCodexLogin });
     this.file = path.join(dataDir, "proxy-applied.json");
     this.clients = {};
     this.modeTokens = {};
@@ -60,13 +61,15 @@ class ProxyConfig {
               (plan.accountless !== undefined && typeof plan.accountless !== "boolean") ||
               (plan.gatewayAuth !== undefined && (id !== 'codex' || plan.gatewayAuth !== true ||
                 !/^[a-f0-9]{64}$/.test(plan.localToken || ''))) ||
-              (plan.predictionCompatibility !== undefined && (id !== 'codex' || plan.predictionCompatibility !== true || !plan.gatewayAuth || plan.accountless)) ||
+              (plan.predictionCompatibility !== undefined && (id !== 'codex' || plan.predictionCompatibility !== true ||
+                !(plan.gatewayAuth || plan.accountless))) ||
               (plan.accountless && (!/^[a-f0-9]{64}$/.test(plan.localToken || "") || !plan.providers.some((p) => p.models?.length))))) throw Error();
         validateCodexPlan(clients.codex);
+        codexLocalAuth.validate(clients.codex?.localAuth, clients.codex?.localToken);
         this.clients = clients;
         claudeNative.validate(clients.claude?.nativeClaude);
         if (payload.pending) {
-          const allowed = [config.file, config.record, config.catalog, ...Object.values(claudeNative.targets(manager)),
+          const allowed = [config.file, config.record, config.catalog, config.auth, ...Object.values(claudeNative.targets(manager)),
             ...Object.values(clients.claude?.nativeClaude?.targets || {})];
           if (!Array.isArray(payload.pending.files) || payload.pending.files.some((f) =>
             (!allowed.includes(f.file) && !desktop?.allowsFile(f.file)) || (f.before !== null && typeof f.before !== "string") ||
@@ -137,6 +140,7 @@ class ProxyConfig {
     return false;
   }
   supports(id) { return IDS.includes(id); }
+  predictionAvailable() { try { return this.hasCodexLogin() === true; } catch { return false; } }
   desired(id, accountless = this.clients[id]?.accountless === true) {
     if (!this.supports(id)) return null;
     if (id === 'codex') this.store.readCatalog?.();
@@ -198,11 +202,8 @@ class ProxyConfig {
       providers,
       defaultModel,
       ...(review ? { autoModeModel: codexModelId(review.provider.id, review.model.model) } : {}),
-      // Codex's archive page filters by the default provider. Keep OAuth
-      // injection on OpenAI so native archives stay visible. The persisted
-      // compatibility flag also keeps older applied plans distinguishable.
-      ...(id === 'codex' && !accountless ? { predictionCompatibility: true } : {}),
-      // Only explicit accountless mode selects custom-provider bearer auth.
+      // Accountless routes accept only injected models, with local or native
+      // client authentication independent of the supplier's API credential.
       ...(id === 'codex' || accountless ? {
         ...(accountless ? { accountless: true } : { gatewayAuth: true }),
         localToken: this.clients[id]?.localToken || (this.modeTokens[id] ||= require("node:crypto").randomBytes(32).toString("hex")),
@@ -251,6 +252,10 @@ class ProxyConfig {
     try {
       this.checkFiles(id); desired = this.desired(id);
       if (id === "codex" && enabled) this.config.preflightDetach();
+      if (id === 'codex' && enabled && this.clients.codex) {
+        const auth = codexLocalAuth.plan(this.config, this.clients.codex, this.clients.codex);
+        nativePending = auth.files.length > 0 || !equal(auth.record, this.clients.codex.localAuth) || this.config.status().provider !== 'openai';
+      }
       if (id === "codex" && enabled && this.clients.codex && !this.clients.codex.accountless)
         authPending = this.config.status().authMode !== "oauth";
       if (id === "claude" && enabled && desired.accountless) {
@@ -278,7 +283,7 @@ class ProxyConfig {
   }
   fingerprint(ids, enabled) {
     return hash(JSON.stringify([read(this.file)?.toString("base64"), ids.filter((id) => this.supports(id)).map((id) =>
-      [id, enabled ? this.desired(id) : null, id === "codex" ? [read(this.config.catalog)?.toString("base64"), read(this.config.record)?.toString("base64")]
+      [id, enabled ? this.desired(id) : null, id === "codex" ? [read(this.config.catalog)?.toString("base64"), read(this.config.record)?.toString("base64"), hash(read(this.config.auth))]
         : [claudeNative.fingerprint(this.manager, this.clients.claude?.nativeClaude), this.desktop?.fingerprint()]])]));
   }
   preflight(ids, enabled, accountless) {
@@ -289,6 +294,7 @@ class ProxyConfig {
         claudeNative.plan(this.manager, null, this.clients.claude.nativeClaude);
       }
       if (ids.includes("claude")) this.desktop?.plan();
+      if (ids.includes('codex')) codexLocalAuth.plan(this.config, null, this.clients.codex);
       return;
     }
     for (const id of ids.filter((id) => this.supports(id))) {
@@ -296,7 +302,10 @@ class ProxyConfig {
       this.checkFiles(id);
       const plan = this.desired(id, accountless);
       if (!plan.providers.length && !this.clients[id]) throw Error("没有可接入的兼容模型，请先配置供应商与模型");
-      if (id === "codex") this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth, plan.predictionCompatibility);
+      if (id === "codex") {
+        this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth);
+        codexLocalAuth.plan(this.config, plan, this.clients.codex);
+      }
       if (id === "claude") {
         claudeNative.plan(this.manager, plan, this.clients.claude?.nativeClaude);
         this.desktop?.plan(plan.accountless ? plan.localToken : null, this.manager.options?.port || 25819, plan.providers);
@@ -353,7 +362,10 @@ class ProxyConfig {
       files.push(...(this.desktop?.plan(plan.accountless ? plan.localToken : null, this.manager.options?.port || 25819, plan.providers) || []));
     }
     if (id === "codex") {
-      const attachment = this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth, plan.predictionCompatibility);
+      const auth = codexLocalAuth.plan(this.config, plan, this.clients.codex);
+      if (auth.record) plan.localAuth = auth.record;
+      files.push(...auth.files);
+      const attachment = this.config.prepareAttach(plan.defaultModel, plan.localToken, plan.gatewayAuth);
       const backup = path.join(this.config.dataDir, "backups", "config-" + Date.now() + "-proxy.toml");
       safePath(backup); atomic(backup, attachment.old);
       plan.attachment = { backup, replaced: attachment.replaced,
@@ -393,6 +405,7 @@ class ProxyConfig {
     if (this.pending) throw Error("路由配置事务待恢复，请先重新同步");
     const clients = { ...this.clients };
     const files = ids.includes("claude") ? claudeNative.plan(this.manager, null, this.clients.claude?.nativeClaude).files : [];
+    if (ids.includes('codex')) files.push(...codexLocalAuth.plan(this.config, null, this.clients.codex).files);
     if (ids.includes("claude")) files.push(...(this.desktop?.plan() || []));
     for (const id of ids) delete clients[id];
     this.commit(clients, files);
@@ -404,7 +417,7 @@ class ProxyConfig {
     const saved = read(this.file), files = [];
     if (this.pending) {
       if (hash(saved || '') !== this.persistedHash) throw Error('待恢复路由记录已变化，未覆盖');
-      const allowed = id === 'codex' ? [this.config.file, this.config.record, this.config.catalog]
+      const allowed = id === 'codex' ? [this.config.file, this.config.record, this.config.catalog, this.config.auth]
         : [...Object.values(claudeNative.targets(this.manager)), ...Object.values(this.clients.claude?.nativeClaude?.targets || {})];
       if (this.pending.files.some(f => !allowed.includes(f.file) && !(id === 'claude' && this.desktop?.allowsFile(f.file))))
         throw Error('未完成事务还涉及其他客户端，请先检查该事务；没有扩大修复范围');
@@ -413,7 +426,7 @@ class ProxyConfig {
         file: f.file, before: read(f.file)?.toString() ?? null, after: f.before,
       })).filter(f => f.before !== f.after) };
     }
-    let migrated = false, recoveredAttachment;
+    let migrated = false, recoveredAttachment, localAuth;
     if (hash(saved || "") !== this.persistedHash) {
       // Recover this client from its trusted in-memory applied snapshot, but
       // never undo a concurrent edit to another client's route in the same file.
@@ -428,6 +441,9 @@ class ProxyConfig {
     }
     if (id === "codex") {
       validateCodexPlan(this.clients.codex);
+      const auth = codexLocalAuth.plan(this.config, this.clients.codex, this.clients.codex);
+      localAuth = auth.record;
+      files.push(...auth.files);
       for (const file of [this.config.file, this.config.record, this.config.catalog]) safePath(file);
       const { recordUpdate, ...attachment } = this.config.prepareRepair();
       if (recordUpdate) { files.push(recordUpdate); migrated = true; recoveredAttachment = JSON.parse(recordUpdate.after); }
@@ -447,7 +463,7 @@ class ProxyConfig {
       files.push(...native.files);
       files.push(...(this.desktop?.plan(this.clients.claude.accountless ? this.clients.claude.localToken : null, this.manager.options?.port || 25819, this.clients.claude.providers) || []));
     }
-    return { files, routeOnly: !files.length, nativeClaude, migrated, recoveredAttachment };
+    return { files, routeOnly: !files.length, nativeClaude, localAuth, migrated, recoveredAttachment };
   }
   repair(id) {
     const plan = this.repairPlan(id);
@@ -477,6 +493,7 @@ class ProxyConfig {
       }
       const clients = { ...this.clients };
       if (plan.nativeClaude) clients.claude = { ...clients.claude, nativeClaude: plan.nativeClaude };
+      if (id === 'codex') clients.codex = { ...clients.codex, localAuth: plan.localAuth };
       if (plan.recoveredAttachment) clients.codex = { ...clients.codex, attachment: plan.recoveredAttachment };
       this.persist(clients);
     } catch (error) {

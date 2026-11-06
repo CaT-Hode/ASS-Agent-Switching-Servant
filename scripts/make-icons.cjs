@@ -1,29 +1,37 @@
 // Authoritative vector geometry -> transparent PNG -> all Windows icon sizes.
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, nativeImage } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { iconCrop } = require("./icon-layout.cjs");
 const { SPEC, createGeometry, buildLogoSvg } = require("./brand-geometry.cjs");
-app.commandLine.appendSwitch("force-device-scale-factor", "1");
 app
   .whenReady()
   .then(async () => {
     const root = path.resolve(__dirname, "..");
     const geometry = createGeometry();
     const svg = buildLogoSvg(geometry);
-    const renderer = new BrowserWindow({ width: SPEC.size, height: SPEC.size,
-      useContentSize: true, show: false, frame: false, transparent: true,
-      backgroundColor: "#00000000",
-      webPreferences: { offscreen: true, sandbox: true, contextIsolation: true },
+    const renderer = new BrowserWindow({ show: false,
+      webPreferences: { sandbox: true, contextIsolation: true },
     });
     let image;
     try {
-      const html = `<html><head><meta charset="utf-8"><style>html,body{margin:0;width:${SPEC.size}px;height:${SPEC.size}px;background:transparent;overflow:hidden}svg{display:block}</style></head><body>${svg}</body></html>`;
-      await renderer.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
-      await renderer.webContents.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-      image = await renderer.webContents.capturePage({ x: 0, y: 0, width: SPEC.size, height: SPEC.size });
+      await renderer.loadURL("about:blank");
+      // Canvas export waits for SVG decoding without a hidden-window screenshot.
+      const png = await renderer.webContents.executeJavaScript(`(async () => {
+        const source = new Image();
+        source.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(${JSON.stringify(svg)});
+        await source.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = ${SPEC.size};
+        canvas.getContext("2d").drawImage(source, 0, 0);
+        return canvas.toDataURL("image/png");
+      })()`);
+      image = nativeImage.createFromDataURL(png);
     } finally { renderer.destroy(); }
     if (!image || image.isEmpty()) throw new Error("Vector logo export failed");
+    const { width, height } = image.getSize();
+    const layout = iconCrop(image.toBitmap(), width, height);
+    const icon = image.crop(layout.crop);
     fs.writeFileSync(path.join(root, "public/ass-logo.svg"), svg);
     fs.writeFileSync(path.join(root, "public/ass-logo.png"), image.toPNG());
     fs.mkdirSync(path.join(root, "design/logo"), { recursive: true });
@@ -32,9 +40,6 @@ app
       roots: geometry.roots.map(({ id, minimum, contour }) => ({ id, minimum, contour })),
       perimeter: geometry.perimeter, edgeKinds: geometry.facets.map(({ type, id }) => ({ type, id })), hub: geometry.hub,
     }, null, 2) + "\n");
-    const { width, height } = image.getSize();
-    const layout = iconCrop(image.toBitmap(), width, height);
-    const icon = image.crop(layout.crop);
     // Every UI and Windows icon consumes the same tightly framed SVG export.
     fs.writeFileSync(path.join(root, "public/ass-app-icon.png"), icon.toPNG());
     const sizes = [16, 24, 32, 48, 64, 128, 256];

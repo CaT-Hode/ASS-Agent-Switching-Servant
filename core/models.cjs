@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const { codexApiMetadata } = require('./deepseek-compat.cjs');
 const { DEFAULT_OUTPUT_TOKENS } = require('./output-tokens.cjs');
+const { compactTokenLimit } = require('./context-budget.cjs');
 const { CONFIG_LIMITS, checkSize, validateProviders } = require('./config-limits.cjs');
 const { tail, inferProtocol, contextDefault } = require("./presets.cjs");
 const { normalizeBalance } = require("./balance.cjs");
@@ -252,6 +253,10 @@ function makeCatalog(officialModels, providers, overrides = {}) {
     ...entry,
     context_window: m.contextWindow,
     max_context_window: m.contextWindow,
+    auto_compact_token_limit: compactTokenLimit(m.contextWindow),
+    // Keep the advertised context window intact in Codex. The separate
+    // compact-token limit below triggers native compaction at 90%.
+    effective_context_window_percent: 100,
     default_reasoning_level: normalizeEffort(m.defaultEffort),
     supported_reasoning_levels: m.efforts.map((e) => ({
       effort: normalizeEffort(e),

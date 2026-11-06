@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('requestWidget', {
   endDrag: () => ipcRenderer.send('ass-widget:drag-end'),
   menu: () => ipcRenderer.send('ass-widget:menu'),
   hide: () => ipcRenderer.send('ass-widget:hide'),
-  layout: count => ipcRenderer.send('ass-widget:layout', count),
+  layout: (count, heatColumns) => ipcRenderer.send('ass-widget:layout', count, heatColumns),
   subscribe: callback => { const listener = (_, value) => callback(value);ipcRenderer.on('ass-widget:data', listener);
     return () => ipcRenderer.removeListener('ass-widget:data', listener); },
 });

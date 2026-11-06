@@ -5,6 +5,7 @@ const TOML = require('@iarna/toml');
 const { atomic } = require('./config.cjs');
 const { document, edit, hash } = require('./native-fields.cjs');
 const { claudeModelSettings, claudeModelEnv } = require('./accountless.cjs');
+const { compactTokenLimit } = require('./context-budget.cjs');
 const CLIENTS = ['codex', 'claude', 'pi'];
 const present = value => ({ exists: true, value });
 const fieldAt = (data, keys) => {
@@ -68,7 +69,8 @@ function projection(id, source, info, base) {
     const model = source.model || source.plan.defaultModel?.model;
     if (!model || !source.plan.localToken) throw Error('请先同步 Windows Codex 接入');
     return [fields('config.toml', { model, model_reasoning_effort: source.effort,
-      model_context_window: source.contextWindow, model_auto_compact_token_limit: source.compactLimit,
+      model_context_window: source.contextWindow,
+      model_auto_compact_token_limit: compactTokenLimit(source.contextWindow),
       model_provider: 'openai', cli_auth_credentials_store: 'file', openai_base_url: base + '/clients/ASS/v1', model_catalog_json: file('ass-models.json') }, 'toml'),
       fields('auth.json', { auth_mode: 'apikey', OPENAI_API_KEY: source.plan.localToken, tokens: undefined }),
       { file: file('ass-models.json'), format: 'raw', text: JSON.stringify(source.plan.catalog, null, 2) }];
@@ -98,8 +100,10 @@ function windowsSources({ proxyConfig, nativeConfig, config, connections, router
       if (!plan) return [id, null];
       if (id === 'claude') return [id, { plan, token: plan.localToken || router.clientToken }];
       const native = document(fs.readFileSync(config.file, 'utf8'), 'toml').data;
+      const catalogModel = plan.catalog?.models?.find(row => row.slug === native.model);
+      const contextWindow = catalogModel?.context_window || catalogModel?.max_context_window || native.model_context_window;
       return [id, { plan, model: native.model, effort: native.model_reasoning_effort,
-        contextWindow: native.model_context_window, compactLimit: native.model_auto_compact_token_limit }];
+        contextWindow }];
     }
     const target = require('./native-config.cjs').locations('pi', nativeConfig.manager);
     const entries = nativeConfig.fields.entries.filter(e => e.harness === 'pi' && [target.config, target.auth, target.settings].includes(e.file));

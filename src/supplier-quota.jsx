@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { RefreshCw } from "./icons.jsx";
+import { RefreshCw, ExternalLink } from "./icons.jsx";
 import { ElapsedTime } from "./diagnostic-time.jsx";
 import { exactTime } from "./relative-time.mjs";
 import { UsageMeter } from './usage-meter.jsx';
@@ -27,9 +27,11 @@ export function SupplierQuota({ p, state }) {
   const profile = clientId
     ? account?.quota || account?.profile
     : state.providerInfo?.[p.id];
+  const consoleOnly = profile?.quotaMode === 'console';
   const balance =
-    !clientId && !profile?.canRefresh ? state.balances[p.id] : null;
-  const queryable = clientId ? !!account : p.hasKey && p.enabled !== false;
+    !clientId && !profile?.canRefresh && !consoleOnly ? state.balances[p.id] : null;
+  const queryable = clientId ? !!account : p.hasKey && p.enabled !== false && profile?.balanceQueryable !== false;
+  const infoLinks = profile?.infoLinks || [];
   const fields = profile?.fields || [];
   const quotas = fields.filter((f) => f.kind === "quota");
   const amounts = fields.filter(
@@ -41,7 +43,7 @@ export function SupplierQuota({ p, state }) {
       ? balance.rows || [balance]
       : [];
   const time = profile?.updatedAt || balance?.time;
-  const warning = error || profile?.error || balance?.error;
+  const warning = !consoleOnly && (error || profile?.error || balance?.error);
   const caption = (a) =>
     a.profile?.fields?.find((f) => f.id === "email")?.value || a.label;
   useEffect(() => {
@@ -72,7 +74,7 @@ export function SupplierQuota({ p, state }) {
     account?.id,
     state.modelDirectoryRevisions?.[p.id],
   ]);
-  if (!queryable && !time) return null;
+  if (!queryable && !time && !infoLinks.length) return null;
   return (
     <div className="supplier-quota" aria-label={p.name + " 额度"}>
       <div className="supplier-quota-heading">
@@ -105,12 +107,14 @@ export function SupplierQuota({ p, state }) {
           >
             {account
               ? caption(account)
+              : consoleOnly
+                ? "OpenAI API"
               : quotas.length || rows.some((r) => r.unit === "%")
                 ? "剩余额度"
                 : "可用余额"}
           </span>
         )}
-        <button
+        {queryable && <button
           className="model-icon"
           aria-label={p.name + " 刷新额度"}
           title="刷新额度"
@@ -129,9 +133,15 @@ export function SupplierQuota({ p, state }) {
           }}
         >
           <RefreshCw size={14} className={loading ? "spin" : undefined} />
-        </button>
+        </button>}
       </div>
       <div className="supplier-quota-content">
+      {consoleOnly && <span className="muted tiny">{profile.note}</span>}
+      {infoLinks.map((link) => (
+        <button key={link.id} className="text-button" onClick={() => api.call('account-info-doc', link.id)}>
+          {link.label}<ExternalLink size={12} />
+        </button>
+      ))}
       {!!quotas.length && (
         <div className="supplier-quota-windows">
           {quotas.map((q) => (
@@ -164,7 +174,7 @@ export function SupplierQuota({ p, state }) {
           ))}
         </div>
       )}
-      {!quotas.length && !rows.length && (
+      {!consoleOnly && !quotas.length && !rows.length && (
         <span className="muted tiny">
           {loading
             ? "查询中…"

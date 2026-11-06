@@ -56,7 +56,7 @@ class CodexSessionHandoff {
     const file = this.database(); if (!file) return { count: 0 };
     let db;
     try { db = new DatabaseSync(file, { readOnly: true }); const rows = this.rows(db).rows;
-      return { count: rows.length, predictionCount: rows.filter(row => ownProvider(row.model_provider)).length,
+      return { count: rows.length, bindingCount: rows.filter(row => ownProvider(row.model_provider)).length,
         pending: fs.existsSync(this.journal), error: this.error }; }
     catch { return { count: 0, error: 'Codex 会话绑定暂不可读' }; }
     finally { db?.close(); }
@@ -109,43 +109,43 @@ class CodexSessionHandoff {
       db.exec('COMMIT'); transaction = false; await fsp.unlink(this.journal); this.error = '';
     } catch (e) { if (transaction) db.exec('ROLLBACK'); throw e; } finally { db.close(); }
   }
-  assertPredictionRoute() {
+  assertBindingRoute() {
     const status = this.config.status();
-    if (!status.attached || status.provider !== 'openai' || status.authMode !== 'oauth')
-      throw Error('请先更新并同步普通 OAuth 接入；无账号模式不能修复预测');
+    if (!status.attached || status.provider !== 'openai' || !['oauth', 'accountless'].includes(status.authMode))
+      throw Error('请先更新并同步 Codex 续聊兼容接入');
     this.config.preflightDetach(); // Validate the saved ownership record, without detaching.
   }
-  async restorePrediction() {
-    this.assertPredictionRoute();
+  async restoreBindings() {
+    this.assertBindingRoute();
     return this.restore(true);
   }
-  async restore(prediction = false) {
+  async restore(preserveModel = false) {
     if (this.busy) throw Error('正在恢复 Codex 会话绑定，请稍后重试');
     this.busy = true;
-    try { return await this.restoreNow(prediction); } finally { this.busy = false; }
+    try { return await this.restoreNow(preserveModel); } finally { this.busy = false; }
   }
-  async restoreNow(prediction = false) {
+  async restoreNow(preserveModel = false) {
     await this.recover();
     const database = this.database(); if (!database) return { count: 0 };
     const reader = new DatabaseSync(database, { readOnly: true }); let candidates;
     try { candidates = this.rows(reader); } finally { reader.close(); }
-    if (prediction) candidates.rows = candidates.rows.filter(row => ownProvider(row.model_provider));
+    if (preserveModel) candidates.rows = candidates.rows.filter(row => ownProvider(row.model_provider));
     if (!candidates.rows.length) return { count: 0 };
     await this.assertIdle();
-    if (prediction) this.assertPredictionRoute();
-    const target = prediction ? null : this.target(), items = [];
+    if (preserveModel) this.assertBindingRoute();
+    const target = preserveModel ? null : this.target(), items = [];
     for (const row of candidates.rows) {
       const item = { before: row, after: { provider: ownProvider(row.model_provider) ? 'openai' : row.model_provider,
-        model: prediction ? row.model : row.model || target.model }, append: '' };
+        model: preserveModel ? row.model : row.model || target.model }, append: '' };
       if (fs.existsSync(row.rollout_path)) {
         item.file = this.ownedFile(row.rollout_path); item.hashBefore = await digest(item.file);
         item.headBefore = await header(item.file); const meta = JSON.parse(item.headBefore);
         if (meta.type !== 'session_meta' || meta.payload?.id !== row.id) throw Error('Codex 会话元数据与索引不一致，未修改');
-        if (prediction && meta.payload.model_provider !== 'openai' && !ownProvider(meta.payload.model_provider))
-          throw Error('Codex 会话供应商与索引不一致，未修改预测绑定');
+        if (preserveModel && meta.payload.model_provider !== 'openai' && !ownProvider(meta.payload.model_provider))
+          throw Error('Codex 会话供应商与索引不一致，未修改续聊绑定');
         if (ownProvider(meta.payload.model_provider)) meta.payload.model_provider = 'openai';
         item.headAfter = JSON.stringify(meta) + (item.headBefore.endsWith('\r\n') ? '\r\n' : '\n');
-        if (!prediction) {
+        if (!preserveModel) {
         let context, history = [], unsafeReplay = false;
         const lines = createInterface({ input: fs.createReadStream(item.file), crlfDelay: Infinity });
         for await (const line of lines) if (/"type"\s*:\s*"(?:turn_context|response_item|compacted|event_msg)"/.test(line)) {
@@ -185,19 +185,19 @@ class CodexSessionHandoff {
         }
         const original = fs.createReadStream(item.file, { start: Buffer.byteLength(item.headBefore) }), hash = createHash('sha256');
         hash.update(item.headAfter); for await (const bytes of original) hash.update(bytes); hash.update(item.append); item.hashAfter = hash.digest('hex');
-      } else if (!prediction && (ownModel(item.after.model) || !target.native.some(m => m.slug === item.after.model))) item.after.model = target.model;
+      } else if (!preserveModel && (ownModel(item.after.model) || !target.native.some(m => m.slug === item.after.model))) item.after.model = target.model;
       items.push(item);
     }
     const plan = { database, model: candidates.model, items };
     this.persist({ ...plan, items: items.map(({ append, ...item }) => ({ ...item, appendBytes: Buffer.byteLength(append) })) });
-    if (prediction) {
-      const backup = path.join(this.dataDir, 'backups', `codex-prediction-${Date.now()}-${randomUUID()}.enc.json`);
+    if (preserveModel) {
+      const backup = path.join(this.dataDir, 'backups', `codex-bindings-${Date.now()}-${randomUUID()}.enc.json`);
       safePath(backup); atomic(backup, await fsp.readFile(this.journal, 'utf8'));
     }
     const db = new DatabaseSync(database); let committed = false, transaction = false;
     try {
       await this.assertIdle();
-      if (prediction) this.assertPredictionRoute();
+      if (preserveModel) this.assertBindingRoute();
       db.exec('BEGIN IMMEDIATE'); transaction = true;
       for (const item of items) {
         const changed = db.prepare(`UPDATE threads SET model_provider=?${plan.model ? ',model=?' : ''}

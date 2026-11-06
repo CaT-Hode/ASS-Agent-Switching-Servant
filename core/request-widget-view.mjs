@@ -4,15 +4,39 @@ const number = v => known(v) ? v : 0;
 const key = row => row.requestId || [row.time, row.source, row.model].join(':');
 const dayKey = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 const eligible = row => row.model && row.client !== 'diagnostics' && row.operation !== 'count_tokens';
-export const widgetWidth = width => width - 16;
-export const widgetHeight = (count, capacity) => 110 + Math.max(1, Math.min(capacity, count)) * 29;
+export const WIDGET_FRAME_INSET = 6;
+export const WIDGET_CONTENT_INSET = 10;
+export const WIDGET_ROW_HEIGHT = 27;
+export const WIDGET_SECTION_GAP = 4;
+export const WIDGET_HEAT_BOTTOM = 10;
+export const widgetWidth = width => width - 52;
+export const widgetHeatRadius = radius => Math.max(4, Math.min(8, Math.round(radius / 6)));
+export const widgetHeight = (count, capacity, width = 340) => {
+  const rows = Math.max(1, Math.min(capacity, count));
+  return Math.ceil(2 * WIDGET_FRAME_INSET + 8 + rows * WIDGET_ROW_HEIGHT +
+    WIDGET_SECTION_GAP + widgetHeatHeight(width) + WIDGET_HEAT_BOTTOM);
+};
+// The 2x12 heatmap uses square cells; derive its DIP height from the same
+// inner width used by the renderer so the native material mask stays aligned.
+export const widgetHeatHeight = (width = 340) => {
+  const inner = widgetWidth(width) - 2 * (WIDGET_FRAME_INSET + WIDGET_CONTENT_INSET);
+  return Math.max(32, (inner - 33) / 6 + 3);
+};
 export const widgetDuration = ms => Number.isFinite(ms) && ms >= 0 ? Math.floor(ms / 1000) + 's' : '—';
+const rowFields = ['id', 'model', 'rawModel', 'provider', 'client', 'inProgress', 'phase', 'ok', 'ms', 'tps', 'estimated', 'cache', 'input', 'output', 'error'];
+const sameRow = (a, b) => rowFields.every(key => Object.is(a[key], b[key]));
 export function motionRows(previous, rows) {
   const incoming = new Map(rows.map((row, index) => [row.id, { row, index, exiting: false }]));
-  const next = previous.map(item => incoming.get(item.row.id) || { ...item, exiting: true });
+  const next = previous.map(item => {
+    const current = incoming.get(item.row.id);
+    if (!current) return item.exiting ? item : { ...item, exiting: true };
+    const row = sameRow(item.row, current.row) ? item.row : current.row;
+    return row === item.row && item.index === current.index && !item.exiting
+      ? item : { ...item, row, index: current.index, exiting: false };
+  });
   const retained = new Set(next.map(item => item.row.id));
   for (const item of incoming.values()) if (!retained.has(item.row.id)) next.push(item);
-  return next;
+  return next.length === previous.length && next.every((item, index) => item === previous[index]) ? previous : next;
 }
 export class WidgetRequests {
   constructor() { this.slots = [];this.seen = new Map(); }

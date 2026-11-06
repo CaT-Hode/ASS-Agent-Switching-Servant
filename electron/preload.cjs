@@ -32,7 +32,7 @@ const allowed = [
   "app-exit-direct",
   "connection-repair-preview",
   "connection-repair",
-  "codex-prediction-repair",
+  "codex-session-repair",
   "diagnose",
   "diagnose-all",
   "diagnose-cancel",

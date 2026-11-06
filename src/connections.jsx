@@ -207,7 +207,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
     if (request.accountless !== undefined) {
       warning = request.accountless ? request.scope === "claude"
         ? "终端和桌面版使用注入模型，按 API 计费；桌面版允许工具访问外网。重新打开后选择 Continue with Gateway，原有登录保留。"
-        : "仅使用已注入模型，按供应商 API 计费。已有对话保留旧接入方式时，会用本机当前登录凭据完成本机认证；没有该凭据请先新建对话。原有官方登录保留。"
+        : "仅使用已注入模型，按供应商 API 计费。续聊无需 ChatGPT 登录；保留登录时可继续使用原生提示词预测，完全无登录时预测不可用。旧对话可在正常退出 Codex 后修复。"
         : "恢复正常账户启动；已有窗口需重启后生效。";
     } else if (plan.enabled) {
       warning = plan.codexConfig

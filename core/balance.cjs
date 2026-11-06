@@ -95,6 +95,17 @@ const BALANCE_PRESETS = [
     unit: "USD",
   },
 ];
+function isOpenAIApi(provider) {
+  try {
+    const u = new URL(provider.baseUrl);
+    return u.origin === 'https://api.openai.com' &&
+      !u.username && !u.password && !u.search && !u.hash && /^\/(?:v1\/?)?$/.test(u.pathname);
+  } catch { return false; }
+}
+function canQueryBalance(provider) {
+  const config = normalizeBalance(provider.balance);
+  return config.preset !== 'auto' || !isOpenAIApi(provider);
+}
 const preset = (id) => BALANCE_PRESETS.find((p) => p.id === id);
 function normalizeBalance(raw = {}) {
   const id = raw.preset || (raw.path ? "custom" : "auto");
@@ -273,6 +284,8 @@ function parseBalance(id, data, config, host = "") {
 async function queryBalance(provider, fetcher) {
   const config = normalizeBalance(provider.balance);
   if (!provider.apiKey) throw new Error("请先填写此供应商的 API Key");
+  if (config.preset === 'auto' && isOpenAIApi(provider))
+    throw new Error('OpenAI API Key 不提供自动余额查询接口；请查看 OpenAI API 用量或账单');
   const ids = config.preset === "auto" ? detect(provider) : [config.preset];
   let last;
   for (const id of ids) {
@@ -318,6 +331,8 @@ async function queryBalance(provider, fetcher) {
 }
 module.exports = {
   BALANCE_PRESETS,
+  canQueryBalance,
+  isOpenAIApi,
   normalizeBalance,
   detect,
   parseBalance,

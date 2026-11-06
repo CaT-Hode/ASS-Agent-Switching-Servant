@@ -80,6 +80,7 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     assert.equal(monitoring.rows[0].endToEndTps, 50 * 1000 / 3000);
     assert.equal(monitoring.rows[1].tps, null, 'legacy records cannot reuse total timing as visible timing');
     assert.equal(await page.getByRole('region', { name: '可见输出 TPS', exact: true }).locator('strong').textContent(), '20');
+    assert.equal((await page.locator('.monitor-tps-value').first().textContent()).includes('≈'), false, 'TPS never displays an approximation prefix');
     assert.deepEqual(monitoring.active, []);
     const unchangedMonitoring = await page.evaluate(revision => window.ass.call('request-monitor', revision), monitoring.revision);
     assert.equal(unchangedMonitoring.rows, undefined, 'per-second polls do not resend unchanged historical rows');
@@ -87,6 +88,10 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     await page.getByRole('button', { name: '悬浮窗', exact: true }).click();
     const widget = await widgetCreated;
     await widget.waitForSelector('.widget-heatcell');
+    const requestColumns = await widget.locator('.widget-request').first().evaluate(row => getComputedStyle(row).gridTemplateColumns.split(' ').map(value => parseFloat(value)));
+    assert.equal(requestColumns[1], 62, 'provider column grows by four DIP');
+    assert.equal(requestColumns.at(-1), 26, 'duration column shrinks by four DIP');
+    assert.equal(requestColumns[1] + requestColumns.at(-1), 88, 'provider growth is offset by duration');
     assert.equal(await widget.locator('.widget-close').count(), 0);
     assert.equal(await widget.locator('.widget-heatcell').count(), 24);
     assert.equal(await widget.locator('.widget-heatcell[data-current="true"][aria-current="time"]').count(), 1);
@@ -103,26 +108,34 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     assert.equal(heatPositions[1].y, heatPositions[3].y);
     const corners = await widget.locator('.widget-panel').evaluate(panel => {
       const cell = panel.querySelector('.widget-heatcell'), last = panel.querySelector('.widget-heatcell:last-child');
+      const requests = panel.querySelector('.widget-requests');
       const outer = panel.getBoundingClientRect(), first = cell.getBoundingClientRect(), end = last.getBoundingClientRect();
+      const list = requests.getBoundingClientRect();
       return { outer: parseFloat(getComputedStyle(panel).borderTopLeftRadius), inner: parseFloat(getComputedStyle(cell).borderTopLeftRadius),
-        left: first.left - outer.left, bottom: outer.bottom - end.bottom,
+        left: first.left - outer.left, right: outer.right - end.right, bottom: outer.bottom - end.bottom,
+        listLeft: list.left - outer.left, listRight: outer.right - list.right,
         continuous: CSS.supports('corner-shape', 'superellipse(2)') && ['superellipse(2)', 'squircle'].includes(getComputedStyle(panel).cornerShape) };
     });
-    assert.ok(Math.abs(corners.left - 16) < 1 && Math.abs(corners.bottom - 16) < 1, 'compact content uses matching 16px edge gaps');
-    assert.equal(corners.inner, 5, 'heat cells retain rectangular sides rather than capsule ends');
+    assert.ok([corners.left, corners.right, corners.bottom, corners.listLeft, corners.listRight].every(gap => Math.abs(gap - 10) < 1),
+      'heatmap rows, request rows and glass edges share the same 10px alignment');
+    assert.equal(corners.inner, 6, 'heat cells scale their continuous radius with the glass frame');
+    const square = await widget.locator('.widget-heatcell').first().evaluate(cell => { const r = cell.getBoundingClientRect(); return { width: r.width, height: r.height }; });
+    assert.ok(Math.abs(square.width - square.height) < .5, 'heat cells remain square after the compact layout');
+    assert.ok(square.width < 19, `heat cells shrink with the narrower frame (${square.width}px)`);
     assert.ok(corners.continuous, 'foreground supports continuous corners matching native glass');
     await widget.waitForFunction(() => document.querySelector('.widget-panel').dataset.glass === 'true', undefined, { timeout: 10000 });
     const widgetBounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
       .find(window => window.webContents.getURL().includes('request-widget.html')).getContentBounds());
     const anchored = await widgetBounds();
+    assert.ok(Math.abs(anchored.width - 288) <= 1, `default widget width is compact (${anchored.width}px)`);
     await widget.evaluate(() => window.requestWidget.layout(5));
-    await widget.waitForFunction(() => innerHeight >= 254);
+    await widget.waitForFunction(() => innerHeight >= 209);
     const expanded = await widgetBounds();
     assert.ok(Math.abs(expanded.y + expanded.height - anchored.y - anchored.height) <= 1, 'actual foreground bottom stays anchored while growing');
     await widget.evaluate(() => window.requestWidget.layout(1));
-    await widget.waitForFunction(() => innerHeight <= 141);
+    await widget.waitForFunction(() => innerHeight <= 103);
     const collapsed = await widgetBounds();
-    assert.ok(Math.abs(collapsed.y + collapsed.height - anchored.y - anchored.height) <= 1, 'actual foreground bottom stays anchored while shrinking');
+    assert.ok(Math.abs(collapsed.y + collapsed.height - anchored.y - anchored.height) <= 1, `actual foreground bottom stays anchored while shrinking (${collapsed.y + collapsed.height - anchored.y - anchored.height}px)`);
     await widget.evaluate(() => window.requestWidget.layout(document.querySelectorAll('.widget-row-slot').length));
     assert.equal(await widget.evaluate(() => typeof window.ass), 'undefined', 'widget cannot access the full application bridge');
     await widget.locator('.widget-heatcell').first().hover();

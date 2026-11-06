@@ -121,6 +121,12 @@ export function AccountProfile({ account, client, state, act, busy, hideIdentity
       )}
       <div className="account-profile-source">
         {(p.stale || quota.stale) && <small>上次查询结果</small>}
+        {p.quotaMode === 'console' && <small>{p.note}</small>}
+        {p.infoLinks?.map((link) => (
+          <button key={link.id} className="text-button" onClick={() => act('account-info-doc', () => api.call('account-info-doc', link.id))}>
+            {link.label}<ExternalLink size={12} />
+          </button>
+        ))}
         {p.consoleService && (
           <button
             className="text-button"

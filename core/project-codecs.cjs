@@ -347,7 +347,7 @@ function encode(harness, { id, cwd, title, messages, createdAt = new Date().toIS
       if (m.role === 'user' && openTurn && !openStep) { event('turn/end', { turn, reason: { kind: 'completed' } }); openTurn = false; }
       if (!openTurn) { step = 0; event('turn/start', { turn: ++turn }); openTurn = true; }
       if (!openStep) { event('step/start', { turn, step: ++step }); openStep = true; }
-      const msg = { id: crypto.randomUUID(), role: m.role, content: [{ type: 'text', text: m.text }], source: m.role === 'user' ? { kind: 'user' } : { kind: 'model', provider: 'ASS-history', model: 'history' } };
+      const msg = { id: crypto.randomUUID(), role: m.role, content: [{ type: 'text', text: m.text }], source: m.role === 'user' ? { kind: 'user' } : { kind: 'model', provider: 'ass-history', model: 'history' } };
       event(m.role === 'user' ? 'user/message' : 'assistant/message', m.role === 'user' ? msg : { turn, step, message: msg, stream: [] });
       if (m.role === 'assistant') { event('step/end', { turn, step }); openStep = false; }
     }
@@ -359,7 +359,7 @@ function encode(harness, { id, cwd, title, messages, createdAt = new Date().toIS
     if (rows.length > 1) frames.push(zlib.zstdCompressSync(Buffer.from(jsonl(rows.slice(1)))));
     return { bytes: Buffer.concat(frames), suffix: '.jsonl.zstd' };
   } else if (harness === 'opencode') {
-    const target = model ? require('./opencode-resume-model.cjs').modelRef(model) : { providerID: 'ASS-history', modelID: 'unassigned' };
+    const target = model ? require('./opencode-resume-model.cjs').modelRef(model) : { providerID: 'ass-history', modelID: 'unassigned' };
     const time = Date.parse(createdAt), info = { id, slug: id, projectID: 'global', directory: cwd, title, version: '1.0.0', time: { created: time, updated: time } };
     let parentID = '';
     const bundle = messages.map((m, i) => {

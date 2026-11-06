@@ -76,16 +76,22 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
         onClick={() => act('claude-default-launch', () => api.call('client-model-launch', 'claude', selectedDefault || defaultModels[0].ref), '已打开 Claude Code 默认模型终端')}>
         <Terminal size={15} />启动默认模型终端</button>}
     </>}
-    {client.id === 'codex' && !connection?.accountless && <p className="codex-tool-mode-hint">
-      普通接入保留原生归档与提示词预测通道。更新接入并重新加载 Codex 后生效；预测仍需官方功能开放与模型支持。
+    {client.id === 'codex' && <p className="codex-tool-mode-hint">
+      {connection?.accountless
+        ? connection.applied && connection.predictionLoginAvailable
+          ? '无账号路由已保留 ChatGPT 登录身份用于原生提示词预测；模型推理仍走 ASS 与供应商 API，不使用官方模型额度。'
+          : connection.predictionLoginAvailable
+            ? '检测到 ChatGPT 登录；同步接入后可恢复原生提示词预测，模型推理仍走 ASS。'
+            : '完全无账号状态无法使用 Codex 原生提示词预测；登录 ChatGPT 后重新同步即可恢复，第三方模型仍按供应商 API 计费。'
+        : '普通接入保留原生归档与提示词预测通道。更新接入并重新加载 Codex 后生效；预测仍需官方功能开放与模型支持。'}
     </p>}
-    {client.id === 'codex' && !connection?.accountless &&
-      (connection?.resumeRecovery?.predictionCount > 0 || connection?.resumeRecovery?.pending) && <div className="accountless-control">
-      <div><strong>旧对话预测待修复{connection.resumeRecovery.predictionCount > 0 ? ` · ${connection.resumeRecovery.predictionCount} 个` : ''}</strong>
-        <small>任务结束后正常退出 Codex，再点修复；或在更新接入时确认重启。保留原模型与聊天内容，ASS 保持运行。</small></div>
-      <button className="button" disabled={!!busy || state.connections.busy || !connection.predictionCompatibility || !connection.applied}
-        title={!connection.predictionCompatibility || !connection.applied ? '请先更新接入以应用原生兼容' : '仅修复旧对话的预测通道；请先正常退出 Codex'}
-        onClick={() => act('prediction-repair', () => api.call('codex-prediction-repair'))}>修复旧对话预测</button>
+    {client.id === 'codex' && connection?.enabled &&
+      (connection?.resumeRecovery?.bindingCount > 0 || connection?.resumeRecovery?.pending) && <div className="accountless-control">
+      <div><strong>旧对话续聊待修复{connection.resumeRecovery.bindingCount > 0 ? ` · ${connection.resumeRecovery.bindingCount} 个` : ''}</strong>
+        <small>任务结束后正常退出 Codex，再点修复；保留原模型与聊天内容，无需 ChatGPT 登录。ASS 保持运行。</small></div>
+      <button className="button" disabled={!!busy || state.connections.busy || !connection.applied}
+        title={!connection.applied ? '请先同步接入以应用续聊兼容' : '修复旧对话的供应商绑定；请先正常退出 Codex'}
+        onClick={() => act('session-repair', () => api.call('codex-session-repair'))}>修复旧对话续聊</button>
     </div>}
     {client.id === 'codex' && injection.models.some(m => m.protocol === 'openai-responses') && <p className="codex-tool-mode-hint">
       展开供应商，在模型菜单中设置工具兼容。工具调用变成普通文字时可切换“兼容模式”；更改后同步接入生效。

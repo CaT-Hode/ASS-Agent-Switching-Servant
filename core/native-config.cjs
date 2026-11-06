@@ -10,6 +10,7 @@ const { target: kimiTarget } = require("./kimi-config.cjs");
 const zcode = require("./zcode-config.cjs");
 const dsh = require("./dsh-config.cjs");
 const { sameApi } = require("./native-api-identity.cjs");
+const { compactTokenLimit } = require('./context-budget.cjs');
 const { OUTPUT_DEFAULTS_VERSION, upgradeNativeOutput } = require('./output-tokens.cjs');
 const DIRECT = ["opencode", "pi", "dsh", "kimi", "zcode"];
 const APIS = {
@@ -24,7 +25,7 @@ const NPMS = {
 };
 const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const providerId = (p, protocol) =>
-  "ASS-" +
+  "ass-" +
   createHash("sha256").update(p.id).digest("hex").slice(0, 16) +
   "-" +
   {
@@ -135,9 +136,13 @@ function compose(harness, manager, selection, targetOverride) {
     );
     for (const [wire, models] of grouped) {
       if (!APIS[wire]) throw Error("原生接入不支持此模型协议");
+      const injectedModels = models.map(m => {
+        const contextWindow = compactTokenLimit(m.contextWindow);
+        return { ...m, contextWindow, maxOutputTokens: Math.min(m.maxOutputTokens, contextWindow) };
+      });
       const id = providerId(p, wire),
         base = baseUrl(harness, p, wire);
-      renames.set('ass-' + id.slice(4), id);
+      renames.set('ASS-' + id.slice(4), id);
       const headers = p.extraHeaders || {};
       if (harness === "opencode") {
         if (target.major === 2 && require('./opencode-version.cjs').credentials(target.dir)?.some(r => r.integrationID === id &&
@@ -148,7 +153,7 @@ function compose(harness, manager, selection, targetOverride) {
           npm: NPMS[wire],
           options: { baseURL: base, headers, ...(target.major === 2 ? { apiKey: p.apiKey } : {}) },
           models: Object.fromEntries(
-            models.map((m) => [
+            injectedModels.map((m) => [
               m.model,
               {
                 name: m.displayName,
@@ -190,7 +195,7 @@ function compose(harness, manager, selection, targetOverride) {
           headers: Object.fromEntries(
             Object.entries(headers).map(([k, v]) => [k, piLiteral(v)]),
           ),
-          models: models.map((m) => ({
+          models: injectedModels.map((m) => ({
             id: m.model,
             name: m.displayName,
             contextWindow: m.contextWindow,
@@ -213,7 +218,7 @@ function compose(harness, manager, selection, targetOverride) {
           config: { group: "standard-personal", visibility: "visible", access: { type: "api-key", apiKey: p.apiKey },
             api: { type: apiType, baseUrl: base, headers }, personalModelIds: models.map((m) => m.model) } },
         { selector: { providerId: id }, credentialProvider: id });
-        for (const m of models) field(target.config, "json", zcode.MODELS,
+        for (const m of injectedModels) field(target.config, "json", zcode.MODELS,
           { providerId: id, modelId: m.model, config: zcode.modelConfig(m) },
           { selector: { providerId: id, modelId: m.model } });
       } else if (harness === "kimi") {
@@ -224,9 +229,9 @@ function compose(harness, manager, selection, targetOverride) {
           api_key: p.apiKey,
           ...(Object.keys(headers).length ? { custom_headers: headers } : {}),
         }, { credentialProvider: id });
-        for (const m of models) {
+        for (const m of injectedModels) {
           const alias = id + "-" + createHash("sha256").update(m.model).digest("hex").slice(0, 16);
-          renames.set('ass-' + alias.slice(4), alias);
+          renames.set('ASS-' + alias.slice(4), alias);
           field(target.config, "toml", ["models", alias], {
             provider: id, model: m.model, display_name: m.displayName,
             max_context_size: m.contextWindow,
@@ -241,7 +246,7 @@ function compose(harness, manager, selection, targetOverride) {
           baseURL: base,
           api: APIS[wire],
           headers,
-          models: models.map((m) => ({
+        models: injectedModels.map((m) => ({
             id: m.model,
             name: m.displayName,
             contextWindow: m.contextWindow,

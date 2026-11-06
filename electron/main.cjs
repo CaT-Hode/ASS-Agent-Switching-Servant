@@ -20,7 +20,7 @@ const { Store } = require("../core/store.cjs");
 const { ConfigManager, atomic } = require("../core/config.cjs");
 const { normalizeModel, codexModelId } = require("../core/models.cjs");
 const { exportConfig } = require("../core/config-export.cjs");
-const { BALANCE_PRESETS, queryBalance } = require("../core/balance.cjs");
+const { BALANCE_PRESETS, canQueryBalance, queryBalance } = require("../core/balance.cjs");
 const { PROVIDER_PRESETS } = require("../core/presets.cjs");
 const { HarnessManager } = require("../core/harnesses.cjs");
 const { ClaudeDesktopGateway } = require("../core/claude-desktop-gateway.cjs");
@@ -804,6 +804,7 @@ const balanceAttempts = new Map(),
 async function balance(id, automatic = false) {
   const p = store.state.providers.find((p) => p.id === id);
   if (!p) throw new Error("供应商不存在");
+  if (!canQueryBalance(p)) throw new Error('OpenAI API Key 不提供自动余额查询接口；请查看 OpenAI API 用量或账单');
   const key = JSON.stringify([
     p.id,
     p.baseUrl,
@@ -1094,10 +1095,12 @@ else {
       harnesses.options.nativeConfig = nativeConfig;
       claudeDesktop = new ClaudeDesktopGateway(dataDir, testMode
         ? { directory: path.join(dataDir, "claude-desktop"), policyReader: () => ({}) } : {});
-      proxyConfig = new ProxyConfig(dataDir, safeStorage, harnesses, store, config, claudeDesktop);
+      const codexOfficialAuth = new (require('../core/codex-official-auth.cjs').CodexOfficialAuth)(codexDir);
+      proxyConfig = new ProxyConfig(dataDir, safeStorage, harnesses, store, config, claudeDesktop, {
+        hasCodexLogin: () => codexOfficialAuth.hasChatGptLogin(),
+      });
       if (proxyConfig.recoveryError) runtimeHealth.record('codex-recovery', Error(proxyConfig.recoveryError));
       harnesses.options.proxyConfig = proxyConfig;
-      const codexOfficialAuth = new (require('../core/codex-official-auth.cjs').CodexOfficialAuth)(codexDir);
       router = new Router({
         getState: (id) => proxyConfig.routingState(id),
         fetchUpstream: upstream,
@@ -1105,7 +1108,7 @@ else {
         allowClient: (id) => connections.allow(id),
         onActivity: push,
         getOfficialAuth: options => codexOfficialAuth.headers(options),
-        getNativeCredential: () => codexOfficialAuth.currentAccessToken(),
+        getNativeCredential: () => codexOfficialAuth.currentCredential(),
         compactionCrypto: safeStorage,
       });
       codexWorkspaceRelay = new CodexWorkspaceRelay({ dataDir, crypto: safeStorage, router });
@@ -1275,9 +1278,9 @@ else {
         return connections.preview(scope, enabled, quit, accountless);
       });
       register("connection-repair-preview", (scope) => connections.repairPreview(scope));
-      register("codex-prediction-repair", async () => {
+      register("codex-session-repair", async () => {
         await nativeLogin.assertIdle('codex');
-        return connections.repairPrediction();
+        return connections.repairCodexSessions();
       });
       register("connections-refresh", () => connections.refreshAll({ assertIdle: id => nativeLogin.assertIdle(id) }));
       register("connection-repair", async (input) => {
@@ -1797,9 +1800,12 @@ else {
       });
       register("balance", balance);
       register("autostart", (enabled) => {
+        // Launch through a concrete version so changing release/current later
+        // cannot silently start an older package during the next login.
+        const autostartPath = app.isPackaged ? fs.realpathSync.native(process.execPath) : process.execPath;
         app.setLoginItemSettings({
           openAtLogin: !!enabled,
-          path: process.execPath,
+          path: autostartPath,
           args: app.isPackaged ? ["--hidden"] : [app.getAppPath(), "--hidden"],
         });
         store.state.autoStart = !!enabled;

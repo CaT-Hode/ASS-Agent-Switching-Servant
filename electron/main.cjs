@@ -1214,7 +1214,7 @@ else {
         try { await codexWorkspaceLaunchOptions(); }
         catch (error) { startupError = [startupError,'Codex 官方服务中转未恢复：'+error.message].filter(Boolean).join('；'); }
       }
-      wslSync.start();
+      if (!testMode) wslSync.start();
       requestWidget = new RequestWidget({ electron: require('electron'), preferences,
         model: await import('../core/request-widget-view.mjs'),
         read: () => ({ active: router.monitorSnapshot(), history: requestHistory.snapshot(), usage: usageHistory.public() }),

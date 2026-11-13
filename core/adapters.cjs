@@ -243,11 +243,13 @@ class ResponseEvents {
   event(type, data = {}) {
     return { type, sequence_number: this.seq++, ...data };
   }
-  usage(input, output, details) {
+  usage(input, output, details, cached) {
     for (const [key, value] of Object.entries({ input_tokens: input, output_tokens: output }))
       if (Number.isFinite(value) && value >= 0) (this.response.usage ||= {})[key] = value;
     if (Number.isFinite(details?.reasoning_tokens) && details.reasoning_tokens >= 0)
       (this.response.usage ||= {}).output_tokens_details = { reasoning_tokens: details.reasoning_tokens };
+    if (Number.isSafeInteger(cached) && cached >= 0)
+      (this.response.usage ||= {}).input_tokens_details = { cached_tokens: cached };
   }
   start() {
     return [
@@ -411,7 +413,8 @@ async function* translateStream(stream, protocol, model) {
         break;
       }
       if (data.usage) {
-        out.usage(data.usage.prompt_tokens, data.usage.completion_tokens, data.usage.completion_tokens_details);
+        out.usage(data.usage.prompt_tokens, data.usage.completion_tokens, data.usage.completion_tokens_details,
+          data.usage.prompt_tokens_details?.cached_tokens ?? data.usage.prompt_cache_hit_tokens);
       }
       const c = data.choices?.[0],
         d = c?.delta;

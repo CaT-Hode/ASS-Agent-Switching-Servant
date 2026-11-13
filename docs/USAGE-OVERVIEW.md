@@ -18,7 +18,7 @@
 | 客户端 | 只读来源 | 计数处理 |
 | --- | --- | --- |
 | Codex | sessions / archived_sessions 下的 JSONL | 按累计差值计量；同一累计值不重复入账；第一条以 last_token_usage 避免把继承的累计量再次计入；时间早于会话创建的分叉种子不计 |
-| Claude Code | projects 下的 JSONL | assistant message ID 去重，流式修订替换同一条记录；输入包含缓存读取与创建 |
+| Claude Code | projects 下的 JSONL，以及已知项目内归档的原生 `transcript.jsonl` | assistant message ID 去重，流式修订替换同一条记录；输入包含缓存读取与创建 |
 | OpenCode | opencode.db 的 message / session 表 | SQLite readOnly，仅读 assistant 用量元数据；过滤早于会话创建的分叉复制消息；输出补回独立 reasoning 字段 |
 | pi | agent/sessions 下的 JSONL | assistant message 按 ID 去重，输入加缓存读取 / 写入，跳过分叉种子 |
 | DSH | storages/cost-meter/ledger.json | 使用已有插件日账本的模型分组；不叠加日合计 / 会话合计；没有此账本时不伪造历史数据 |

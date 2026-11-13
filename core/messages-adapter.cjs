@@ -126,7 +126,15 @@ async function* translatedMessages(stream, protocol, model) {
         yield* finishItem(item);
       }
       for (const block of blocks.values()) if (!block.closed) { block.closed = true; yield { type: "content_block_stop", index: block.index }; }
-      Object.assign(usage, { input_tokens: event.response?.usage?.input_tokens || 0, output_tokens: event.response?.usage?.output_tokens || 0 });
+      const reported = event.response?.usage;
+      usage.input_tokens = reported?.input_tokens || 0;
+      usage.output_tokens = reported?.output_tokens || 0;
+      // Responses includes cache hits in input; Messages reports them separately.
+      const cached = reported?.input_tokens_details?.cached_tokens;
+      if (Number.isSafeInteger(cached) && cached >= 0 && cached <= usage.input_tokens) {
+        usage.input_tokens -= cached;
+        usage.cache_read_input_tokens = cached;
+      }
       yield { type: "message_delta", delta: { stop_reason: event.type === "response.incomplete" ? "max_tokens" : tool ? "tool_use" : "end_turn", stop_sequence: null }, usage };
       yield { type: "message_stop" }; ended = true; break;
     }

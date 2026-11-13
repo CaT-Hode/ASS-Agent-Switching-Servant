@@ -75,8 +75,14 @@ async function projectRoots(projects, home, previous = {}) {
       catch (error) { if (error.code !== 'ENOENT') partial = true; return []; }
     }));
     for (let index = 0; index < batch.length; index++) for (const entry of lists[index]) {
+      const dir = batch[index];
+      // Project runners can move a native Claude JSONL out of its live profile
+      // when they archive a run. It keeps the original assistant message IDs.
+      if (entry.isFile() && entry.name === 'transcript.jsonl') {
+        roots.push({ client: 'claude', dir, transcript: true }); continue;
+      }
       if (!entry.isDirectory() || entry.isSymbolicLink() || SKIP.has(entry.name.toLowerCase())) continue;
-      const dir = batch[index], child = path.join(dir, entry.name);
+      const child = path.join(dir, entry.name);
       if (['projects', 'sessions', 'archived_sessions'].includes(entry.name)) {
         const client = sessionClient(child);
         if (client) { roots.push({ client, dir }); continue; }
@@ -130,7 +136,7 @@ async function discover(options, previous = {}, run = execute) {
   }
   const unique = new Map();
   for (const root of roots) if (CLIENTS.includes(root.client) && typeof root.dir === 'string' && path.isAbsolute(root.dir))
-    unique.set(root.client + '\0' + pathKey(root.dir) + '\0' + !!root.sessionDir, root);
+    unique.set(root.client + '\0' + pathKey(root.dir) + '\0' + !!root.sessionDir + '\0' + !!root.transcript, root);
   const saved = { roots: [...unique.values()], projects: [...new Map(projects.filter(p => typeof p === 'string' && path.isAbsolute(p)).map(p => [pathKey(p), p])).values()], scannedAt, projectPartial, projectScan };
   const active = saved.roots.filter(r => {
     const distro = distroOf(r.dir);

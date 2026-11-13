@@ -266,9 +266,22 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     const claudeInjection=JSON.parse(fs.readFileSync(path.join(data,'clients.json'),'utf8')).injections.claude;
     assert.equal(claudeInjection.defaultModel,mainRef);assert.equal(claudeInjection.autoModeModel,reviewRef);
     assert.equal(await page.getByRole('button',{name:'启动默认模型终端',exact:true}).isDisabled(),true,'unsynced routes cannot launch');
+    const wslClient = (await page.evaluate(() => window.ass.call('snapshot'))).wslSync.clients.claude;
+    const wslToggle = page.getByRole('switch', { name: 'Protocol fixture WSL 同步', exact: true });
+    if (wslClient.binary) {
+      const supplier = page.getByRole('region', { name: 'Protocol fixture 接入供应商' });
+      assert.equal(await wslToggle.isChecked(), true);
+      assert.match(await wslToggle.locator('..').getAttribute('title'), /只撤回 WSL/);
+      await wslToggle.click();
+      await page.waitForFunction(() => document.querySelector('.wsl-provider-toggle button')?.getAttribute('aria-checked') === 'false');
+      assert.equal(await supplier.locator('details').getAttribute('open'), null);
+      assert.equal(await supplier.getByRole('switch', { name: 'Protocol fixture 供应商接入' }).isChecked(), true);
+      await wslToggle.click();
+      await page.waitForFunction(() => document.querySelector('.wsl-provider-toggle button')?.getAttribute('aria-checked') === 'true');
+    } else assert.equal(await wslToggle.count(), 0);
     await page.locator('.client-settings > summary').click();
-    assert.equal(await page.getByRole('switch',{name:'Claude Code WSL 自动同步',exact:true}).isChecked(),false);
-    assert.equal(await page.locator('.wsl-sync').getByRole('button',{name:'立即同步',exact:true}).isDisabled(),true);
+    assert.equal(await page.getByRole('switch',{name:'Claude Code WSL 自动同步',exact:true}).isChecked(),!!wslClient.binary);
+    await page.waitForFunction(disabled => document.querySelector('.wsl-sync-actions button:last-child')?.disabled === disabled, !wslClient.binary);
     await page.locator('.client-settings > summary').click();
     const shot=path.join(process.env.LOCALAPPDATA || root,'ASS-validation','claude-model-defaults.png');
     fs.mkdirSync(path.dirname(shot),{recursive:true});await page.screenshot({path:shot});
@@ -285,6 +298,7 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
         codexDesktopDetected,
         injectionProtocolUI:true,
         claudeModelDefaultsUI:true,
+        wslProviderSwitchUI: !!wslClient.binary,
         requestWidget:true,
       }),
     );
@@ -293,6 +307,6 @@ Object.assign(isolatedEnv, { ASS_DATA_DIR: data, CODEX_HOME: codex, USERPROFILE:
     await app.close().catch(() => {});
   }
 })().catch((e) => {
-  console.error(e.message);
+  console.error(e.stack || e.message);
   process.exitCode = 1;
 });

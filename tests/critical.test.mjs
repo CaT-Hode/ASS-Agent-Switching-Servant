@@ -16,14 +16,15 @@ const { claudeModelSettings } = require('../core/accountless.cjs');
 const { adapter: accountInfoAdapter, apiProfile } = require('../core/account-info.cjs');
 const { canQueryBalance, queryBalance } = require('../core/balance.cjs');
 const { messagesTransport } = require('../core/provider-transport.cjs');
-const { messagesRequest } = require('../core/messages-adapter.cjs');
+const { messagesRequest, messagesEvents, messagesJSON } = require('../core/messages-adapter.cjs');
+const { parser: usageParser, scan: scanUsage } = require('../core/usage-readers.cjs');
 const { SseParser } = require('../core/sse-parser.cjs');
 const { CodexCompaction } = require('../core/codex-compaction.cjs');
 const { Router } = require('../core/router.cjs');
 const { classifyFailure } = require('../core/diagnostic-failure.cjs');
 const { RequestMetrics } = require('../core/request-metrics.cjs');
 const { RequestHistory } = require('../core/request-history.cjs');
-const { projection, planFiles } = require('../core/wsl-sync.cjs');
+const { WslSync, projection, planFiles } = require('../core/wsl-sync.cjs');
 const { parseAnswer } = require('../core/scoped-dns.cjs');
 const localRelease = require('../scripts/local-release.cjs');
 const { Preferences } = require('../core/preferences.cjs');
@@ -428,6 +429,44 @@ test('request history archives evicted calls once and reloads the accumulated to
   assert.equal(restored.snapshot().archive[0].stats.calls, 5);
 });
 
+test('Claude session usage retains reported cache hits through both OpenAI adapters', async () => {
+  const frames = events => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n').body;
+  const time = new Date().toISOString();
+  for (const [protocol, events] of [
+    ['openai-responses', [{ type: 'response.completed', response: { status: 'completed', output: [], usage: {
+      input_tokens: 100, input_tokens_details: { cached_tokens: 80 }, output_tokens: 7,
+    } } }]],
+    ['openai-chat', [{ choices: [{ index: 0, finish_reason: 'stop' }] }, { choices: [], usage: {
+      prompt_tokens: 100, prompt_cache_hit_tokens: 80, completion_tokens: 7,
+    } }]],
+  ]) {
+    const message = await messagesJSON(messagesEvents(frames(events), protocol, 'fixture'));
+    assert.deepEqual(message.usage, { input_tokens: 20, output_tokens: 7, cache_read_input_tokens: 80 });
+    const transcript = usageParser('claude', 'fixture');
+    transcript.accept({ type: 'assistant', timestamp: time, message });
+    const [row] = transcript.rows.values();
+    assert.deepEqual([row.input, row.output, row.cacheRead], [100, 7, 80]);
+  }
+});
+
+test('project-archived Claude transcripts are counted once alongside live profiles', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-usage-project-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const project = path.join(home, 'workspace'), live = path.join(home, '.claude', 'projects'), archived = path.join(project, 'missions', 'completed');
+  fs.mkdirSync(live, { recursive: true }); fs.mkdirSync(archived, { recursive: true });
+  const message = (id, input) => JSON.stringify({ type: 'assistant', sessionId: 'fixture-session', timestamp: new Date().toISOString(),
+    message: { id, model: 'fixture-model', usage: { input_tokens: input, output_tokens: 4 } } });
+  const shared = message('msg-shared', 10);
+  fs.writeFileSync(path.join(live, 'session.jsonl'), shared + '\n');
+  fs.writeFileSync(path.join(archived, 'transcript.jsonl'), [shared, message('msg-archive-only', 25)].join('\n') + '\n');
+  fs.writeFileSync(path.join(archived, 'other.jsonl'), message('msg-unrecognized-location', 500) + '\n');
+  const { snapshot } = await scanUsage({ home, dataDir: home, env: {}, codexDir: path.join(home, '.codex'), projects: [project] });
+  const rows = snapshot.rows.filter(row => row.client === 'claude');
+  assert.equal(rows.reduce((n, row) => n + row.calls, 0), 2);
+  assert.equal(rows.reduce((n, row) => n + row.input, 0), 35);
+  assert.equal(rows.reduce((n, row) => n + row.output, 0), 8);
+});
+
 test('WSL sync projects Codex routes and retains unrelated native settings', () => {
   const model = 'ASS_fixture::gpt-6.1-sol';
   const rows = projection('codex', { model, effort: 'high', contextWindow: 1000000,
@@ -448,6 +487,41 @@ test('WSL sync projects Codex routes and retains unrelated native settings', () 
   const result = JSON.parse(planned.files[0].after);
   assert.equal(result.model, 'ASS_fixture::model');
   assert.deepEqual(result.permissions.deny, ['Bash(rm *)']);
+});
+
+test('a pi WSL provider exclusion withdraws its credential and restores the Linux default', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-wsl-pi-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const dir = '/home/test/.pi/agent';
+  const info = { binaries: { pi: '/usr/local/bin/pi' }, dirs: { pi: dir } };
+  const makeId = id => providerId({ id }, 'openai-responses');
+  const first = makeId('first'), second = makeId('second');
+  const sources = { pi: { files: [
+    { name: 'models.json', fields: [first, second].map(id => ({ keys: ['providers', id], value: { baseUrl: 'https://fixture.invalid/v1' } })) },
+    { name: 'auth.json', fields: [first, second].map(id => ({ keys: [id], value: { type: 'api_key', key: 'fixture' } })) },
+    { name: 'settings.json', fields: [{ keys: ['defaultProvider'], value: first }, { keys: ['defaultModel'], value: 'fixture' }] },
+  ] } };
+  const contents = { [dir + '/settings.json']: '{"defaultProvider":"local","defaultModel":"local-model","theme":"dark"}' };
+  const run = async (_, input) => {
+    if (input.action === 'inspect') return info;
+    if (input.action === 'read') return Object.fromEntries(input.files.map(file => [file, contents[file] ?? null]));
+    for (const row of input.files) contents[row.file] = row.after;
+  };
+  const sync = new WslSync({ dataDir, crypto: testCrypto(), sources: () => sources, run });
+  sync.state.distro = 'Test';
+  await sync.sync(['pi']);
+  assert.equal(sync.public().clients.pi.enabled, true);
+  const settings = () => JSON.parse(contents[dir + '/settings.json']);
+  assert.equal(settings().defaultProvider, first);
+  await sync.configure('pi', { providerId: 'first', enabled: false });
+  assert.equal(sync.public().clients.pi.error, '');
+  assert.deepEqual(Object.keys(JSON.parse(contents[dir + '/models.json']).providers), [second]);
+  assert.deepEqual(Object.keys(JSON.parse(contents[dir + '/auth.json'])), [second]);
+  assert.deepEqual(settings(), { defaultProvider: 'local', defaultModel: 'local-model', theme: 'dark' });
+  assert.equal(sources.pi.files[2].fields[0].value, first);
+  await sync.configure('pi', { enabled: false });
+  assert.equal(contents[dir + '/auth.json'], null);
+  assert.equal(new WslSync({ dataDir, crypto: testCrypto() }).public().clients.pi.enabled, false);
 });
 
 test('scoped DNS follows the requested CNAME chain and accepts only public IPv4 answers', () => {

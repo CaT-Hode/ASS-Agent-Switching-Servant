@@ -360,8 +360,11 @@ async function scan(options, previousCache = {}, previousLocations = {}) {
     if (client === 'pi' && options.env?.PI_CODING_AGENT_SESSION_DIR)
       filesUnder(path.resolve(options.env.PI_CODING_AGENT_SESSION_DIR.replace(/^~(?=[/\\]|$)/, options.home)), files, 0, source);
     let roots;
-    try { roots = [...new Set([...rootsFor(client, options), ...discovery.roots.filter(r => r.client === client && !r.sessionDir).map(r => r.dir)])]; } catch { roots = []; source.partial = true; }
-    for (const root of discovery.roots.filter(r => r.client === client && r.sessionDir)) filesUnder(root.dir, files, 0, source);
+    try { roots = [...new Set([...rootsFor(client, options), ...discovery.roots.filter(r => r.client === client && !r.sessionDir && !r.transcript).map(r => r.dir)])]; } catch { roots = []; source.partial = true; }
+    for (const root of discovery.roots.filter(r => r.client === client)) {
+      if (root.transcript) files.push(path.join(root.dir, 'transcript.jsonl'));
+      else if (root.sessionDir) filesUnder(root.dir, files, 0, source);
+    }
     for (const dir of roots) {
       try { safePath(dir); } catch { source.partial = true; continue; }
       if (client === "opencode") files.push(path.join(dir, "opencode.db"));

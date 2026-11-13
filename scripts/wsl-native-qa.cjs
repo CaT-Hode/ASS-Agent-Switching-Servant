@@ -3,17 +3,18 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const assert = require('node:assert/strict'), { execFile } = require('node:child_process');
 const { Router } = require('../core/router.cjs');
 const { WslSync } = require('../core/wsl-sync.cjs');
-const { makeCatalog } = require('../core/models.cjs');
+const { codexModelId, makeCatalog } = require('../core/models.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-wsl-qa-'));
 const crypt = { isEncryptionAvailable: () => true, encryptString: s => Buffer.from(s), decryptString: b => b.toString() };
 const token = '8'.repeat(64), calls = [];
 let isolatedBridge, isolatedHome, passed = false;
 const provider = { id: 'fixture', name: 'WSL fixture', enabled: true, apiKey: 'synthetic-provider', baseUrl: 'https://fixture.invalid/v1',
-  models: [{ model: 'claude-sonnet-4-6', enabled: true, wireApi: 'anthropic', contextWindow: 1000000 }] };
-const catalogue = JSON.parse(fs.readFileSync(path.join(process.env.APPDATA, 'AI Switch Servant/catalog.json'), 'utf8'));
+  models: [{ model: 'claude-sonnet-4-6', enabled: true, wireApi: 'anthropic', contextWindow: 1000000, efforts: ['medium'] }] };
+const alternate = { ...provider, id: 'alternate', models: [{ ...provider.models[0], model: 'claude-haiku-4-5' }] };
+const defaultClaude = codexModelId(provider.id, provider.models[0].model);
 const sources = {
-  codex: { model: 'gpt-6-astra', plan: { gatewayAuth: true, localToken: token, catalog: makeCatalog(catalogue.models, [], {}) } },
-  claude: { token, plan: { accountless: true, localToken: token, providers: [provider], defaultModel: { model: 'fixture::claude-sonnet-4-6' } } },
+  codex: { model: 'gpt-6-astra', plan: { gatewayAuth: true, localToken: token, providers: [provider], catalog: makeCatalog([], [provider]) } },
+  claude: { token, plan: { accountless: true, localToken: token, providers: [provider, alternate], defaultModel: { model: defaultClaude }, autoModeModel: defaultClaude } },
 };
 function mock(url, init) {
   const body = JSON.parse(init.body); calls.push({ path: new URL(url).pathname, model: body.model });
@@ -35,7 +36,7 @@ function mock(url, init) {
     { type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response }]);
 }
 const sse = rows => new Response(rows.map(row => `event: ${row.type}\ndata: ${JSON.stringify(row)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
-const router = new Router({ getState: id => id === 'claude' ? { ...sources.claude.plan, providers: [provider] } : { ...sources.codex.plan, providers: [] },
+const router = new Router({ getState: id => id === 'claude' ? sources.claude.plan : sources.codex.plan,
   getOfficialAuth: async () => ({ authorization: 'Bearer synthetic-official' }), fetchUpstream: mock });
 function run(args) {
   return new Promise((resolve, reject) => {
@@ -61,9 +62,26 @@ function run(args) {
   const authFile = info.dirs.codex + '/auth.json';
   await agent('Ubuntu', { action: 'write', files: [{ file: authFile,
     beforeHash: require('../core/native-fields.cjs').hash(null), after: originalAuth }] });
-  await sync.configure('codex', { enabled: true });
-  await sync.configure('claude', { enabled: true });
+  await sync.detect(true);
+  assert.equal(sync.public().clients.codex.enabled, true);
+  assert.equal(sync.public().clients.claude.enabled, true);
+  await sync.sync(['codex', 'claude']);
   assert.equal(sync.public().clients.codex.error, '');assert.equal(sync.public().clients.claude.error, '');
+  const catalogFile = info.dirs.codex + '/ass-models.json';
+  const read = async file => JSON.parse((await agent('Ubuntu', { action: 'read', files: [file] }))[file]);
+  assert.ok((await read(catalogFile)).models.some(m => m.slug === defaultClaude));
+  await sync.configure('codex', { providerId: provider.id, enabled: false });
+  assert.equal((await read(catalogFile)).models.some(m => m.slug === defaultClaude), false);
+  assert.deepEqual(new WslSync({ dataDir: root, crypto: crypt }).public().clients.codex.excludedProviders, [provider.id]);
+  await sync.configure('codex', { providerId: provider.id, enabled: true });
+  assert.ok((await read(catalogFile)).models.some(m => m.slug === defaultClaude));
+  await sync.configure('claude', { providerId: provider.id, enabled: false });
+  const claudeSettings = await read(info.dirs.claude + '/settings.json');
+  const alternateModel = codexModelId(alternate.id, alternate.models[0].model) + '[1m]';
+  assert.deepEqual(claudeSettings.availableModels, [alternateModel]);
+  assert.equal(claudeSettings.model, alternateModel);
+  assert.equal(claudeSettings.env.CLAUDE_CODE_AUTO_MODE_MODEL, alternateModel);
+  assert.equal(sources.claude.plan.defaultModel.model, defaultClaude);
   const env = ['env', 'PATH=' + path.posix.dirname(info.binaries.codex) + ':/usr/bin:/bin'];
   const codex = await run([...env, 'CODEX_HOME=' + info.dirs.codex, info.binaries.codex,
     'exec', '--skip-git-repo-check', '--sandbox', 'read-only', '--json', 'Reply WSL_NATIVE_OK.']);
@@ -73,7 +91,7 @@ function run(args) {
   const claude = await run([...env, 'CLAUDE_CONFIG_DIR=' + info.dirs.claude, info.binaries.claude,
     '--print', 'Reply WSL_NATIVE_OK.', '--output-format', 'json']);
   assert.match(claude, /WSL_NATIVE_OK/);
-  assert.ok(calls.some(c => c.model === 'gpt-6-astra')); assert.ok(calls.some(c => c.model === 'claude-sonnet-4-6'));
+  assert.ok(calls.some(c => c.model === 'gpt-6-astra')); assert.ok(calls.some(c => c.model === 'claude-haiku-4-5'));
   await sync.configure('codex', { enabled: false });await sync.configure('claude', { enabled: false });
   assert.equal((await agent('Ubuntu', { action: 'read', files: [authFile] }))[authFile], originalAuth);
   passed = true;

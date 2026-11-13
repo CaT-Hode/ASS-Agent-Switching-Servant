@@ -58,11 +58,11 @@ Codex 与 Claude Code 的接入模型使用 `ASS_<供应商标识>::模型`；Op
 
 ### WSL 自动同步
 
-Windows 完成模型接入后，在 Codex、Claude Code 或 pi 的“客户端设置”中打开“WSL 自动同步”。默认使用 Ubuntu，也可点击“检测 WSL”后选择其他发行版；发行版需安装 Python 3 和对应的 Linux CLI。
+ASS 检测到正在运行的 WSL 发行版里安装了 Codex、Claude Code 或 pi 后，会默认同步该客户端在 Windows 已应用的接入。供应商名称右侧的 **WSL** 开关可单独排除该供应商，且不会改变 Windows 接入。也可在“客户端设置”中关闭整个客户端的 WSL 自动同步，或点击“检测 WSL”选择发行版。发行版需安装 Python 3 和对应的 Linux CLI。
 
 Windows 已应用的模型与路由变动会自动同步，亦可点击“立即同步”。Codex 的模型目录使用 Linux 路径，Claude Code 继承默认模型、审查模型和 `[1m]` 设置，pi 继承 API 模型配置。WSL 的 NAT 模式通过本地转接访问 Windows ASS，pi 的 Windows 本机 HTTP 地址也会转换，无需重启 WSL。
 
-各端会话独立保留，Linux 的权限、MCP、Hook 等其他设置沿用。Codex 使用本地网关凭据，原 WSL 登录字段加密备份；关闭开关会恢复同步前的受管字段。配置由新开的 CLI 会话加载，现有任务继续运行。
+各端会话独立保留，Linux 的权限、MCP、Hook 等其他设置沿用。Codex 使用本地网关凭据，原 WSL 登录字段加密备份；关闭总开关会恢复同步前的受管字段。配置由新开的 CLI 会话加载，现有任务继续运行。
 
 ## 用量与请求监控
 

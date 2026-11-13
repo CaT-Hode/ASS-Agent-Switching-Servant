@@ -825,6 +825,8 @@
 .wsl-sync-actions select { width: 100%; }
 .wsl-sync p { margin: 12px 0 5px; font-size: 12px; }
 .wsl-sync code { display: block; overflow-wrap: anywhere; font-size: 11px; }
+.wsl-provider-toggle { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--muted); font-size: 11px; }
+.wsl-sync .provider-injection-switch, .wsl-provider-toggle .provider-injection-switch { position: relative; inset: auto; flex: none; }
 @media (max-width: 620px) { .client-default-model { grid-template-columns: 1fr; gap: 7px; } }
 .client-injection h3 { display: flex; align-items: baseline; gap: 13px; margin: 0; font-size: 16px; }
 .injection-count { font-size: 13px; font-weight: 400; color: light-dark(#7e7e7e, #b4b4b4); font-variant-numeric: tabular-nums; }

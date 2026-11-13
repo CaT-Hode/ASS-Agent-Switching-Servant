@@ -6,6 +6,7 @@ const { atomic } = require('./config.cjs');
 const { document, edit, hash } = require('./native-fields.cjs');
 const { claudeModelSettings, claudeModelEnv } = require('./accountless.cjs');
 const { compactTokenLimit } = require('./context-budget.cjs');
+const { codexModelId } = require('./models.cjs');
 const CLIENTS = ['codex', 'claude', 'pi'];
 const present = value => ({ exists: true, value });
 const fieldAt = (data, keys) => {
@@ -92,6 +93,42 @@ function projection(id, source, info, base) {
   }
   return source.files.map(row => ({ file: file(row.name), format: 'json', fields: row.fields }));
 }
+function filterProviders(id, source, excluded = []) {
+  if (!source || !excluded.length) return source;
+  if (id === 'pi') {
+    const { providerId } = require('./native-config.cjs');
+    const removed = new Set(excluded.flatMap(id => ['openai-responses', 'openai-chat', 'anthropic']
+      .map(protocol => providerId({ id }, protocol))));
+    const settings = source.files.find(row => row.name === 'settings.json');
+    const defaultRemoved = removed.has(settings?.fields.find(f => f.keys[0] === 'defaultProvider')?.value);
+    const files = source.files.map(row => ({ ...row, fields: row.fields.filter(({ keys: [key, sub] }) => {
+      if (row.name === 'models.json') return !removed.has(sub);
+      if (row.name === 'auth.json') return !removed.has(key);
+      if (key === 'modelThinkingLevels') return !removed.has(sub?.split('/')[0]);
+      return !defaultRemoved || !['defaultProvider', 'defaultModel', 'defaultThinkingLevel'].includes(key);
+    }) })).filter(row => row.fields.length);
+    return files.some(row => row.name === 'models.json') ? { files } : null;
+  }
+  const removed = new Set(excluded), applied = source.plan.providers || [];
+  const providers = applied.filter(p => !removed.has(p.id));
+  if (providers.length === applied.length) return source;
+  const allowed = new Set(providers.flatMap(p => p.models.filter(m => m.enabled !== false).map(m => codexModelId(p.id, m.model))));
+  const plan = { ...source.plan, providers };
+  if (id === 'claude') {
+    if (!allowed.size) return null;
+    if (!allowed.has(plan.defaultModel?.model)) plan.defaultModel = { model: allowed.values().next().value };
+    if (!allowed.has(plan.autoModeModel)) delete plan.autoModeModel;
+    return { ...source, plan };
+  }
+  const models = plan.catalog.models.filter(m => !m.slug.includes('::') || allowed.has(m.slug));
+  if (!models.length) return null;
+  plan.catalog = { ...plan.catalog, models };
+  if (models.some(m => m.slug === source.model)) return { ...source, plan };
+  const next = models.find(m => m.slug === plan.defaultModel?.model) ||
+    models.find(m => m.visibility !== 'hide') || models[0];
+  return { ...source, plan, model: next.slug, effort: next.default_reasoning_level,
+    contextWindow: next.context_window || next.max_context_window };
+}
 function windowsSources({ proxyConfig, nativeConfig, config, connections, router }) {
   return Object.fromEntries(CLIENTS.map(id => {
     if (!connections.enabled[id]) return [id, null];
@@ -118,8 +155,8 @@ class WslSync {
     this.file = path.join(dataDir, 'wsl-sync.enc.json');
     this.helper = fs.readFileSync(path.join(__dirname, 'wsl-agent.py'), 'utf8');
     this.run = run || this.execute.bind(this);
-    this.state = { version: 1, distro: 'Ubuntu', enabled: {}, records: {} };
-    this.status = {}; this.distros = []; this.busy = false; this.lastFingerprint = '';
+    this.state = { version: 1, distro: '', enabled: {}, records: {} };
+    this.status = {}; this.distros = []; this.busy = false; this.lastFingerprint = ''; this.nextCheck = 0;
     try {
       if (fs.existsSync(this.file)) this.state = JSON.parse(crypto.decryptString(Buffer.from(JSON.parse(fs.readFileSync(this.file)).data, 'base64')));
       if (this.state.version !== 1 || !this.state.enabled || !this.state.records) throw Error('WSL 同步记录格式无效');
@@ -141,16 +178,28 @@ class WslSync {
       child.stdin.on('error', () => {}); child.stdin.end(JSON.stringify(input));
     });
   }
-  async detect() {
-    const stdout = await new Promise((resolve, reject) => execFile('wsl.exe', ['--list', '--quiet'],
-      { windowsHide: true, encoding: 'buffer', timeout: 5000 }, (error, data) => error ? reject(Error('未检测到 WSL')) : resolve(data)));
-    this.distros = stdout.toString('utf16le').replaceAll('\0', '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (this.distros.includes(this.state.distro)) this.info = await this.run(this.state.distro, { action: 'inspect' });
-    this.onChange(); return this.public();
+  async detect(runningOnly = false) {
+    const args = ['--list', ...(runningOnly ? ['--running'] : []), '--quiet'];
+    const stdout = await new Promise((resolve, reject) => execFile('wsl.exe', args,
+      { windowsHide: true, encoding: 'buffer', timeout: 5000 }, (error, data) => {
+        if (!error || runningOnly) resolve(error ? Buffer.alloc(0) : data);
+        else reject(Error('未检测到 WSL'));
+      }));
+    const distros = stdout.toString('utf16le').replaceAll('\0', '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const previous = this.public();
+    this.distros = runningOnly ? [...new Set([...this.distros, ...distros])] : distros;
+    const distro = this.state.distro ||= distros[0] || '';
+    const info = distros.includes(distro) ? await this.run(distro, { action: 'inspect' }) : undefined;
+    if (distro === this.state.distro) this.info = info;
+    const state = this.public();
+    if (!equal(previous, state)) this.onChange();
+    return state;
   }
+  enabled(id) { return this.state.enabled[id] ?? !!this.info?.binaries[id]; }
   public() {
     return { distro: this.state.distro, distros: this.distros, busy: this.busy, error: this.error || '',
-      clients: Object.fromEntries(CLIENTS.map(id => [id, { enabled: !!this.state.enabled[id],
+      clients: Object.fromEntries(CLIENTS.map(id => [id, { enabled: this.enabled(id),
+        excludedProviders: this.state.excludedProviders?.[id] || [],
         configured: !!this.state.records[id]?.length, binary: this.info?.binaries[id] || '', ...this.status[id] }])) };
   }
   async recover() {
@@ -189,49 +238,87 @@ class WslSync {
     }
     return result;
   }
-  async configure(id, { enabled, distro = this.state.distro } = {}) {
-    if (!CLIENTS.includes(id) || typeof enabled !== 'boolean' || !/^[\w .-]{1,100}$/.test(distro)) throw Error('WSL 同步设置无效');
+  async configure(id, { enabled, providerId, distro = this.state.distro || 'Ubuntu' } = {}) {
+    if (!CLIENTS.includes(id) || (enabled !== undefined && typeof enabled !== 'boolean') ||
+        (providerId !== undefined && (typeof providerId !== 'string' || !providerId || typeof enabled !== 'boolean')) ||
+        !/^[\w .-]{1,100}$/.test(distro)) throw Error('WSL 同步设置无效');
     if (this.busy) throw Error('WSL 正在同步');
     if (distro !== this.state.distro && Object.values(this.state.records).some(r => r?.length)) throw Error('请先撤回原发行版的同步');
-    this.state.distro = distro; this.state.enabled[id] = enabled; this.save();
-    await this.sync([id]); return this.public();
+    const changedDistro = distro !== this.state.distro;
+    this.state.distro = distro;
+    if (providerId !== undefined) {
+      const exclusions = this.state.excludedProviders ||= {};
+      const next = new Set(exclusions[id]);
+      if (enabled) next.delete(providerId); else next.add(providerId);
+      exclusions[id] = [...next];
+    } else if (enabled !== undefined) this.state.enabled[id] = enabled;
+    this.save();
+    if (changedDistro) {
+      this.info = undefined; this.status = {};
+      await this.detect();
+    }
+    await this.sync(changedDistro && enabled === undefined ? undefined : [id]);
+    return this.public();
   }
-  async sync(ids = CLIENTS.filter(id => this.state.enabled[id] || this.state.records[id]?.length)) {
+  async sync(ids = CLIENTS.filter(id => this.enabled(id) || this.state.records[id]?.length), info) {
     if (this.busy || !ids.length) return;
     this.busy = true; this.onChange();
     try {
       await this.recover();
-      this.info = await this.run(this.state.distro, { action: 'inspect' });
-      const sources = this.sources(), base = ids.some(id => this.state.enabled[id] && sources[id] && id !== 'pi') ? await this.bridge() : '';
+      this.info = info || await this.run(this.state.distro, { action: 'inspect' });
+      const sources = this.sources();
+      let base = '';
       for (const id of ids) {
         try {
-          let source = this.state.enabled[id] ? sources[id] : null;
+          const enabled = this.enabled(id);
+          if (enabled && !this.info.binaries[id]) throw Error('未检测到此客户端的 WSL 命令');
+          let source = enabled ? filterProviders(id, sources[id], this.state.excludedProviders?.[id]) : null;
           if (id === 'pi' && source) source = await this.piSource(source);
+          if (id !== 'pi' && source) base ||= await this.bridge();
           const desired = source ? projection(id, source, this.info, base) : [];
           const previous = this.state.records[id] || [];
           const names = [...new Set([...desired, ...previous].map(f => f.file))];
-          const contents = names.length ? await this.run(this.state.distro, { action: 'read', files: names }) : {};
-          const plan = planFiles(desired, previous, contents);
-          this.state.pending = { id, ...plan }; this.save();
-          if (plan.files.length) await this.run(this.state.distro, { action: 'write', files: plan.files });
-          this.state.records[id] = plan.records; delete this.state.pending; this.save();
-          this.status[id] = { status: source ? '已同步' : this.state.enabled[id] ? '等待 Windows 接入' : '已撤回',
-            lastSync: new Date().toISOString(), error: '', route: id === 'pi' ? '供应商直连' : base };
+          if (names.length) {
+            const contents = await this.run(this.state.distro, { action: 'read', files: names });
+            const plan = planFiles(desired, previous, contents);
+            if (plan.files.length) {
+              this.state.pending = { id, ...plan }; this.save();
+              await this.run(this.state.distro, { action: 'write', files: plan.files });
+            }
+            if (plan.files.length || !equal(previous, plan.records)) {
+              this.state.records[id] = plan.records; delete this.state.pending; this.save();
+            }
+          }
+          this.status[id] = { status: source ? '已同步' : !enabled ? '已撤回' : sources[id] ? '没有供应商同步到 WSL' : '等待 Windows 接入',
+            lastSync: new Date().toISOString(), error: '', route: source ? (id === 'pi' ? '供应商直连' : base) : '' };
         } catch (error) { this.status[id] = { ...this.status[id], error: error.message }; if (this.state.pending) break; }
       }
-      this.lastFingerprint = hash(JSON.stringify(this.sources()));
+      this.lastFingerprint = hash(JSON.stringify(sources));
     } catch (error) { for (const id of ids) this.status[id] = { ...this.status[id], error: error.message }; }
     finally { this.nextCheck = Date.now() + 30000; this.busy = false; this.onChange(); }
   }
   start() {
     if (this.error) return;
-    this.timer = setInterval(() => {
-      if (Object.values(this.state.enabled).some(Boolean) && !this.busy) {
-        try { if (Date.now() >= this.nextCheck || hash(JSON.stringify(this.sources())) !== this.lastFingerprint) void this.sync(); }
-        catch (error) { for (const id of CLIENTS) this.status[id] = { ...this.status[id], error: error.message }; this.onChange(); }
+    let checking = false;
+    const check = async () => {
+      if (this.busy || checking) return;
+      checking = true;
+      try {
+        const due = Date.now() >= this.nextCheck;
+        if (due) {
+          this.nextCheck = Date.now() + 30000;
+          await this.detect(true);
+        }
+        if (this.info && (due || hash(JSON.stringify(this.sources())) !== this.lastFingerprint)) await this.sync(undefined, this.info);
+      } catch (error) {
+        for (const id of CLIENTS) this.status[id] = { ...this.status[id], error: error.message };
+        this.onChange();
+      } finally {
+        checking = false;
       }
-    }, 5000); this.timer.unref();
-    if (Object.values(this.state.enabled).some(Boolean)) void this.sync();
+    };
+    this.timer = setInterval(check, 5000); this.timer.unref();
+    void check();
   }
   stop() { clearInterval(this.timer); }
 }

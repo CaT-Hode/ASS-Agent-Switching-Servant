@@ -8,6 +8,8 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
   const injection = client.injection || { models: [], excludedProviders: [] };
   const groups = Map.groupBy(injection.models, (m) => m.providerId);
   const connection = state.connections.clients[client.id];
+  const wsl = state.wslSync?.clients[client.id];
+  const wslExcluded = new Set(wsl?.excludedProviders);
   const accountlessHint = !connection?.accountless ? ""
     : !connection.applied ? connection.syncError ? "无账号配置异常 · 请修复接入" : "无账号配置待同步"
     : "";
@@ -99,16 +101,31 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
     {!client.injectionUnsupported && groups.size > 0 && <p className="codex-tool-mode-hint">
       {client.id === 'claude' ? '已检测支持 Messages 的模型固定使用原生 Messages；其他模型可选择兼容协议。' : '可为每个模型选择接口协议，仅影响此客户端；自动模式按检测结果选择。'}更改后同步接入生效。
     </p>}
+    {wsl?.binary && wsl.error && <p className="error-box" role="status">WSL 同步失败：{wsl.error}</p>}
     {client.injectionUnsupported ? <p className="client-support-note">{client.injectionUnsupported}</p> :
       groups.size ? <div className="client-provider-list">{[...groups].map(([id, models]) => {
         const provider = state.providers.find((p) => p.id === id);
         const brand = providerBrand(provider || {}, state.officialProviderIds?.[id]);
         const compatible = models.filter((m) => !m.issue);
         const checked = !excluded.has(id) && compatible.length > 0;
+        const wslChecked = !wslExcluded.has(id);
+        const wslHint = !wsl?.enabled ? '请先在客户端设置中打开 WSL 自动同步。' :
+          '开启后，此供应商在 Windows 已接入的模型会同步到 WSL；关闭只撤回 WSL 中的接入。新开的 WSL 会话会读取配置。';
         return <section className="client-provider" key={id} aria-label={models[0].providerName + " 接入供应商"}>
           <details>
             <summary><span className="client-provider-logo" aria-hidden="true">{brand ? <img src={"./providers/" + brand + ".svg"} alt="" /> : <Layers3 size={21} data-motion-icon={undefined} />}</span>
-              <strong>{models[0].providerName}</strong><small>{compatible.length} 个模型</small><ChevronRight className="provider-disclosure" size={16} /></summary>
+              <strong>{models[0].providerName}</strong>
+              {wsl?.binary && <span className="wsl-provider-toggle" title={wslHint}>
+                <span aria-hidden="true">WSL</span>
+                <button type="button" role="switch" className="provider-injection-switch" aria-label={models[0].providerName + ' WSL 同步'}
+                  aria-description={wslHint} aria-checked={wslChecked}
+                  disabled={!!busy || state.connections.busy || state.wslSync.busy || !wsl.enabled}
+                  onClick={e => {
+                    e.preventDefault();
+                    act('wsl-configure', () => api.call('wsl-configure', client.id, { providerId: id, enabled: !wslChecked }));
+                  }}><i /></button>
+              </span>}
+              <small>{compatible.length} 个模型</small><ChevronRight className="provider-disclosure" size={16} /></summary>
             <div className="client-provider-models">{models.map((m) => <div key={m.ref} className={m.issue ? "unavailable" : ""}>
               <span title={m.model}>{m.name || m.model}<small>{m.name !== m.model ? m.model : ""}</small>
                 <small>{m.issue || m.adapter || protocols[m.protocol] || m.protocol}</small></span>

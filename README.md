@@ -1,4 +1,4 @@
-<p align="center"><img src="public/ass-app-icon.png" width="104" alt="ASS logo" /></p>
+<p align="center"><img src="docs/ass-readme-logo.svg" width="104" alt="ASS logo" /></p>
 
 # ASS
 

@@ -15,7 +15,7 @@ export function ClientLocationRecovery({ clientId, disabled, onUpdated, onBusy }
       } else {
         const result = await window.ass.call("client-detect", clientId);
         setCandidates(result.selected ? [] : result.candidates);
-        if (!result.candidates.length) setError("未找到安装位置，请在客户端设置中选择文件或目录。");
+        if (!result.candidates.length) setError("未找到安装位置，请在「设置 → 客户端」中选择文件或目录。");
       }
       onUpdated();
     } catch (e) {

@@ -281,9 +281,9 @@ class ProxyConfig {
       applied: !!enabled && !error && !pending,
       runtimeStatus: enabled ? (id === "codex" ? "reload-required" : this.clients[id]?.nativeClaude ? "terminal-ready" : "new-window-only") : "inactive" };
   }
-  fingerprint(ids, enabled) {
+  fingerprint(ids, enabled, accountless) {
     return hash(JSON.stringify([read(this.file)?.toString("base64"), ids.filter((id) => this.supports(id)).map((id) =>
-      [id, enabled ? this.desired(id) : null, id === "codex" ? [read(this.config.catalog)?.toString("base64"), read(this.config.record)?.toString("base64"), hash(read(this.config.auth))]
+      [id, enabled ? this.desired(id, accountless) : null, id === "codex" ? [read(this.config.catalog)?.toString("base64"), read(this.config.record)?.toString("base64"), hash(read(this.config.auth))]
         : [claudeNative.fingerprint(this.manager, this.clients.claude?.nativeClaude), this.desktop?.fingerprint()]])]));
   }
   preflight(ids, enabled, accountless) {

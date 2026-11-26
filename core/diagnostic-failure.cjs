@@ -14,6 +14,7 @@ const INFO = {
   server: ["上游服务异常", "上游返回服务错误", "稍后重试或查看供应商服务状态；保留上游实际 HTTP 状态。"],
   request: ["请求或协议不兼容", "上游未接受此模型的请求", "检查模型 ID、接口协议与参数配置。"],
   stream: ["响应未完整结束", "未收到完整结束事件", "HTTP 成功不代表模型任务成功；检查流中断或供应商协议支持。"],
+  cancelled: ["请求已取消", "请求在完成前被取消", ""],
   local: ["本机检测失败", "ASS 本机路由未能完成检测", "检查 ASS 服务和模型配置；未收到上游响应时不能判断密钥或额度。"],
   unknown: ["原因未明确", "连接检测失败，未获得可分类的错误证据", "可重新检测以获取详细原因；旧版通用 502 记录不能用于判断 DNS、密钥或额度。"],
 };
@@ -25,6 +26,7 @@ const CODES = new Set([
   "invalid_api_key", "authentication_error", "invalid_token", "token_expired", "invalid_access_token", "expired_token", "unauthorized",
   "insufficient_quota", "insufficient_balance", "insufficient_credits", "credit_balance_too_low", "billing_hard_limit_reached", "usage_limit_reached", "credits_exhausted",
   "rate_limit_exceeded", "rate_limit_error", "too_many_requests", "overloaded_error", "permission_denied", "permission_error",
+  "upstream_timeout", "upstream_idle_timeout",
 ]);
 const status = (v) => Number.isInteger(v) && v >= 100 && v <= 599 ? v : null;
 function failureDetails(value) {
@@ -58,7 +60,7 @@ function classifyFailure(error, options = {}) {
     if (/TIMEDOUT|TIMEOUT|TIMED_OUT/.test(code)) return make("timeout", code);
     return make("network", code);
   }
-  if (/TimeoutError|请求超时/.test(networkText)) return make("timeout");
+  if (/TimeoutError|请求超时/.test(networkText)) return make("timeout", error?.code);
   if (/未找到 ChatGPT 登录|OAuth 访问令牌已到期/.test(networkText))
     return failureResult("authentication", httpStatus ? layer : "local", httpStatus, undefined, localStatus);
   if (/未收到完整结束事件|上游流提前断开/.test(networkText)) return make("stream");
@@ -89,6 +91,13 @@ function classifyFailure(error, options = {}) {
 }
 function diagnosticError(result) {
   return Object.assign(Error(result.message), { diagnostic: result });
+}
+function requestFailure(error, { layer, httpStatus, signal } = {}) {
+  if (signal?.aborted) {
+    if (signal.reason?.name === 'TimeoutError') error = signal.reason;
+    else return failureResult('cancelled', layer, httpStatus);
+  }
+  return classifyFailure(error, { layer, httpStatus, localStatus: error?.status });
 }
 async function errorSample(response, signal) {
   if (!response.body) return "";
@@ -124,4 +133,4 @@ async function responseFailure(response, { relay = false, signal } = {}) {
   }
   return classifyFailure(null, { httpStatus: response.status, body, contentType: response.headers.get("content-type") });
 }
-module.exports = { classifyFailure, diagnosticError, responseFailure, failureDetails, savedFailure };
+module.exports = { classifyFailure, diagnosticError, requestFailure, responseFailure, failureDetails, savedFailure };

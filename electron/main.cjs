@@ -70,8 +70,29 @@ const { launchCodexDesktop, openCodexDesktop } = require('../core/codex-desktop-
 let codexWorkspaceRelay;
 const { Preferences } = require("../core/preferences.cjs");
 const { UsageHistory } = require("../core/usage-history.cjs");
+const { buildUsageDrilldown } = require("../core/usage-drilldown.cjs");
 const { RequestHistory } = require('../core/request-history.cjs');
+const {
+  AgyLiveMonitor,
+  hookStatus: agyHookStatus,
+  installHook: installAgyHook,
+  uninstallHook: uninstallAgyHook,
+  writeHookRuntime: writeAgyHookRuntime,
+  clearHookRuntime: clearAgyHookRuntime,
+} = require("../core/agy-live.cjs");
+const {
+  mcpStatus: agyMcpStatus,
+  installMcp: installAgyMcp,
+  uninstallMcp: uninstallAgyMcp,
+  writeMcpRuntime: writeAgyMcpRuntime,
+  clearMcpRuntime: clearAgyMcpRuntime,
+  handleAgyMcp,
+} = require("../core/agy-mcp.cjs");
+const { inspectCli: inspectAgyCli } = require("../core/antigravity-cli.cjs");
+const { listAntigravityConversations } = require("../core/antigravity-conversations.cjs");
 let requestHistory;
+let agyLive;
+let agyGatewayActive = false;
 const accountTransactions = require("../core/account-transactions.cjs");
 const { modelSources, nativeModels } = require("../core/model-inventory.cjs");
 const { nativeOfficialProvider: resolveNativeOfficialProvider } = require("../core/native-official.cjs");
@@ -248,7 +269,8 @@ function log(record) {
   recent.unshift(record);
   recent = recent.slice(0, 100);
   requestHistory.append(record);
-  push();
+  requestActivityPublisher.push();
+  requestWidget?.notifyActivity();
 }
 function accountProvider(id) {
   const configured = store.state.providers.find((p) => p.id === id);
@@ -527,6 +549,10 @@ function buildSnapshot() {
     requestWidget: requestWidget?.public(),
     claudeDesktop: (() => { try { return claudeDesktop.status(proxyConfig.clients.claude?.localToken, servicePort); }
       catch (error) { return { configured: false, owned: false, current: false, conflict: true, error: error.message }; } })(),
+    antigravity: {
+      hook: testMode ? { installed: false, enabled: false, file: "", error: "" } : agyHookStatus(),
+      mcp: testMode ? { installed: false, file: "", command: "", error: "" } : agyMcpStatus(),
+    },
     providerPresets: PROVIDER_PRESETS,
     officialServices: OFFICIAL_SERVICES,
     officialProviderIds: Object.fromEntries(
@@ -566,16 +592,22 @@ function buildSnapshot() {
     dataDir: store.dataDir,
   };
 }
+function canPublish() { return !!window && !window.isDestroyed() && window.isVisible() && !window.isMinimized(); }
 const publisher = new SnapshotPublisher({ read: snapshot,
-  canSend: () => !!window && !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
+  canSend: canPublish,
   send: (value) => window.webContents.send("ass:state", value),
   onError: (error) => {
     runtimeHealth?.record('snapshot', error);
     if (window && !window.isDestroyed()) window.webContents.send("ass:state-error",
       "客户端状态读取失败，保留当前画面；请刷新重试。");
   } });
+const requestActivityPublisher = new SnapshotPublisher({ canSend: canPublish,
+  read: () => ({ sequence: ++snapshotSequence, recent, requestRevision: requestHistory.revision, active: router.active,
+    clients: Object.fromEntries(Object.keys(connections.enabled).map(id => [id, router.clientActive(id)])) }),
+  send: (value) => window.webContents.send('ass:request-activity', value),
+});
 function push() { publisher.push(); }
-function register(name, handler) {
+function register(name, handler, { publishes = true } = {}) {
   ipcMain.handle("ass:" + name, async (event, ...args) => {
     const url = event.senderFrame?.url || "";
     if (
@@ -593,7 +625,7 @@ function register(name, handler) {
     } finally {
       if ((name === "snapshot" || name === "client-refresh") && result?.sequence) publisher.publish(result);
       else if (result?.snapshot?.sequence) publisher.publish(result.snapshot);
-      else push();
+      else if (publishes) push();
     }
   });
 }
@@ -944,9 +976,6 @@ function updateTrayMenu() {
   if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开 ASS', click: showWindow },
-    { label: '请求悬浮窗', type: 'checkbox', checked: !!preferences.state.requestWidget.enabled,
-      click: item => requestWidget.configure({ enabled: item.checked }) },
-    { label: '检查 ASS 更新', click: () => { showWindow();void updates.check({ manual: true }); } },
     { type: 'separator' },{ label: '退出…', click: requestExit },
   ]));
 }
@@ -1101,12 +1130,38 @@ else {
       });
       if (proxyConfig.recoveryError) runtimeHealth.record('codex-recovery', Error(proxyConfig.recoveryError));
       harnesses.options.proxyConfig = proxyConfig;
+      const agyCapabilities = () => {
+        const caps = {};
+        const merged = { ...protocols?.public(), ...capabilities };
+        for (const [key, item] of Object.entries(merged)) {
+          if (!item || typeof item !== "object") continue;
+          const parts = key.split(":");
+          if (parts.length < 2) continue;
+          const ref = JSON.stringify([parts[0], parts.slice(1).join(":")]);
+          caps[ref] = {
+            tools: item.tools?.ok !== false,
+            reasoning: item.reasoning?.ok !== false,
+            vision: item.vision?.ok === true,
+          };
+        }
+        return caps;
+      };
       router = new Router({
-        getState: (id) => proxyConfig.routingState(id),
+        getState: (id) =>
+          id === "antigravity"
+            ? { ...harnesses.agyRoutingState(router.clientToken), capabilities: agyCapabilities() }
+            : proxyConfig.routingState(id),
         fetchUpstream: upstream,
         log,
         allowClient: (id) => connections.allow(id),
-        onActivity: push,
+        onActivity: () => { requestActivityPublisher.push(); requestWidget?.notifyActivity(); },
+        onAgyEvent: (payload) => agyLive?.handleHookEvent(payload),
+        onAgyMcp: (r, q, s) =>
+          handleAgyMcp(r, q, s, {
+            getLauncher: () => harnesses.launcher("antigravity"),
+            getWorkspace: () => harnesses.state.workspace,
+            launchEnv: harnesses.launchEnv,
+          }),
         getOfficialAuth: options => codexOfficialAuth.headers(options),
         getNativeCredential: () => codexOfficialAuth.currentCredential(),
         compactionCrypto: safeStorage,
@@ -1137,6 +1192,13 @@ else {
         port: servicePort,
         onChange: push,
         extraActive: () => probeControllers.size,
+        keepRouterAlive: () =>
+          !testMode &&
+          (agyGatewayActive ||
+            preferences.state.antigravityHook ||
+            preferences.state.antigravityMcp ||
+            agyHookStatus().enabled ||
+            agyMcpStatus().installed),
         restarter,
         sessionHandoff: new (require('../core/codex-session-handoff.cjs').CodexSessionHandoff)({
           codexDir, dataDir, crypto: safeStorage, config, officialModels: () => store.officialModels,
@@ -1154,7 +1216,8 @@ else {
         target: (id, provider) => harnesses.oauthHistoryTarget(id, provider),
         allows: (id, provider) => harnesses.oauthHistoryAllows(id, provider),
         // Kept only for recovery of a transaction created by an older ASS;
-        // retired clients are not scanned, exposed, or writable through IPC.
+        // Antigravity account status is read-only. This adapter only recovers
+        // an OAuth transaction left by an older ASS version.
         external: { "antigravity-keyring": require("../core/antigravity-status.cjs").keyringAdapter },
         onChange: push,
         refresh: async () => {
@@ -1205,8 +1268,41 @@ else {
         } });
       projectConversations.start();
       nativeLogin = new NativeLogin({ harnesses, history: oauthHistory, processes });
+      agyLive = new AgyLiveMonitor({
+        onRecord: log,
+        onActivity: () => { requestActivityPublisher.push(); requestWidget?.notifyActivity(); },
+      });
+      if (!testMode) agyLive.start();
+      const liveMonitorSnapshot = () => [...router.monitorSnapshot(), ...(agyLive?.activeSnapshot() || [])];
+      const syncAgyHookRuntime = () => {
+        if (testMode) return;
+        if (router.server && (preferences.state.antigravityHook || agyHookStatus().enabled)) {
+          try { writeAgyHookRuntime(dataDir, { port: router.port, token: router.clientToken }); } catch {}
+        } else {
+          clearAgyHookRuntime(dataDir);
+        }
+      };
+      const syncAgyMcpRuntime = () => {
+        if (testMode) return;
+        if (router.server && (preferences.state.antigravityMcp || agyMcpStatus().installed)) {
+          try { writeAgyMcpRuntime(dataDir, { port: router.port, token: router.clientToken }); } catch {}
+        } else {
+          clearAgyMcpRuntime(dataDir);
+        }
+      };
       try {
-        if (connections.routerEnabled()) await router.start(servicePort);
+        if (
+          connections.routerEnabled() ||
+          (!testMode &&
+            (preferences.state.antigravityHook ||
+              preferences.state.antigravityMcp ||
+              agyHookStatus().enabled ||
+              agyMcpStatus().installed))
+        ) {
+          await router.start(servicePort);
+        }
+        syncAgyHookRuntime();
+        syncAgyMcpRuntime();
       } catch (error) {
         startupError = "端口 " + servicePort + " 无法启动：" + error.message;
       }
@@ -1217,17 +1313,17 @@ else {
       if (!testMode) wslSync.start();
       requestWidget = new RequestWidget({ electron: require('electron'), preferences,
         model: await import('../core/request-widget-view.mjs'),
-        read: () => ({ active: router.monitorSnapshot(), history: requestHistory.snapshot(), usage: usageHistory.public() }),
+        read: () => ({ active: liveMonitorSnapshot(),
+          history: { rows: requestHistory.rows, revision: requestHistory.revision },
+          usageUpdatedAt: usageHistory.state.updatedAt,
+          readUsage: () => usageHistory.public() }),
         refreshUsage: () => usageHistory.refresh({ automatic: true }), onChange: () => { updateTrayMenu();push(); } });
       if (preferences.state.requestWidget.enabled) requestWidget.open();
       register("snapshot", () => snapshot());
       register('request-widget', input => requestWidget.configure(input));
       register('request-monitor', revision => {
-        const history = requestHistory.snapshot();
-        return { ...history, rows: revision === history.revision ? undefined : history.rows,
-          archive: revision === history.revision ? undefined : history.archive,
-          active: router.monitorSnapshot(), now: Date.now() };
-      });
+        return { ...requestHistory.snapshot(revision), active: liveMonitorSnapshot(), now: Date.now() };
+      }, { publishes: false });
       register("window-action", (action) => {
         require('../core/window-controls.cjs').windowAction(window, action);
         return publishWindowState();
@@ -1241,12 +1337,16 @@ else {
       register("usage-refresh", (automatic) =>
         usageHistory.refresh({ automatic: automatic === true }),
       );
+      register("usage-drilldown", async selection =>
+        buildUsageDrilldown(await usageHistory.drilldown(selection), projectConversations,
+          harnesses.state.credentialHomes.antigravity), { publishes: false });
       register(
         "supplier-refresh",
         async (sourceId, accountId, automatic = false) => {
-          if (sourceId === "official" || (!store.state.providers.some(p => p.id === sourceId) && /^native-(codex|claude|dsh|opencode|pi|kimi|zcode)$/.test(sourceId))) {
+          if (sourceId === "official" || (!store.state.providers.some(p => p.id === sourceId) && /^native-(codex|claude|dsh|opencode|pi|kimi|zcode|antigravity)$/.test(sourceId))) {
             const clientId =
               sourceId === "official" ? "codex" : sourceId.slice(7);
+            if (clientId === "antigravity") await harnesses.refreshAntigravityOAuth();
             const client = informationClient(clientId);
             const account = client?.accounts.find(
               (a) => a.id === accountId && a.kind !== "api",
@@ -1311,6 +1411,8 @@ else {
           setImmediate(() => app.quit());
           return result;
         }
+        syncAgyHookRuntime();
+        syncAgyMcpRuntime();
         return result;
       });
       register("update-check", () => updates.check({ manual: true }));
@@ -1326,6 +1428,7 @@ else {
         return shell.openExternal(service[target]);
       });
       register("account-info", async (clientId, accountId) => {
+        if (clientId === "antigravity") await harnesses.refreshAntigravityOAuth();
         const client = informationClient(clientId);
         const account = client?.accounts.find((a) => a.id === accountId);
         if (!account) throw Error("账户不存在");
@@ -1593,6 +1696,86 @@ else {
               : "已打开 Codex 桌面端。若已有窗口仍使用旧配置，请结束任务后通过接入菜单重启。"
               : "已打开 " + harnesses.spec(id).name + " 桌面端；沿用其原生账户，没有注入或切换凭据。",
         };
+      });
+      register("antigravity-open-cli", () => connections.launch(() => harnesses.launchAntigravityCli()));
+      register("antigravity-login-status", async () => {
+        await harnesses.refreshAntigravityOAuth();
+        return { snapshot: snapshot() };
+      });
+      register("antigravity-model-launch", async (defaultRef = null) => {
+        await router.start(servicePort);
+        syncAgyHookRuntime();
+        syncAgyMcpRuntime();
+        const result = await connections.launch(() =>
+          harnesses.launchAntigravityModel(router.clientToken, {
+            defaultRef: defaultRef || null,
+            capabilities: agyCapabilities(),
+          }),
+        );
+        agyGatewayActive = true;
+        return result;
+      });
+      register("antigravity-desktop-launch", async (defaultRef = null) => {
+        await router.start(servicePort);
+        syncAgyHookRuntime();
+        syncAgyMcpRuntime();
+        const result = await connections.launch(() =>
+          harnesses.launchAntigravityDesktop(router.clientToken, {
+            defaultRef: defaultRef || null,
+            capabilities: agyCapabilities(),
+          }),
+        );
+        agyGatewayActive = true;
+        return result;
+      });
+      register("antigravity-cli-info", async () => {
+        const launcher = harnesses.launcher("antigravity");
+        if (!launcher.ready) throw Error("未找到 agy 命令，请安装 Antigravity CLI 后重新识别");
+        return inspectAgyCli(launcher.executable);
+      }, { publishes: false });
+      register("antigravity-conversations", () =>
+        listAntigravityConversations({ override: harnesses.state.credentialHomes.antigravity }),
+      { publishes: false });
+      register("antigravity-resume", (conversationId, workspace) => {
+        if (typeof conversationId !== "string" || !/^[a-zA-Z0-9._-]{4,128}$/.test(conversationId)) {
+          throw Error("会话 ID 无效");
+        }
+        const safeWorkspace = typeof workspace === "string" && workspace && path.isAbsolute(workspace) && fs.existsSync(workspace)
+          ? workspace
+          : undefined;
+        return connections.launch(() =>
+          harnesses.launchAntigravityCli(["--conversation", conversationId], safeWorkspace),
+        );
+      });
+      register("antigravity-hook-toggle", async (enabled) => {
+        if (typeof enabled !== "boolean") throw Error("参数无效");
+        const status = enabled ? installAgyHook({ dataDir }) : uninstallAgyHook();
+        preferences.update({ antigravityHook: enabled });
+        if (enabled) await router.start(servicePort);
+        syncAgyHookRuntime();
+        return { hook: status, snapshot: snapshot() };
+      });
+      register("antigravity-mcp-toggle", async (enabled) => {
+        if (typeof enabled !== "boolean") throw Error("参数无效");
+        const status = enabled
+          ? installAgyMcp({ dataDir, env: harnesses.launchEnv, execPath: process.execPath })
+          : uninstallAgyMcp();
+        preferences.update({ antigravityMcp: enabled });
+        if (enabled) await router.start(servicePort);
+        syncAgyMcpRuntime();
+        return { mcp: status, snapshot: snapshot() };
+      });
+      register("antigravity-connection-toggle", async (enabled) => {
+        if (typeof enabled !== "boolean") throw Error("参数无效");
+        const hook = enabled ? installAgyHook({ dataDir }) : uninstallAgyHook();
+        const mcp = enabled
+          ? installAgyMcp({ dataDir, env: harnesses.launchEnv, execPath: process.execPath })
+          : uninstallAgyMcp();
+        preferences.update({ antigravityHook: enabled, antigravityMcp: enabled });
+        if (enabled) await router.start(servicePort);
+        syncAgyHookRuntime();
+        syncAgyMcpRuntime();
+        return { hook, mcp, snapshot: snapshot() };
       });
       register("client-location", async (id, location) => {
         harnesses.setExecutable(id, location);
@@ -1898,8 +2081,10 @@ else {
     quitting = true;
     runtimeHealth?.record('exit');
     publisher.clear();
+    requestActivityPublisher.clear();
     updates?.stop();
     wslSync?.stop();
+    usageHistory?.stop();
     requestWidget?.dispose();
     oauthHistory?.stop();
     projectConversations?.stop();
@@ -1908,7 +2093,13 @@ else {
     for (const controller of diagnosticControllers.values()) controller.abort();
     for (const controller of probeControllers.values()) controller.abort();
     openRouterAuth?.cancel();
+    agyLive?.stop();
+    if (!testMode && store?.dataDir) {
+      clearAgyHookRuntime(store.dataDir);
+      clearAgyMcpRuntime(store.dataDir);
+    }
     router?.stop();
+    requestHistory?.close();
     scopedDns?.close();
     void codexWorkspaceRelay?.stop();
   });

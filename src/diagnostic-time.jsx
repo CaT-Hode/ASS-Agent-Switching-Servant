@@ -1,5 +1,5 @@
 import React, { useSyncExternalStore } from "react";
-import { relativeTime, exactTime } from "./relative-time.mjs";
+import { relativeTime, exactTime, quotaResetText } from "./relative-time.mjs";
 
 // One clock for all visible model rows; never poll the main process or upstream.
 const listeners = new Set();
@@ -35,6 +35,11 @@ export function ElapsedTime({ value, prefix = "更新于 " }) {
       {relativeTime(value, current)}
     </time>
   );
+}
+export function QuotaResetTime({ value }) {
+  const current = useSyncExternalStore(subscribe, getSnapshot);
+  const label = quotaResetText(value, current);
+  return label ? <time dateTime={value} title={exactTime(value)}>{label}</time> : null;
 }
 export function DiagnosticTime({ result }) {
   const current = useSyncExternalStore(subscribe, getSnapshot);

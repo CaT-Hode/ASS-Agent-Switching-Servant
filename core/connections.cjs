@@ -3,6 +3,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { atomic, prepareConfig } = require("./config.cjs");
 const { IDS: LEGACY_IDS, hash } = require("./injection-files.cjs");
+const { previewInjection } = require('./injection-preview.cjs');
 // New native clients do not belong to the legacy proxy-file allowlist.
 const IDS = [...LEGACY_IDS, "kimi", "zcode"];
 const NAMES = {
@@ -27,6 +28,7 @@ class Connections {
     writeCatalog = () => {},
     onChange = () => {},
     extraActive = () => 0,
+    keepRouterAlive = () => false,
     restarter,
     sessionHandoff,
   }) {
@@ -41,6 +43,7 @@ class Connections {
       writeCatalog,
       onChange,
       extraActive,
+      keepRouterAlive,
       restarter,
       sessionHandoff,
     });
@@ -76,7 +79,7 @@ class Connections {
   }
   allow(id) {
     if (this.blocked.has(id) || this.error) return false;
-    if (id === "diagnostics") return true;
+    if (id === "diagnostics" || id === "antigravity") return true;
     return IDS.includes(id) && this.enabled[id];
   }
   needsRouter(id) {
@@ -161,14 +164,14 @@ class Connections {
     if (!IDS.includes(scope)) throw Error("未知客户端接入");
     return [scope];
   }
-  fingerprint(ids, enabled = false, quit = false, includeSessions = true) {
+  fingerprint(ids, enabled = false, quit = false, includeSessions = true, accountless) {
     return hash(
       JSON.stringify([
         this.enabled,
         this.revision,
         this.injections.fingerprint(ids),
         quit ? null : this.nativeConfig?.fingerprint(ids, enabled),
-        this.proxyConfig?.fingerprint(ids, enabled),
+        this.proxyConfig?.fingerprint(ids, enabled, accountless),
         ids.includes("codex") && fs.existsSync(this.config.file)
           ? hash(fs.readFileSync(this.config.file))
           : null,
@@ -218,6 +221,10 @@ class Connections {
     this.preflight(ids, enabled, quit, accountless);
     const restart = !quit && this.restarter ? await this.restarter.preview(ids) : null;
     const snapshot = this.processes.snapshot();
+    const changes = quit ? [] : ids.flatMap(id => {
+      const change = previewInjection(id, enabled, accountless, this.proxyConfig, this.nativeConfig);
+      return change ? [{ id, name: NAMES[id], ...change }] : [];
+    });
     const ticket = crypto.randomBytes(24).toString("hex");
     for (const [key, p] of this.tickets)
       if (p.expires < Date.now()) this.tickets.delete(key);
@@ -227,13 +234,14 @@ class Connections {
       ids,
       enabled,
       quit,
-      fingerprint: this.fingerprint(ids, enabled, quit),
+      fingerprint: this.fingerprint(ids, enabled, quit, true, accountless),
       expires: Date.now() + 180000,
       restart,
       accountless,
     });
     return {
       ticket,
+      changes,
       ...(!enabled && ids.includes('codex') && this.sessionHandoff ? { restoreSessions: this.sessionHandoff.status().count } : {}),
       accountless,
       restart: this.restarter?.public(restart),
@@ -292,14 +300,14 @@ class Connections {
     try {
       await this.processes.refresh();
       if (
-        this.fingerprint(plan.ids, plan.enabled, plan.quit) !== plan.fingerprint
+        this.fingerprint(plan.ids, plan.enabled, plan.quit, true, plan.accountless) !== plan.fingerprint
       )
         throw Error("配置或窗口清单已变化，请重新预览后确认");
       this.preflight(plan.ids, plan.enabled, plan.quit, plan.accountless);
       if (restart) await this.restarter.validate(plan.restart);
       if (restartFirst) {
         this.blocked.add(plan.scope);
-        const stopService = !plan.enabled && !this.routerEnabled(plan.ids);
+        const stopService = !plan.enabled && !this.routerEnabled(plan.ids) && (plan.quit || !this.keepRouterAlive());
         if (stopService) {
           this.blocked.add("diagnostics");
           if (this.router.clientActive() - this.router.clientActive(plan.scope) + this.extraActive())
@@ -310,12 +318,12 @@ class Connections {
           throw Error(`部分 ${stopName} 窗口身份无法确认，请手动关闭并刷新后再操作`);
         if (!close && !plan.enabled && mode === "safe" && observed.sessions.some((s) => s.harness === plan.scope && s.status === "running"))
           throw Error("仍有 ASS 启动的客户端窗口；请先自行退出，或明确选择结束这些窗口");
-        const before = this.fingerprint(plan.ids, plan.enabled, plan.quit, false);
+        const before = this.fingerprint(plan.ids, plan.enabled, plan.quit, false, plan.accountless);
         await this.restarter[close ? "close" : "stop"](plan.restart);
         desktopStopped = true;
         await this.router.cancelClient(plan.scope);
         await this.processes.refresh();
-        if (this.fingerprint(plan.ids, plan.enabled, plan.quit, false) !== before)
+        if (this.fingerprint(plan.ids, plan.enabled, plan.quit, false, plan.accountless) !== before)
           throw Error("关闭期间配置已变化，请重新预览后确认");
         this.preflight(plan.ids, plan.enabled, plan.quit, plan.accountless);
       }
@@ -336,7 +344,7 @@ class Connections {
         }
         for (const id of plan.ids) this.enabled[id] = true;
       } else {
-        const stopService = !this.routerEnabled(plan.ids);
+        const stopService = !this.routerEnabled(plan.ids) && (plan.quit || !this.keepRouterAlive());
         for (const id of plan.ids) this.blocked.add(id);
         if (stopService) this.blocked.add("diagnostics");
         const active = stopService

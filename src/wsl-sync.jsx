@@ -1,5 +1,6 @@
 import React from 'react';
 import { RefreshCw } from './icons.jsx';
+import { SettingsSwitch } from './settings-switch.jsx';
 const api = window.ass;
 export function WslSyncControl({ client, state, act, busy }) {
   if (!['codex', 'claude', 'pi'].includes(client.id) || !state.wslSync) return null;
@@ -7,9 +8,8 @@ export function WslSyncControl({ client, state, act, busy }) {
   const working = !!busy || wsl.busy || state.connections.busy;
   return <section className="wsl-sync" aria-label={client.name + ' WSL 同步'}>
     <header><div><strong>WSL 自动同步</strong><small>继承 Windows 已应用的模型和路由，保留 WSL 会话与其他设置。</small></div>
-      <button type="button" role="switch" className="provider-injection-switch" aria-label={client.name + ' WSL 自动同步'}
-        aria-checked={item.enabled} disabled={working}
-        onClick={() => act('wsl-configure', () => api.call('wsl-configure', client.id, { enabled: !item.enabled }))}><i /></button>
+      <SettingsSwitch label={client.name + ' WSL 自动同步'} checked={item.enabled} disabled={working}
+        onChange={enabled => act('wsl-configure', () => api.call('wsl-configure', client.id, { enabled }))} />
     </header>
     <div className="wsl-sync-actions">
       <label>发行版<select aria-label="WSL 发行版" value={wsl.distro} disabled={working || Object.values(wsl.clients).some(c => c.configured)}

@@ -1,0 +1,9 @@
+.config-export-dialog { width: min(480px, calc(100vw - 48px)); }
+.config-export-dialog > p { font-size: 13px; line-height: 1.6; }
+.export-secret-option { display: flex; gap: 10px; align-items: center; margin: 24px 0 16px; font-size: 14px; cursor: pointer; }
+.export-secret-option input { accent-color: var(--accent); }
+.export-secret-warning { display: flex; gap: 12px; padding: 14px; border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--warning) 8%, var(--panel)); color: var(--warning); }
+.export-secret-warning > svg { flex: none; margin-top: 2px; }
+.export-secret-warning p { margin: 0; font-size: 13px; line-height: 1.6; }
+.export-secret-warning span { display: block; margin-top: 4px; }
+.config-export-dialog footer { margin-top: 24px; }

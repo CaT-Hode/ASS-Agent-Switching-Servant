@@ -1,5 +1,6 @@
 const { SseParser } = require('./sse-parser.cjs');
-const { visibleTps } = require('./request-stats.mjs');
+const { assertTaskOutcome } = require('./task-outcome.cjs');
+const { MIN_STABLE_TPS_MS, visibleTps } = require('./request-stats.mjs');
 const tokenCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const requestTps = (tokens, ms) => tokenCount(tokens) !== null && Number.isFinite(ms) && ms > 0 ? tokens * 1000 / ms : null;
 const visibleOutputTokens = usage => tokenCount(usage?.outputTokens) !== null && tokenCount(usage?.reasoningTokens) !== null &&
@@ -24,6 +25,12 @@ class RequestMetrics {
     for (const choice of event.choices || []) {
       pieces.push([choice.delta?.content, true], [choice.delta?.reasoning_content, false], [choice.delta?.reasoning, false]);
       for (const tool of choice.delta?.tool_calls || []) pieces.push([tool.function?.arguments, true]);
+    }
+    for (const candidate of event.candidates || []) {
+      for (const part of candidate.content?.parts || []) {
+        if (typeof part.text === 'string' && part.text.length) pieces.push([part.text, !part.thought]);
+        else if (part.functionCall?.args) pieces.push([JSON.stringify(part.functionCall.args), true]);
+      }
     }
     for (const [text, visible] of pieces) if (typeof text === 'string' && text.length) {
       this.first ??= receivedAt;
@@ -62,7 +69,25 @@ class RequestMetrics {
           (this.usage.cacheReadTokens || 0) + (this.usage.cacheWriteTokens || 0);
       }
     }
-    if (event.usage || event.response?.usage || ['response.completed', 'response.incomplete', 'message_stop'].includes(event.type)) this.last = receivedAt;
+    if (event.usageMetadata && typeof event.usageMetadata === 'object') {
+      const gm = event.usageMetadata;
+      const thoughts = tokenCount(gm.thoughtsTokenCount);
+      const candidates = tokenCount(gm.candidatesTokenCount);
+      const patch = {
+        inputTokens: tokenCount(gm.promptTokenCount),
+        outputTokens: candidates !== null ? candidates + (thoughts || 0) : null,
+        cacheReadTokens: tokenCount(gm.cachedContentTokenCount),
+        reasoningTokens: thoughts,
+      };
+      this.usage ||= {};
+      for (const [key, value] of Object.entries(patch)) if (value !== null) this.usage[key] = value;
+      if (patch.outputTokens !== null) this.reportedAtUnits = this.outputUnits;
+      const reportedVisible = visibleOutputTokens(patch);
+      if (reportedVisible !== null) {
+        this.reportedVisibleTokens = reportedVisible; this.reportedVisibleAtUnits = this.visibleUnits;
+      }
+    }
+    if (event.usage || event.response?.usage || event.usageMetadata || ['response.completed', 'response.incomplete', 'message_stop'].includes(event.type)) this.last = receivedAt;
   }
   observe(response, signal, onData = () => {}) {
     if (!response.body) return response;
@@ -80,9 +105,18 @@ class RequestMetrics {
           for (const frame of parser.feed(chunk, done)) this.event(frame.event, receivedAt);
         } else if (mode === 'json') {
           if (chunk) { size += chunk.byteLength; if (size > 4 * 1024 * 1024) { disabled = true; chunks = []; return; } chunks.push(Buffer.from(chunk)); }
-          if (done && size) { this.event(JSON.parse(Buffer.concat(chunks).toString('utf8')), receivedAt); chunks = []; }
+          if (done && size) {
+            const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            this.event(value, receivedAt);
+            assertTaskOutcome(value);
+            chunks = [];
+          }
         }
-      } catch { disabled = true; chunks = []; parser = null; }
+      } catch (error) {
+        // Explicit task errors carry only a classified diagnostic. Keep relaying the original stream.
+        this.taskFailure = error.diagnostic;
+        disabled = true; chunks = []; parser = null;
+      }
     };
     const body = response.body.pipeThrough(new TransformStream({
       transform: (chunk, controller) => { if (chunk.byteLength) onData(); feed(chunk); controller.enqueue(chunk); },
@@ -105,7 +139,7 @@ class RequestMetrics {
     return { usage: live && (this.usage || outputTokens) ? { ...this.usage, ...(outputTokens ? { outputTokens } : {}) } : this.usage,
       ttftMs: this.first === null ? null : Math.max(0, this.first - this.began), generationMs,
       visibleTokens, visibleMs,
-      tps: visibleTps(visibleTokens, visibleMs), tpsEstimated: visibleEstimated,
+      tps: live && visibleMs < MIN_STABLE_TPS_MS ? null : visibleTps(visibleTokens, visibleMs), tpsEstimated: visibleEstimated,
       endToEndTps: requestTps(outputTokens, elapsedMs),
       ...(live ? { outputEstimated: estimated } : {}) };
   }

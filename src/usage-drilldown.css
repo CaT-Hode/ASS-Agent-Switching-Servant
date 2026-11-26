@@ -1,0 +1,68 @@
+.usage-drilldown > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+.usage-drilldown small,
+.usage-drill-project-heading > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.usage-drilldown h2:focus {
+  outline: none;
+}
+.usage-drill-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 12px;
+}
+.usage-drill-project {
+  border-top: 1px solid var(--border);
+}
+.usage-drill-project-heading {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 11px 4px;
+  width: 100%;
+}
+.usage-drill-project-heading[aria-expanded='true'] > svg {
+  transform: rotate(90deg);
+}
+.usage-drill-project-heading > strong,
+.usage-drill-description > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-drill-sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 8px 24px;
+}
+.usage-drill-sessions > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
+  align-items: center;
+  gap: 16px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+.usage-drill-description,
+.usage-drill-metrics {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.usage-drill-metrics {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.usage-drill-unavailable {
+  min-width: 85px;
+  text-align: right;
+}

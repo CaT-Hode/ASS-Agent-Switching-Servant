@@ -76,8 +76,10 @@ function parseStoredToken(data, now = Date.now()) {
     ["projectId", "Google Cloud 项目", data.project_id], ["region", "区域", data.region],
     ["authMethod", "授权方式", data.auth_method], ["wifProvider", "身份联邦", data.wif_provider]]
     .flatMap(([id, label, value]) => { const safe = text(value, secrets); return safe ? [{ id, label, value: safe }] : []; });
+  const identityKey = has(identity.sub) ? digest(identity.iss + "\0" + identity.sub) : "";
   return { grant: data, account: { ...auth, refreshable: has(t.refresh_token),
-    identityKey: has(identity.sub) ? digest(identity.iss + "\0" + identity.sub) : "",
+    identityKey,
+    quotaAccount: identityKey || (has(t.refresh_token) ? digest(t.refresh_token) : ""),
     profile: { source: "local", docs: ["antigravity"], fields } } };
 }
 
@@ -268,11 +270,12 @@ function shouldReadKeyring(options) {
 function inspect(options, read, makeAccount) {
   const { env = {}, launcher, now = Date.now(), keyring } = options;
   const sources = [], accounts = [], surfaces = [], roots = locations(options);
-  let cliApiMode = false;
+  let cliApiMode = false, cliQuotaAllowed = false;
   for (const { dir, variant } of roots) {
     const directory = directorySource(dir);
     if (variant === "cli" || variant === "custom") {
       const config = read(path.join(dir, "settings.json")); sources.push(config);
+      cliQuotaAllowed = config.status === "missing" || config.status === "detected" && !config.data?.modelProvider;
       if (config.status !== "missing" || directory.status === "detected") surfaces.push(variant);
       if (config.data?.modelProvider === "gemini") {
         cliApiMode = true;
@@ -303,10 +306,11 @@ function inspect(options, read, makeAccount) {
     const expired = a.expiresAt !== null && a.expiresAt <= now && a.status !== "incomplete";
     const current = expired ? { ...a, ready: a.refreshable, status: a.refreshable ? "refresh-required" : "expired",
       message: a.refreshable ? "访问令牌已到期 · 由客户端刷新" : "授权已到期 · 需要重新登录" } : a;
-    const value = makeAccount("antigravity", root, selected.file, "google-antigravity", "Google Antigravity", current);
-    value.id = "native:" + digest(["antigravity", root, a.identityKey || "native-login"].join("\0"));
+    const value = makeAccount("antigravity", root, selected.file, "google-antigravity", "Gemini", current);
+    value.id = "native:" + digest(["antigravity", root, a.quotaAccount || "native-login"].join("\0"));
     delete value.identityKey;
     delete value.refreshable;
+    if (cliQuotaAllowed && a.quotaAccount) value.quotaAvailable = true;
     value.profile = { ...a.profile, fields: [...a.profile.fields,
       { id: "credentialStorage", label: "存储", value: selected === source ? "Windows 凭据管理器" : "原生凭据文件" },
       ...(oauthSurfaces.length ? [{ id: "clientSurface", label: "客户端", value: [...new Set(oauthSurfaces.map((v) => labels[v]).filter(Boolean))].join(" / ") }] : [])] };

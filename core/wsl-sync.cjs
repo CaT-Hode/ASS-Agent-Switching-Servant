@@ -197,8 +197,8 @@ class WslSync {
   }
   enabled(id) { return this.state.enabled[id] ?? !!this.info?.binaries[id]; }
   public() {
-    return { distro: this.state.distro, distros: this.distros, busy: this.busy, error: this.error || '',
-      clients: Object.fromEntries(CLIENTS.map(id => [id, { enabled: this.enabled(id),
+    return { distro: this.state.distro, distros: this.distros, distroRunning: !!this.info, busy: this.busy, error: this.error || '',
+      clients: Object.fromEntries(CLIENTS.map(id => [id, { enabled: this.state.enabled[id] ?? (this.info ? this.enabled(id) : !!this.state.records[id]?.length),
         excludedProviders: this.state.excludedProviders?.[id] || [],
         configured: !!this.state.records[id]?.length, binary: this.info?.binaries[id] || '', ...this.status[id] }])) };
   }
@@ -290,7 +290,7 @@ class WslSync {
             }
           }
           this.status[id] = { status: source ? '已同步' : !enabled ? '已撤回' : sources[id] ? '没有供应商同步到 WSL' : '等待 Windows 接入',
-            lastSync: new Date().toISOString(), error: '', route: source ? (id === 'pi' ? '供应商直连' : base) : '' };
+            lastSync: source ? new Date().toISOString() : this.status[id]?.lastSync, error: '', route: source ? (id === 'pi' ? '供应商直连' : base) : '' };
         } catch (error) { this.status[id] = { ...this.status[id], error: error.message }; if (this.state.pending) break; }
       }
       this.lastFingerprint = hash(JSON.stringify(sources));

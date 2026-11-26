@@ -11,7 +11,6 @@
   margin-top: auto;
   padding: 24px 0 0;
 }
-.sidebar-bottom .theme-control { margin: 16px 0 0; }
 .brand-title { display: flex; align-items: center; gap: 7px; }
 .sidebar-service {
   display: grid;

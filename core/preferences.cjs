@@ -1,6 +1,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { atomic } = require("./config.cjs");
+const { CLIENT_IDS, ids: clientIds } = require("./client-registry.cjs");
+const widgetColumns = { provider: true, throughput: true, cache: true, duration: true };
 const defaults = {
   view: "overview",
   theme: "system",
@@ -9,7 +11,12 @@ const defaults = {
   officialService: "openai",
   providerOrder: [],
   quotaAccounts: {},
-  requestWidget: { enabled: false, width: 340, radius: 36, rows: 5, materialVersion: 1, layoutVersion: 2 },
+  quotaMonitor: { lowThreshold: 0, pinned: {} },
+  antigravityHook: false,
+  antigravityMcp: false,
+  requestWidget: { enabled: false, width: 340, radius: 36, rows: 5, materialVersion: 1, layoutVersion: 2,
+    showHeatmap: true, showUsage: false, columns: widgetColumns },
+  requestMonitor: { range: "day", provider: "all", client: "all", status: "all", diagnostics: false, group: "requests" },
   conversations: { harness: "codex", pinned: false, scope: "projects", project: "", columns: { projects: 235, threads: 205 } },
   usage: { client: "all", range: "month", tab: "activity", group: "client" },
 };
@@ -33,10 +40,35 @@ class Preferences {
   validate(input) {
     const next = { ...this.state };
     if (["system", "light", "dark"].includes(input.theme)) next.theme = input.theme;
-    if (input.requestWidget && typeof input.requestWidget === 'object') {
+    if (typeof input.antigravityHook === "boolean") next.antigravityHook = input.antigravityHook;
+    if (typeof input.antigravityMcp === "boolean") next.antigravityMcp = input.antigravityMcp;
+    if (input.requestMonitor && typeof input.requestMonitor === "object" && !Array.isArray(input.requestMonitor)) {
+      const value = input.requestMonitor;
+      next.requestMonitor = { ...defaults.requestMonitor, ...next.requestMonitor };
+      for (const [key, options] of Object.entries({
+        range: ["hour", "day", "week", "all"],
+        client: ["all", "unknown", "legacy", "diagnostics", ...CLIENT_IDS],
+        status: ["all", "running", "success", "failed", "observed"],
+        group: ["requests", "model", "provider"],
+      })) {
+        if (options.includes(value[key])) next.requestMonitor[key] = value[key];
+      }
+      if (typeof value.provider === "string" && value.provider.length >= 1 && value.provider.length <= 160 &&
+          !/[\x00-\x1f]/.test(value.provider)) next.requestMonitor.provider = value.provider;
+      if (typeof value.diagnostics === "boolean") next.requestMonitor.diagnostics = value.diagnostics;
+    }
+    if (input.requestWidget && typeof input.requestWidget === 'object' && !Array.isArray(input.requestWidget)) {
       next.requestWidget = { ...defaults.requestWidget, ...next.requestWidget };
       const value = input.requestWidget;
       if (typeof value.enabled === 'boolean') next.requestWidget.enabled = value.enabled;
+      if (typeof value.showHeatmap === 'boolean') next.requestWidget.showHeatmap = value.showHeatmap;
+      if (typeof value.showUsage === 'boolean') next.requestWidget.showUsage = value.showUsage;
+      if (value.columns && typeof value.columns === 'object' && !Array.isArray(value.columns)) {
+        next.requestWidget.columns = { ...next.requestWidget.columns };
+        for (const key of Object.keys(widgetColumns)) {
+          if (typeof value.columns[key] === 'boolean') next.requestWidget.columns[key] = value.columns[key];
+        }
+      }
       for (const [key, min, max] of [['width', 320, 640], ['radius', 8, 48], ['rows', 1, 8], ['x', -100000, 100000], ['y', -100000, 100000], ['bottom', -100000, 100000]])
         if (Number.isInteger(value[key]) && value[key] >= min && value[key] <= max) next.requestWidget[key] = value[key];
     }
@@ -55,7 +87,7 @@ class Preferences {
     if (input.usage && typeof input.usage === "object") {
       next.usage = { ...defaults.usage, ...next.usage };
       for (const [key, values] of Object.entries({
-        client: ["all", "codex", "claude", "opencode", "pi", "dsh", "kimi", "zcode"],
+        client: ["all", ...clientIds("usage")],
         range: ["week", "month", "year"],
         tab: ["activity", "tokens", "quota"],
         group: ["client", "model"],
@@ -81,16 +113,17 @@ class Preferences {
           "conversations",
           "accounts",
           "diagnostics",
+          "settings",
           "updates",
         ].includes(value)
       )
         continue;
       if (
         key === "client" &&
-        !["codex", "claude", "opencode", "pi", "dsh", "cursor", "kimi", "zcode"].includes(value)
+        ![...CLIENT_IDS, "cursor"].includes(value)
       )
         continue;
-      next[key] = key === "view" && value === "accounts" ? "clients" : value;
+      next[key] = key === "view" ? ({ accounts: "clients", updates: "settings" }[value] ?? value) : value;
     }
     if (Array.isArray(input.providerOrder)) {
       if (
@@ -105,6 +138,21 @@ class Preferences {
       )
         throw Error("供应商排序格式无效");
       next.providerOrder = [...new Set(input.providerOrder)];
+    }
+    if (input.quotaMonitor && typeof input.quotaMonitor === "object") {
+      const { lowThreshold, pinned } = input.quotaMonitor;
+      next.quotaMonitor = { ...next.quotaMonitor };
+      if (Number.isInteger(lowThreshold) && lowThreshold >= 0 && lowThreshold <= 100)
+        next.quotaMonitor.lowThreshold = lowThreshold;
+      if (pinned && typeof pinned === "object" && !Array.isArray(pinned)) {
+        next.quotaMonitor.pinned = { ...next.quotaMonitor.pinned };
+        for (const [id, value] of Object.entries(pinned).slice(0, 500)) {
+          if (id.length > 160 || !/^[a-z0-9:_-]+$/i.test(id)) continue;
+          if (value === null) delete next.quotaMonitor.pinned[id];
+          else if (typeof value === "string" && value.length <= 700 && value.startsWith("["))
+            next.quotaMonitor.pinned[id] = value;
+        }
+      }
     }
     if (
       input.quotaAccounts &&

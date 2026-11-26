@@ -1,0 +1,130 @@
+.app-shell select:not([multiple], [size]) { cursor: pointer; }
+.app-shell select:disabled { cursor: default; }
+.app-shell .settings-group-heading > select {
+  flex: 0 1 clamp(10rem, 34%, 14rem);
+  width: auto;
+  max-width: 100%;
+}
+
+@supports (appearance: base-select) and selector(::picker(select)) {
+  .app-shell select:not([multiple], [size]),
+  .app-shell select:not([multiple], [size])::picker(select) { appearance: base-select; }
+
+  .app-shell select:not([multiple], [size]) { align-items: center; gap: 8px; }
+  .app-shell select::picker-icon {
+    content: "";
+    box-sizing: border-box;
+    width: 7px;
+    height: 7px;
+    margin: -3px 3px 0 auto;
+    border: solid currentColor;
+    border-width: 0 1.5px 1.5px 0;
+    rotate: 45deg;
+    transition: rotate 150ms var(--ass-menu-ease);
+  }
+  .app-shell select:open::picker-icon { rotate: 225deg; }
+  .app-shell select:open:not(:focus-visible) { border-color: var(--ass-menu-line); }
+
+  .app-shell select::picker(select) {
+    box-sizing: border-box;
+    max-block-size: min(24rem, 56vh);
+    max-inline-size: calc(100vw - 16px);
+    margin-block: 5px;
+    padding: 5px;
+    border: 1px solid var(--ass-menu-line);
+    border-radius: 12px;
+    background: var(--ass-menu-surface);
+    color: var(--ass-menu-ink);
+    box-shadow: var(--ass-menu-shadow);
+    backdrop-filter: var(--ass-menu-material);
+    overscroll-behavior: contain;
+    transform-origin: top left;
+  }
+  .app-shell select:open::picker(select) { animation: ass-picker-in 145ms var(--ass-menu-ease) both; }
+  @keyframes ass-picker-in { from { opacity: 0; scale: .97; } to { opacity: 1; scale: 1; } }
+
+  .app-shell select option {
+    display: flex;
+    align-items: center;
+    column-gap: 10px;
+    min-height: 31px;
+    padding: 6px 8px;
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    line-height: 1.45;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .app-shell select optgroup { background: transparent; color: var(--muted); }
+  .app-shell select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ass-menu-selected); }
+  .app-shell select option:checked { color: var(--ass-menu-selected); font-weight: 620; }
+  .app-shell select option:is(:hover, :focus):not(:disabled) { background: var(--ass-menu-highlight); color: var(--ass-menu-ink); }
+  .app-shell select option:focus-visible { outline: 1px solid var(--ass-menu-line); outline-offset: -1px; }
+  .app-shell select option:disabled { color: var(--muted); opacity: .75; cursor: default; }
+}
+
+/* Inline disclosures keep their context instead of becoming floating menus. */
+:where(.app-shell) details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  max-inline-size: 100%;
+  padding: 5px 8px;
+  border-radius: 8px;
+  list-style: none;
+  cursor: pointer;
+}
+:where(.app-shell) details > summary::-webkit-details-marker { display: none; }
+:where(.app-shell) details > summary::marker { content: ""; }
+.app-shell details > summary:not(:has(> .lucide-chevron-right))::after {
+  content: "";
+  box-sizing: border-box;
+  flex: 0 0 6px;
+  height: 6px;
+  margin-inline: auto 4px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  rotate: -45deg;
+  opacity: .75;
+  transition: rotate 155ms var(--ass-menu-ease);
+}
+.app-shell details[open] > summary::after { rotate: 45deg; }
+.app-shell details > summary > .lucide-chevron-right { transition: transform 155ms var(--ass-menu-ease); }
+.app-shell .more-clients > summary > .lucide-chevron-right { margin-inline-start: auto; }
+.app-shell .usage-daily-only summary { flex-wrap: wrap; }
+.app-shell .usage-daily-only summary > * { margin-inline-end: 0; }
+.app-shell .overview-reset-credits summary > time { white-space: nowrap; }
+.app-shell :is(.model-section-toggle, .usage-drill-project-heading, .monitor-model-button) {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+.app-shell :is(.model-section-toggle, .usage-drill-project-heading) { padding-inline: 8px; }
+.app-shell .usage-drill-project-heading > svg { transition: transform 155ms var(--ass-menu-ease); }
+.app-shell .monitor-model-button[aria-expanded="true"] > svg { rotate: 90deg; }
+.app-shell .monitor-model-button > svg { transition: rotate 155ms var(--ass-menu-ease); }
+.app-shell :is(details > summary, .model-section-toggle, .usage-drill-project-heading, .monitor-model-button):is(:hover, :active):not(:disabled) {
+  background: var(--ass-menu-highlight);
+}
+.app-shell :is(details > summary, .model-section-toggle, .usage-drill-project-heading, .monitor-model-button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell select:open::picker(select) { animation-name: ass-picker-fade; }
+  @keyframes ass-picker-fade { from { opacity: 0; } to { opacity: 1; } }
+  .app-shell select::picker-icon,
+  .app-shell details > summary::after,
+  .app-shell details > summary > .lucide-chevron-right,
+  .app-shell :is(.usage-drill-project-heading, .monitor-model-button, .model-section-toggle) > svg { transition: none; }
+}
+@media (forced-colors: active) {
+  .app-shell select option:is(:hover, :focus):not(:disabled),
+  .app-shell :is(details > summary, .model-section-toggle, .usage-drill-project-heading, .monitor-model-button):hover {
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+}

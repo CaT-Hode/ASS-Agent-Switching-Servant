@@ -1,36 +1,36 @@
-# Antigravity 原生识别
+# Antigravity（agy）接入与能力边界
 
-> 历史归档：ASS 已停止提供 Antigravity 客户端入口、自动扫描和账户切换。本页仅保留旧版数据格式说明，便于安全升级；不代表当前支持范围。
+Google 的 Antigravity App 是独立桌面应用，Antigravity CLI 的命令是 `agy`，另有独立的 Antigravity IDE、编辑器扩展和 Python SDK。ASS 接入范围是 Windows 上的 App、独立 IDE 和 CLI。多种产品共享本机登录，ASS 按同一份原生授权显示账户状态。[产品概览](https://antigravity.google/docs/overview/) · [授权说明](https://antigravity.google/docs/install/)
 
-当前源码支持 Windows CLI、2.0 Desktop 与独立 IDE 的安装发现，以及新原生运行时的共享 OAuth 状态读取。没有启动客户端、登录、刷新 token、修改凭据或关闭任务的隐式操作。
+## ASS 当前支持
 
-## 安装与账户
+- **Windows 安装发现与启动**：从 PATH 及 `%LOCALAPPDATA%/agy/bin/agy.exe` 等路径识别 CLI，通过产品元数据识别 App 和 IDE，支持启动原生 CLI 终端或打开桌面端。
+- **只读原生账户状态与额度**：读取 Windows 共享 OAuth 状态（`gemini:antigravity` 凭据库 / `.gemini/jetski-standalone-oauth-token`）或 `GEMINI_API_KEY` 模式；调用只读 `agy -p /usage` 与 `/credits`（0 次模型回合，需 CLI ≥ 1.1.11）展示订阅额度分组、重置时间与剩余点数。
+- **会话级三方模型注入（桌面版 & CLI，动态 Gateway 模式 + 原生多档 Effort）**：在“客户端与账户 → Antigravity → 供应商接入”中纳入任意供应商模型并选择默认模型：
+  - **独立模型启动 → 启动桌面版 / 启动终端**：以隔离的 `--user-data-dir=<dataDir>/antigravity-desktop-gateway`（桌面版）或独立进程（`agy` CLI ≥ 1.5.5）配合官方环境变量 `AGY_LLM_GATEWAY_*` 启动，不修改 `~/.gemini/antigravity-cli/settings.json` 与 `admin_settings.json`。
+  - **原生多档 Effort 切换**：ASS 通过 `GET /clients/agy/v1beta/models` 为每个支持多档思维强度的模型自动发布 `-(low|medium|high|xhigh|max)` 变体与 `thinking: true`，Antigravity 桌面版下拉框与 CLI `/effort` 会自动将同模型合并为单一条目并提供原生 Effort 档位切换，ASS 路由按所选档位向 Responses / Chat / Messages 上游透传真实 `reasoning.effort` / `output_config.effort` / `reasoning_effort`。
+  - **并行共存说明**：Antigravity 官方设计中，Gateway 模式会替换该窗口的 Google 登录后端，因此独立模型桌面窗口内仅显示 ASS 纳入的模型（若需在其中同时使用官方 Gemini，可在 ASS 添加 Google AI Studio / Gemini API 供应商）；原有的个人 Google 账号桌面窗口独立并行、官方模型与订阅额度完全保留。
+- **页首一键「ASS 接入」（实时监控 Hook + 同窗口 MCP 桥接）**：与 Codex / Claude Code 一致，在 Antigravity 页首右上角一键开启/关闭：同时管理 `~/.gemini/config/hooks.json`（仅 `ass-monitor`）与 `~/.gemini/config/mcp_config.json`（仅 `ass-router`，完整保留飞书等已有 MCP）。个人 Google 账号窗口内可在保留原官方模型下拉框的同时，通过 `ass_list_models`、`ass_ask_model`、`ass_run_agy_worker` 调用 ASS 三方模型。
+- **三端 Token 用量统计（App / CLI / IDE）**：自动扫描 `~/.gemini/{antigravity,antigravity-cli,antigravity-ide}/brain/*/.system_generated/logs/transcript.jsonl` 中的 `PLANNER_RESPONSE` 记录，按 `(conversationId, step_index)` 去重，纳入“路由总览”与 24 小时热力格。实测 Antigravity 的 `input_tokens` 不含 `cache_read_tokens`，ASS 统一按总输入（含缓存读取）归一化。
+- **三层实时请求监控**：
+  - **A. ASS 路由内（注入终端 / MCP `ass_ask_model` / MCP `ass_run_agy_worker`）**：自动接入“请求监控”与桌面悬浮窗，完整呈现进行中状态、TTFT、可见输出 TPS、缓存命中率、供应商与协议。
+  - **B. 只读 Transcript 监听（原生 App / CLI / IDE）**：后台监听新建与追加的 `transcript.jsonl`，每次原生模型调用完成后秒级记录模型与 Token 用量（跳过已由 A 层记录的 `ass-*` 模型以避免重复计数）。原生日志行的 HTTP 状态、耗时、首字延迟和输出速度显示为未知。
+  - **C. 可选全局 Hook（默认关闭）**：用户手动开启后，仅在 `~/.gemini/config/hooks.json` 中写入 `ass-monitor` 条目（保留其他已有 hook），捕获 `PreInvocation` / `PostInvocation` / `Stop` 事件以实时显示原生请求的“进行中”状态和已过时间。Hook 的调用序号与 Transcript 的步骤编号分别计数，完成行单独来自 Transcript。Hook 严格过滤掉 `lastUserInput`、工作区路径与 transcript 内容，超时 2 秒且 fail-open 输出 `{}`；关闭开关即完整撤回。[Antigravity Hook 字段](https://antigravity.google/docs/hooks/#preinvocation)
+- **原生 CLI 模型目录与只读会话列表**：在 Antigravity 客户端面板按需只读查询 `agy --version`、`agy -p /model`、`/effort` 与 `agy models`（0 次模型回合），并只读列出 App / CLI 的 `conversation_summaries.db`，CLI 会话支持一键 `agy --conversation <id>` 续聊。
 
-- CLI：PATH 中的 `agy`、`%LOCALAPPDATA%/agy/bin/agy.exe` 及官方文档中的 Program Files 路径。
-- Desktop / IDE：用户安装和 Program Files 目录，检查产品元数据，不把任意重命名 EXE 算作安装；桌面程序不接收 CLI 的登录参数。同时发现两种桌面程序时，先选择具体入口才开放“打开桌面端”。
-- 配置来源分别是 `.gemini/antigravity-cli`、`.gemini/antigravity`、`.gemini/antigravity-ide`。目录存在只表示发现客户端数据，不表示已登录。
-- 系统凭据仅查询 `gemini:antigravity`，不枚举、不读取其他服务。应用启动或刷新客户端时异步读取，最多等待 5 秒；凭据值只在主进程内解析，界面与持久化状态不接收 token。
-- 文件回退为 `.gemini/jetski-standalone-oauth-token`，支持新 `StoredToken` 对象与旧 OAuth2 Token 对象。正常优先系统条目；系统条目不存在 / 读取失败时使用原生文件；一小时内的 `cache/antigravity-keyring-unavailable` 标记使文件优先。ASS 不创建、清除或更新该标记。
-- 空的当前系统授权不会用旧文件伪装成另一个已登录账户；过期、待原生刷新、缺失访问令牌分别保留状态。不会把仅有套餐或项目信息的残留记录算作账户。
-- ASS 运行时定期检测当前原生存储的 OAuth 变化，把完整 `StoredToken` 连同恢复事务用 Windows DPAPI 加密保存；界面只拿到账户白名单字段。
-- 账户卡片可在确认后切换已保存的 OAuth。切换前重新比对当前值；写入失败会回滚，外部登录已再次改动时停止自动恢复。系统条目固定为 `gemini:antigravity`，文件回退只写原生 token 文件。
-- 自定义目录不借用默认系统凭据；测试 home 不访问宿主密钥库。路径拒绝符号链接，文件最多读取 2 MiB。
-- `modelProvider: "gemini"` 配合 `GEMINI_API_KEY` 才算 CLI API 账户。单独出现环境变量、普通 Gemini CLI 凭据、IDE UI 缓存都不是 Antigravity 登录证据。CLI API 模式与已发现 Desktop / IDE 的共享 OAuth 分开显示。
+## 明确限制与不采用的入口
 
-账户卡片只展示现有字段：Google ID Token 的邮箱、名称、用户 ID、组织域名，以及原生记录的套餐、项目、区域、授权类型与到期时间。ID Token 只解码为本机显示元数据，不作为在线验证结果；套餐为本机记录，不当作实时余额。共享 OAuth 只显示一张卡片。
+| 场景 | 说明 |
+| --- | --- |
+| 修改 Desktop 二进制 / `app.asar` 或绕过企业策略 | ASS 绝不篡改 Antigravity 可执行文件、不拦截 HTTPS 证书、不伪造组织策略；App / IDE 同窗口使用三方模型统一通过官方 MCP 桥接实现。 |
+| 持久改写 `settings.json` | 写入全局模型网关或 `modelProvider` 会影响原生 Google 账号体验，因此仅通过进程级环境变量和显式开关管理。 |
+| 登录与账号切换 | ASS 仅只读展示登录状态；登录、切换账号与退出由原生客户端或 `agy /logout` 完成。 |
+| WSL 中的 `agy` | 留待后续版本单独适配 Linux 凭据库与会话路径。 |
 
-## 尚未开放
+## 本机实测记录
 
-原生登录发起、第三方模型注入、模型请求测试及额度 / Token 查询。旧 IDE 若使用不同的专有存储，不猜测或扫描其 SQLite 密钥。当前本机没有安装 Antigravity，真实登录、换号与旧版本兼容性仍需联调。
-
-## 实现依据
-
-- [官方 CLI 安装与授权](https://antigravity.google/docs/cli/install)、[独立 IDE 说明](https://antigravity.google/docs/ide/overview/)、[官方下载页](https://antigravity.google/download)。
-- 官方更新清单提供的 [agy 1.2.9 Windows 二进制](https://storage.googleapis.com/antigravity-public/antigravity-cli/1.2.9-5905287731871744/windows-x64/cli_windows_x64.exe)，SHA512 `f903d73005b1b0374abc73de9cea260f1c80d18c9411db15dd67d05372a1a93b3560d1d8cb907125a3f00274758143c7394af490d3624dcbe82c8874ebb51a8a`。只做离线检查，未执行。
-  - `code_assist_client/token_storage.go`：StoredToken JSON 字段、keyring service `gemini`、默认文件路径和旧 Token 兼容读取。
-  - `auth_client/auth_client.go`：keyring user `antigravity`。
-  - `code_assist_client/composite_token_storage.go`：系统 / 文件优先级、失败标记与一小时有效期。
-- 官方 Google LLC 签名的 [Desktop 2.16.0 安装包](https://storage.googleapis.com/antigravity-public/antigravity-hub/2.16.0-4917332007583744/windows-x64/Antigravity-x64.exe)，仅解包：`package.json`、`dist/paths.js`、`dist/ideInstall/constants.js` 用于桌面产品身份、配置路径和 IDE 安装目录。没有安装或运行程序。
-- [go-keyring Windows 实现](https://github.com/zalando/go-keyring/blob/master/keyring_windows.go) 使用 `service:username` 作为 Generic Credential 目标。ASS 只对固定目标调用 `CredReadW`、`CredWriteW`、`CredDeleteW` 与 `CredFree`，不实现凭据枚举。
-
-这属于对指定原生版本的适配，不是 Google 对第三方账户管理器的稳定接口承诺。原生布局变化时保留“无法读取”，不代用其他账户。
+2026 年 11 月 24 日，基于本机 Antigravity App 2.34.0 与 `agy` 1.5.16 验证：
+- `AGY_LLM_GATEWAY_URL=http://127.0.0.1:<port>/clients/agy` + `AGY_LLM_GATEWAY_API_KEY=<token>` 支持本机 HTTP 回环连接（非回环才要求 HTTPS）：
+  - `AGY_LLM_GATEWAY_WIRE_PROTOCOL=genai` 自动调用 `GET /v1beta/models?pageSize=1000` 发现全部模型并展示 `displayName`，推理发往 `POST /v1beta/models/<id>:streamGenerateContent?alt=sse`（`Authorization: Bearer`），Token 统计精确对齐。
+  - `AGY_LLM_GATEWAY_WIRE_PROTOCOL=openai` 自动调用 `GET /v1/models`，推理发往 `POST /v1/chat/completions`，携带全部原生工具并原生解析 `reasoning_content` / `cached_tokens`。
+- `transcript.jsonl` 与 `--output-format stream-json` 中的 `input_tokens` 均为未命中缓存的输入数（不含 `cache_read_tokens`）。

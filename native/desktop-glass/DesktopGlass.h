@@ -83,6 +83,16 @@ DG_API HRESULT __cdecl DG_Render(DG_Handle handle, int x_px, int y_px, const DG_
 /* Worker-safe viewport and draw submission as one immutable geometry job. */
 DG_API HRESULT __cdecl DG_RenderViewport(DG_Handle handle, int x_px, int y_px,
     int width_px, int height_px, const DG_Parameters* parameters);
+/* Worker-safe single-pass render and DirectComposition swap-chain Present.
+   Returns S_OK when a new frame was presented, S_FALSE when skipped/busy. */
+DG_API HRESULT __cdecl DG_RenderPresentViewport(DG_Handle handle, int x_px, int y_px,
+    int width_px, int height_px, const DG_Parameters* parameters);
+/* UI-thread helper: reveals the composition window once the first frame exists. */
+DG_API HRESULT __cdecl DG_EnsurePresentedVisible(DG_Handle handle);
+/* Registers an optional auto-reset Win32 Event signaled immediately when a new
+   capture frame arrives (e.g. WGC FrameArrived), eliminating stationary polling delay.
+   Pass nullptr to unregister. The core duplicates the handle safely. */
+DG_API HRESULT __cdecl DG_SetFrameWakeEvent(DG_Handle handle, HANDLE wake_event);
 /* Present returns S_FALSE rather than waiting behind an active render. */
 DG_API HRESULT __cdecl DG_Present(DG_Handle handle);
 /* Hide releases active capture sessions; Show resumes the selected source. */

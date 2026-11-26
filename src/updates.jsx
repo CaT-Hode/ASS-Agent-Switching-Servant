@@ -38,7 +38,7 @@ export function UpdateBanner({ updates, onView, act }) {
       <button
         className="icon-button"
         aria-label="稍后提醒此版本"
-        title="收起此版本提示，关于页仍可查看"
+        title="收起此版本提示，可在设置中查看"
         onClick={() => act("update-dismiss", () => api.call("update-dismiss"))}
       >
         <X size={16} />
@@ -65,7 +65,6 @@ export function Updates({ state, act, busy }) {
     act("update-open", () => api.call("update-open", kind));
   return (
     <div className="updates-page">
-      <AboutBrand version={state.version} />
       <section className="update-card" aria-label="软件更新">
         <div className="update-card-heading">
           <div
@@ -113,51 +112,6 @@ export function Updates({ state, act, busy }) {
               限流重试 <strong>{date(u.retryAt)}</strong>
             </span>
           )}
-        </div>
-        <div className="update-preferences">
-          <label className="update-toggle">
-            <span><strong>开机启动</strong></span>
-            <input type="checkbox" role="switch" aria-label="开机启动" checked={state.autoStart} disabled={!!busy}
-              onChange={(e) => act("auto", () => api.call("autostart", e.target.checked))} />
-          </label>
-          <label className="update-toggle">
-            <span>
-              <strong>自动检查更新</strong>
-            </span>
-            <input
-              type="checkbox"
-              role="switch"
-              aria-label="自动检查更新"
-              checked={u.automatic}
-              disabled={!!busy && !checking}
-              onChange={(e) =>
-                act("update-preferences", () =>
-                  api.call("update-preferences", {
-                    automatic: e.target.checked,
-                  }),
-                )
-              }
-            />
-          </label>
-          <label className="update-toggle">
-            <span>
-              <strong>包含预览版本</strong>
-            </span>
-            <input
-              type="checkbox"
-              role="switch"
-              aria-label="包含预览版本"
-              checked={u.includePreview}
-              disabled={!!busy && !checking}
-              onChange={(e) =>
-                act("update-preferences", () =>
-                  api.call("update-preferences", {
-                    includePreview: e.target.checked,
-                  }),
-                )
-              }
-            />
-          </label>
         </div>
         {u.available && (
           <div className="release-panel">
@@ -226,6 +180,7 @@ export function Updates({ state, act, busy }) {
           </p>
         </div>
       </section>
+      <AboutBrand version={state.version} />
       <footer className="ass-about-footer">
         <button className="text-button" onClick={() => open("releases")}>
           所有发布版本

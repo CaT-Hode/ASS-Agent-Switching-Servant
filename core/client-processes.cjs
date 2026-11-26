@@ -3,12 +3,14 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { atomic } = require("./config.cjs");
 
+const { ids: clientIds } = require("./client-registry.cjs");
+
 const JOURNAL = "client-processes.json";
 const MAX_JOURNAL_BYTES = 256 * 1024;
 const MAX_ADAPTER_OUTPUT = 1024 * 1024;
 const MAX_SESSIONS = 128;
 const HELPER_TIMEOUT_MS = 15_000;
-const HARNESSES = new Set(["codex", "claude", "opencode", "pi", "dsh", "kimi", "zcode"]);
+const HARNESSES = new Set(clientIds("processTracked"));
 
 const PS_INSPECT = String.raw`
 $ErrorActionPreference = 'Stop'

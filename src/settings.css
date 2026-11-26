@@ -1,0 +1,96 @@
+.settings-page {
+  --settings-line: light-dark(#dce3dd, #3b433e);
+  --settings-card: light-dark(#ffffff, #282c29);
+  max-width: 1180px;
+  margin-inline: auto;
+}
+.settings-heading { display: flex; align-items: center; min-height: 42px; margin-bottom: 24px; }
+.settings-heading h2 { font-size: 27px; line-height: 1.25; font-weight: 680; }
+.settings-layout { display: grid; grid-template-columns: 170px minmax(0, 1fr); align-items: start; gap: 24px; }
+.settings-navigation { display: grid; gap: 4px; padding: 4px 0; }
+.settings-navigation button {
+  display: flex; align-items: center; gap: 11px; min-height: 41px; padding: 0 12px;
+  border: 1px solid transparent; border-radius: 9px; background: transparent;
+  color: var(--muted); text-align: left; font-size: 13px; font-weight: 540;
+}
+.settings-navigation button:hover { background: light-dark(#f2f5f2, #303631); color: var(--text, inherit); }
+.settings-navigation button[aria-current="page"] {
+  border-color: light-dark(#dde6df, #3c4a41);
+  color: light-dark(#3d604b, #c6dfcb); background: light-dark(#edf3ef, #303e34); font-weight: 620;
+}
+.settings-navigation button svg { opacity: .88; }
+.settings-section { min-width: 0; padding: 5px 0 30px; }
+.settings-section > h3 { font-size: 19px; font-weight: 650; margin-bottom: 14px; }
+.settings-group { margin-top: 26px; }
+.settings-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 28px; margin-bottom: 8px; }
+.settings-group-heading h4 { font-size: 13px; font-weight: 650; margin: 0; }
+.settings-card {
+  border: 1px solid var(--settings-line); border-radius: 13px;
+  background: var(--settings-card); box-shadow: 0 1px 2px light-dark(#29403308, #0002);
+}
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  min-height: 65px; padding: 13px 16px;
+}
+.settings-row + .settings-row { border-top: 1px solid var(--settings-line); }
+.settings-row-copy { min-width: 0; }
+.settings-row-copy strong { font-size: 13px; font-weight: 650; }
+.settings-row-copy p { font-size: 12px; color: var(--muted); line-height: 1.5; margin-top: 5px; overflow-wrap: anywhere; }
+.settings-row-copy p svg { vertical-align: -2px; margin-right: 4px; }
+.settings-row-control, .settings-row > .actions { flex: none; }
+.settings-select { min-width: 105px; min-height: 34px; font-size: 12px; }
+.settings-path { font-family: 'Cascadia Code', Consolas, monospace; overflow-wrap: anywhere; }
+.settings-card-message { margin: 0 16px 14px; font-size: 12px; color: var(--muted); }
+.settings-row .theme-control { width: 202px; margin: 0; }
+.settings-client-detail { padding: 0 16px 14px; }
+.settings-client-detail p, .settings-client-detail code { font-size: 12px; overflow-wrap: anywhere; }
+.settings-client-card .wsl-sync { margin: 5px 16px 16px; }
+.settings-section .updates-page { max-width: none; margin-top: 19px; }
+.settings-widget-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .86fr); align-items: start; gap: 16px; }
+.settings-widget-options { min-width: 0; }
+.settings-widget-range-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; align-items: stretch; padding-block: 10px 8px; }
+.settings-widget-preview { position: sticky; top: calc(var(--window-chrome-height, 44px) + 14px); min-width: 0; overflow: hidden;
+  border: 1px solid var(--settings-line); border-radius: 13px; background: var(--settings-card); }
+.settings-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 15px; }
+.settings-preview-heading h4 { margin: 0; font-size: 13px; }
+.settings-preview-heading span, .settings-widget-preview > p { font-size: 11px; color: var(--muted); }
+.settings-preview-stage { display: grid; place-items: center; min-height: 126px; padding-block: 16px;
+  background: radial-gradient(ellipse at 54% 22%, light-dark(#f0e9fc, #322644), transparent 73%),
+    linear-gradient(160deg, light-dark(#e6eef4, #1f2530), light-dark(#e2e9e7, #233434)); }
+.settings-preview-fit { position: relative; }
+.settings-preview-window { position: absolute; transform-origin: top left; }
+.settings-widget-preview > p { padding: 10px 15px; }
+.settings-group-heading h4 { flex-shrink: 0; }
+
+.settings-switch-optics { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.settings-switch {
+  position: relative; display: block; flex: none; width: 68px; height: 32px;
+  padding: 0; border: 0; border-radius: 16px; background: transparent;
+  overflow: visible; touch-action: none; user-select: none;
+  --switch-off: rgb(148 148 159 / .47);
+  --switch-on: rgb(59 191 78 / .93);
+}
+.settings-switch span { pointer-events: none; position: absolute; }
+.settings-switch-rail {
+  inset: 50% 0 auto; height: 28.475px; translate: 0 -50%; border-radius: 999px;
+  background: color-mix(in srgb, var(--switch-off), var(--switch-on) var(--switch-amount, 0%));
+}
+.settings-switch[aria-checked="true"] { --switch-amount: 100%; --switch-x: 24.6075px; }
+.settings-switch-lens {
+  top: 50%; left: -9.32875px; border-radius: 19.55px;
+  translate: var(--switch-x, 0px) -50%; scale: var(--switch-sx, .65) var(--switch-sy, .65);
+  box-shadow: 0 2px 9px #00000020;
+}
+.settings-switch[data-moving] .settings-switch-lens { will-change: translate, scale; }
+.settings-switch-material { inset: 0; border-radius: inherit; overflow: hidden; }
+.settings-switch-fill { inset: 0; border-radius: inherit; background: rgb(255 255 255 / var(--switch-fill, 1)); }
+.settings-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .settings-switch-refraction { display: none; }
+  .settings-switch-fill { background: #fff; }
+}
+@media (forced-colors: active) {
+  .settings-switch-rail { forced-color-adjust: none; background: Canvas; border: 1px solid ButtonText; }
+  .settings-switch[aria-checked="true"] .settings-switch-rail { background: Highlight; }
+  .settings-switch-fill { forced-color-adjust: none; background: ButtonFace; border: 1px solid ButtonText; }
+}

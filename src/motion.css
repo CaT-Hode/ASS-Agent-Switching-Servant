@@ -48,7 +48,7 @@
 details > summary > svg { transform-origin: center; }
 details[open] > summary > .lucide-chevron-right { transform: rotate(90deg); }
 @media (prefers-reduced-motion: no-preference) {
-  .app-shell[data-input="pointer"] button:active:not(:disabled, .theme-toggle) { transform: scale(.97); }
+  .app-shell[data-input="pointer"] button:active:not(:disabled, .theme-toggle, .settings-switch) { transform: scale(.97); }
 }
 .app-shell[data-input="keyboard"] :is(button, summary, .client-glyph) { transition: none !important; }
 @media (prefers-reduced-motion: reduce) {

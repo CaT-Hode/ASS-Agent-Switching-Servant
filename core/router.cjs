@@ -5,18 +5,23 @@ const { SseMonitor } = require("./sse-monitor.cjs");
 const { RequestMetrics } = require('./request-metrics.cjs');
 const { readTaskJSON } = require('./task-outcome.cjs');
 const { forwardHarness, authorized } = require("./harness-route.cjs");
+const { forwardAntigravity } = require("./agy-route.cjs");
 const { providerSessionHeaders, protocolEndpoint } = require("./provider-transport.cjs");
 const crypto = require("node:crypto");
 const { toolBridge } = require("./tool-bridge.cjs");
 const { needsResponsesToolBridge, nativeDeepSeek } = require('./deepseek-compat.cjs');
 const { readJSON, readBytes } = require("./request-body.cjs");
+const { write } = require("./stream-write.cjs");
+const { ids: clientIds } = require("./client-registry.cjs");
 const { officialCodexHistory } = require("./response-history.cjs");
+const { officialApiService } = require('./client-policy.cjs');
+const { plaintextCollaborationEvent, plaintextCollaborationResponse } = require('./codex-collaboration.cjs');
 const { withOutputLimit } = require('./output-tokens.cjs');
 const { woyaoGemini, mifyTeamGemini } = require('./gemini-compat.cjs');
-const { classifyFailure, diagnosticError, responseFailure } = require('./diagnostic-failure.cjs');
+const { diagnosticError, requestFailure, responseFailure } = require('./diagnostic-failure.cjs');
 const { CodexCompaction, requested: compactionRequested } = require('./codex-compaction.cjs');
 const { CodexReasoning } = require('./codex-reasoning.cjs');
-const { officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
+const { officialRequestHeaders, upstreamResponseHeaders, upstreamRequestId,
   summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexImagesRequest, codexWorkspaceRequest } = require('./http-passthrough.cjs');
 // The stable OpenAI provider can use native ChatGPT/API credentials or an ASS
 // local fallback. They authenticate this loopback client only; injected model
@@ -30,16 +35,6 @@ function accountlessCredentialError(credential) {
   if (/^[a-f0-9]{64}$/i.test(credential))
     return "无账号模式：本机接入凭据已变化，请重新打开 Codex 加载当前配置";
   return "无账号模式已启用，请重新启动客户端加载本机接入凭据";
-}
-async function write(res, data) {
-  if (res.destroyed) throw Error("客户端已断开");
-  if (!res.write(data)) await new Promise((resolve, reject) => {
-    const cleanup = () => { res.off("drain", done); res.off("close", closed); res.off("error", failed); };
-    const done = () => { cleanup(); resolve(); };
-    const failed = (error) => { cleanup(); reject(error); };
-    const closed = () => failed(Error("客户端已断开"));
-    res.once("drain", done); res.once("close", closed); res.once("error", failed);
-  });
 }
 function routeFor(body, state, suffix = "") {
   if (typeof body.model !== "string" || !body.model)
@@ -74,6 +69,14 @@ function routeFor(body, state, suffix = "") {
       { status: 400 },
     );
   const updated = { ...(suffix ? body : withOutputLimit(body, m, 'openai-responses')), model: m.model };
+  // Codex can add OpenAI output-token replay on the built-in provider even
+  // when ASS routes the resolved model to a MiMo Responses gateway.
+  if (!suffix && m.wireApi === 'openai-responses' && /(?:^|\/)mimo-/i.test(m.model) &&
+      Array.isArray(updated.include) && updated.include.includes('output.encrypted_content')) {
+    const include = updated.include.filter(item => item !== 'output.encrypted_content');
+    if (include.length) updated.include = include;
+    else delete updated.include;
+  }
   if (updated.reasoning?.effort)
     updated.reasoning = {
       ...updated.reasoning,
@@ -105,6 +108,8 @@ class Router {
     getOfficialAuth,
     getNativeCredential,
     compactionCrypto,
+    onAgyEvent,
+    onAgyMcp,
   }) {
     this.getState = getState;
     this.fetch = fetchUpstream;
@@ -113,6 +118,8 @@ class Router {
     this.onActivity = onActivity;
     this.getOfficialAuth = getOfficialAuth;
     this.getNativeCredential = getNativeCredential;
+    this.onAgyEvent = onAgyEvent;
+    this.onAgyMcp = onAgyMcp;
     this.compaction = new CodexCompaction(compactionCrypto);
     this.reasoning = new CodexReasoning(compactionCrypto);
     this.requests = new Map();
@@ -185,7 +192,7 @@ class Router {
     });
   }
   async cancelClient(id) {
-    if (!["codex", "claude", "opencode", "pi", "dsh"].includes(id)) throw Error("无效的请求终止范围");
+    if (!clientIds("route").includes(id)) throw Error("无效的请求终止范围");
     // The caller blocks new admissions first. Never abort another client's or
     // a diagnostic request when restarting one desktop.
     for (const [req, pending] of this.requests) if (pending.client === id) {
@@ -224,7 +231,8 @@ class Router {
       )), 300000);
     };
     let httpStatus = null;
-    let upstream;
+    let upstreamId, upstreamFailure;
+    let failureLayer = 'local';
     let forwardingError = false;
     let compacting = false;
     let omittedTools = [];
@@ -241,15 +249,36 @@ class Router {
           req.headers.host !== `localhost:${localPort}`)
       )
         throw Object.assign(new Error("仅允许本机应用请求"), { status: 403 });
+      if (req.url === "/agy-events") {
+        if (req.method !== "POST") throw Object.assign(new Error("仅支持 POST"), { status: 405 });
+        const token = String(req.headers["x-ass-hook-token"] || "");
+        if (!authorized(token, this.clientToken))
+          throw Object.assign(new Error("无效监控事件凭据"), { status: 401 });
+        const payload = await readJSON(req, 64 * 1024);
+        this.onAgyEvent?.(payload);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"ok":true}');
+        return;
+      }
+      if (req.url === "/agy-mcp" || req.url.startsWith("/agy-mcp/")) {
+        if (!this.onAgyMcp)
+          throw Object.assign(new Error("Antigravity MCP 桥接未启用"), { status: 404 });
+        client = "antigravity";
+        this.requests.set(req, { client, res, controller });
+        this.onActivity();
+        await this.onAgyMcp(this, req, res);
+        return;
+      }
       if (req.url !== "/health") {
         if (/^\/(?:clients\/codex|v1)(?:\/|$)/.test(req.url))
           throw Object.assign(Error("旧路由入口已移除，请重新同步 ASS 接入配置"), { status: 404 });
-        const scoped = /^\/clients\/(ASS|claude|opencode|pi|dsh)(\/.*)$/.exec(
+        const scoped = /^\/clients\/(ASS|claude|opencode|pi|dsh|agy)(\/.*)$/.exec(
           req.url,
         );
         client =
           scoped?.[1] || (req.url.startsWith("/harness/") ? "legacy" : "codex");
         if (client === "ASS") client = "codex"; // Public route name; same auth, isolation and lifecycle.
+        if (client === "agy") client = "antigravity";
         if (scoped) req.url = scoped[2];
         if (req.url.startsWith("/diagnostics/")) {
           if (req.headers["x-ass-probe-token"] !== this.clientToken)
@@ -271,6 +300,10 @@ class Router {
         // Count at admission, including uploads: a stop must not race a request body.
         this.requests.set(req, { client, res, controller });
         this.onActivity();
+      }
+      if (client === "antigravity") {
+        await forwardAntigravity(this, req, res);
+        return;
       }
       if (req.url.startsWith("/harness/") || req.url.startsWith("/models/")) {
         await forwardHarness(this, req, res);
@@ -313,12 +346,14 @@ class Router {
         });
         if (images) route = { source: 'OpenAI 官方图片', body: {} };
         const body = (workspaceRelay || images) && !['GET','HEAD'].includes(req.method) ? await readBytes(req) : undefined;
+        failureLayer = 'network';
         const response = await this.fetch(bootstrap.upstreamUrl, {
           method: workspaceRelay || images ? req.method : "GET", headers, ...(body ? { body } : {}), signal: controller.signal,
           redirect: "error", credentials: "omit",
         }, "system");
         httpStatus = response.status;
-        upstream = upstreamDiagnostics(response, secrets);
+        failureLayer = 'upstream';
+        upstreamId = upstreamRequestId(response.headers, secrets);
         res.writeHead(response.status, {
           ...upstreamResponseHeaders(response.headers, secrets),
           "content-type": response.headers.get("content-type") || "application/octet-stream",
@@ -332,14 +367,14 @@ class Router {
         else if (response.body) for await (const chunk of response.body) await write(res, chunk);
         if (!response.ok) {
           const summary = summarizeUpstreamError(sample, response.status, response.headers.get("content-type"), secrets);
-          upstream.errorKind = summary.kind;
-          if (summary.title) upstream.title = summary.title;
+          upstreamFailure = summary.diagnostic;
         }
         res.end();
         this.log({
           time: new Date().toISOString(), source: images ? 'OpenAI 官方图片' : workspaceRelay ? "OpenAI 官方服务" : "OpenAI 官方账户设置", model: "",
           status: response.status, ms: Date.now() - began, ok: response.ok,
-          httpStatus, httpOk: response.ok, taskOk: response.ok, requestId, upstream,
+          httpStatus, httpOk: response.ok, taskOk: response.ok, requestId, upstreamRequestId: upstreamId,
+          ...(upstreamFailure ? { failure: upstreamFailure.failure, error: upstreamFailure.message } : {}),
         });
         return;
       }
@@ -422,12 +457,15 @@ class Router {
         route.protocol === "openai-responses"
           ? bridge?.request || portable.body
           : convertRequest(bridge.request, route.model, route.protocol);
+      const foreignCodex = client === 'codex' && !route.official && officialApiService(route.provider) !== 'openai';
+      const outputEvent = foreignCodex ? plaintextCollaborationEvent : undefined;
       this.active++;
       this.controllers.add(controller);
       armTimeout(true);
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
       });
+      failureLayer = 'network';
       const upstreamResponse = await this.fetch(
         route.url,
         {
@@ -443,8 +481,9 @@ class Router {
       armTimeout(true);
       const response = metrics.observe(upstreamResponse, controller.signal, () => armTimeout(true));
       httpStatus = response.status;
-      if (pending?.monitor) pending.monitor.httpStatus = httpStatus;
-      upstream = upstreamDiagnostics(response, secrets);
+      failureLayer = 'upstream';
+      upstreamId = upstreamRequestId(response.headers, secrets);
+      if (pending?.monitor) Object.assign(pending.monitor, { httpStatus, upstreamRequestId: upstreamId });
       if (!response.ok) {
         if (client === 'diagnostics')
           throw diagnosticError(await responseFailure(response, { signal: controller.signal }));
@@ -457,16 +496,16 @@ class Router {
           });
           const sample = await forwardErrorBody(response, chunk => write(res, chunk), secrets);
           const summary = summarizeUpstreamError(sample, response.status, response.headers.get('content-type'), secrets);
-          upstream.errorKind = summary.kind;
-          if (summary.title) upstream.title = summary.title;
+          upstreamFailure = summary.diagnostic;
           res.end();
           throw Object.assign(Error(summary.message), { status: response.status, code: 'upstream_http_error' });
         }
         const sample = await forwardErrorBody(response, () => {}, secrets);
         const summary = summarizeUpstreamError(sample, response.status, response.headers.get('content-type'), secrets);
-        upstream.errorKind = summary.kind;
+        upstreamFailure = summary.diagnostic;
         throw Object.assign(new Error(summary.message), { status: response.status, code: 'upstream_http_error' });
       }
+      if (route.protocol !== 'openai-responses' || (body.stream !== false && !match[1])) failureLayer = 'stream';
       if (compacting) {
         const checkpoint = await this.compaction.collect(response, route.protocol, controller.signal, body.model);
         controller.signal.throwIfAborted();
@@ -482,7 +521,7 @@ class Router {
           const restored = reasoningView ? reasoningView.response(toolsRestored) : toolsRestored;
           res.writeHead(response.status, { 'content-type': 'application/json',
             'x-ass-provider': route.provider.id, 'x-ass-request-id': requestId });
-          await write(res, JSON.stringify(restored));
+          await write(res, JSON.stringify(foreignCodex ? plaintextCollaborationResponse(restored) : restored));
         } else {
           res.writeHead(response.status, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache',
             'x-ass-provider': route.provider.id, 'x-ass-request-id': requestId });
@@ -490,21 +529,24 @@ class Router {
           let events = nativeResponsesEvents(response.body, controller.signal);
           if (reasoningView) events = reasoningView.restore(events);
           if (bridge) events = bridge.restore(events);
-          for await (const event of events)
+          for await (const original of events) {
+            const event = outputEvent ? outputEvent(original) : original;
             await write(res, `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          }
         }
       } else if (route.protocol === "openai-responses") {
         let contentType = response.headers.get("content-type");
         const streaming = body.stream !== false && !match[1];
         if (!streaming) {
-          const { text } = await readTaskJSON(response);
+          const { text, value } = await readTaskJSON(response);
+          const projected = foreignCodex ? plaintextCollaborationResponse(value) : value;
           res.writeHead(response.status, { ...(route.official ? upstreamResponseHeaders(response.headers, secrets) : {}),
             'content-type': response.headers.get('content-type') || 'application/json',
             'x-ass-provider': route.official ? 'official' : route.provider.id, 'x-ass-request-id': requestId });
-          await write(res, text);
+          await write(res, projected === value ? text : JSON.stringify(projected));
         } else {
         const reader = response.body.getReader();
-        const monitor = streaming ? new SseMonitor() : null;
+        const monitor = streaming ? new SseMonitor(outputEvent) : null;
         let streamError;
         let observedCR = false;
         const emit = async (chunk, done = false) => {
@@ -588,22 +630,24 @@ class Router {
           )
             final = event.response;
         res.writeHead(200, { "content-type": "application/json" });
-        res.write(JSON.stringify(final));
+        res.write(JSON.stringify(foreignCodex ? plaintextCollaborationResponse(final) : final));
       } else {
         res.writeHead(200, {
           "content-type": "text/event-stream",
           "cache-control": "no-cache",
         });
         res.flushHeaders();
-        for await (const event of bridge.restore(translateStream(
+        for await (const original of bridge.restore(translateStream(
           response.body,
           route.protocol,
           body.model,
-        )))
+        ))) {
+          const event = outputEvent ? outputEvent(original) : original;
           await write(
             res,
             `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
           );
+        }
       }
       res.end();
       this.log({
@@ -614,7 +658,7 @@ class Router {
         ms: Date.now() - began,
         ok: true,
         httpStatus, httpOk: httpStatus >= 200 && httpStatus < 300, taskOk: true,
-        requestId, upstream,
+        requestId, upstreamRequestId: upstreamId,
         client, protocol: route.protocol, providerId: route.official ? 'official' : route.provider.id,
         startedAt: new Date(began).toISOString(),
         ...metrics.snapshot(),
@@ -623,8 +667,8 @@ class Router {
       });
     } catch (error) {
       if (controller.signal.reason?.name === 'TimeoutError') error = controller.signal.reason;
-      const diagnostic = client === 'diagnostics' || error?.diagnostic
-        ? classifyFailure(error, { httpStatus, layer: httpStatus ? 'upstream' : route ? 'network' : 'local' }) : null;
+      const observedFailure = upstreamFailure || metrics.taskFailure || requestFailure(error, { httpStatus, layer: failureLayer, signal: controller.signal });
+      const diagnostic = client === 'diagnostics' || error?.diagnostic ? observedFailure : null;
       const responseStatus = diagnostic?.httpStatus >= 400 ? diagnostic.httpStatus : error.status || 502;
       let message = controller.signal.aborted && error.name !== 'TimeoutError'
         ? "请求已取消"
@@ -664,8 +708,9 @@ class Router {
         ms: Date.now() - began,
         ok: false,
         httpStatus, httpOk: httpStatus !== null && httpStatus >= 200 && httpStatus < 300, taskOk: false,
-        error: message.slice(0, 500),
-        requestId, upstream,
+        error: observedFailure.message,
+        failure: observedFailure.failure,
+        requestId, upstreamRequestId: upstreamId,
         client, protocol: route?.protocol, providerId: route?.official ? 'official' : route?.provider?.id,
         startedAt: new Date(began).toISOString(),
         ...metrics.snapshot(),

@@ -1,0 +1,68 @@
+:root {
+  --ass-menu-surface: light-dark(rgb(251 252 251 / .94), rgb(43 45 44 / .96));
+  --ass-menu-line: light-dark(#2d3c322b, #ffffff22);
+  --ass-menu-ink: light-dark(#252a27, #f2f4f2);
+  --ass-menu-highlight: light-dark(#63806821, #b1ceba2b);
+  --ass-menu-selected: light-dark(#31563b, #d5efdb);
+  --ass-menu-shadow: 0 3px 8px #00000015, 0 14px 35px light-dark(#212b2330, #0009);
+  --ass-menu-material: blur(18px) saturate(1.22);
+  --ass-menu-ease: cubic-bezier(.16, 1, .3, 1);
+}
+
+.ass-menu-panel {
+  box-sizing: border-box;
+  padding: 5px;
+  border: 1px solid var(--ass-menu-line);
+  border-radius: 12px;
+  background: var(--ass-menu-surface);
+  color: var(--ass-menu-ink);
+  box-shadow: var(--ass-menu-shadow);
+  backdrop-filter: var(--ass-menu-material);
+  overscroll-behavior: contain;
+  transform-origin: var(--ass-menu-origin, top right);
+}
+.ass-menu-panel[popover] {
+  opacity: 0;
+  transform: scale(.965);
+  pointer-events: none;
+  transition: opacity 130ms ease, transform 170ms var(--ass-menu-ease), display 170ms allow-discrete, overlay 170ms allow-discrete;
+}
+.ass-menu-panel:popover-open { opacity: 1; transform: none; pointer-events: auto; }
+@starting-style {
+  .ass-menu-panel:popover-open { opacity: 0; transform: scale(.965); }
+}
+.ass-menu-panel > [role="menuitem"] {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; min-height: 32px; padding: 7px 9px;
+  border: 0; border-radius: 7px; background: transparent;
+  color: inherit; font: inherit; font-size: 12px; text-align: left;
+  line-height: 1.4; white-space: nowrap; cursor: pointer;
+}
+.ass-menu-panel > [role="menuitem"] > svg { flex: none; opacity: .8; }
+.ass-menu-panel > [role="menuitem"]:is(:hover, :focus-visible, :active):not(:disabled) { background: var(--ass-menu-highlight); }
+.ass-menu-panel > [role="menuitem"]:focus-visible { outline: 1px solid var(--ass-menu-line); outline-offset: -1px; }
+.ass-menu-panel > [role="menuitem"]:disabled { opacity: .47; cursor: default; }
+.ass-menu-panel > [role="menuitem"][data-danger] { color: light-dark(#a12c41, #ffc2ca); }
+.ass-menu-panel > [role="menuitem"][data-danger]:is(:hover, :focus-visible):not(:disabled) { background: light-dark(#a12c4117, #ff718b29); }
+.action-menu { position: relative; flex: none; }
+.action-menu-trigger[aria-expanded="true"] { background: var(--ass-menu-highlight); }
+.action-menu-panel {
+  position: fixed; inset: auto;
+  top: anchor(bottom); right: anchor(right);
+  min-width: 10.5rem; max-width: calc(100vw - 16px);
+  max-height: min(24rem, calc(100vh - 24px)); overflow: auto;
+  margin: 5px 0 0;
+  position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ass-menu-panel[popover] { transform: none; transition: opacity 75ms ease, display 75ms allow-discrete, overlay 75ms allow-discrete; }
+  @starting-style { .ass-menu-panel:popover-open { transform: none; } }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :root { --ass-menu-surface: light-dark(#fff, #282a29); --ass-menu-line: light-dark(#768078, #acb8b0); --ass-menu-material: none; }
+}
+@media (forced-colors: active) {
+  :root { --ass-menu-surface: Canvas; --ass-menu-line: ButtonText; --ass-menu-ink: CanvasText; --ass-menu-selected: HighlightText; --ass-menu-highlight: Highlight; --ass-menu-shadow: none; --ass-menu-material: none; }
+  .ass-menu-panel > [role="menuitem"]:is(:hover, :focus-visible):not(:disabled) { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+}

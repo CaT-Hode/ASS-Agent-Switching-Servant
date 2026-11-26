@@ -43,6 +43,10 @@ backups/
 requests.jsonl*
 test-results/
 playwright-report/
+tests/
+skills/
+SKILL.md
+/scripts/*-qa.cjs
 native/build/
 native/bin/
 *.pem

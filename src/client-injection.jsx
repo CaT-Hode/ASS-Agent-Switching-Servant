@@ -1,12 +1,42 @@
-import React from "react";
-import { ChevronRight, Layers3, Terminal, Monitor } from "./icons.jsx";
+import React, { useState } from "react";
+import { ChevronRight, Layers3, Terminal, Monitor, Search } from "./icons.jsx";
 import { providerBrand } from "./provider-brand.mjs";
 const api = window.ass;
 const protocols = { "openai-chat": "Chat Completions", "openai-responses": "Responses", anthropic: "Anthropic Messages" };
 
+function AntigravityAddons({ state, act, busy }) {
+  const hook = state.antigravity?.hook;
+  const mcp = state.antigravity?.mcp;
+  const items = [
+    ["原生请求观测", "在请求监控中显示官方会话的进行中状态。", hook, !!hook?.enabled, "antigravity-hook-toggle"],
+    ["个人窗口 MCP 桥", "在现有 Google 账号窗口通过 ass-router 调用已纳入模型。", mcp, !!mcp?.installed, "antigravity-mcp-toggle"],
+  ];
+  return <div className="agy-connection-options" aria-label="Antigravity 原生接入选项">
+    {items.map(([label, description, status, enabled, action]) => (
+      <div className="accountless-control" key={action}>
+        <div><strong>{label}</strong><small>{description}</small>
+          {status?.error && <small className="danger" role="status">{status.error}</small>}
+        </div>
+        <span className="agy-addon-status">{enabled
+          ? state.service?.running ? "已开启" : "已配置 · 路由未运行"
+          : "未开启"}</span>
+        <button type="button" role="switch" className="provider-injection-switch" aria-label={label}
+          aria-checked={enabled} disabled={!!busy || !!status?.error} title={status?.error}
+          onClick={() => act(action, () => api.call(action, !enabled))}><i /></button>
+      </div>
+    ))}
+  </div>;
+}
+
 export function ClientInjection({ client, state, act, busy, onManage }) {
+  const [search, setSearch] = useState("");
+  const [modelFilter, setModelFilter] = useState("all");
   const injection = client.injection || { models: [], excludedProviders: [] };
   const groups = Map.groupBy(injection.models, (m) => m.providerId);
+  const query = search.trim().toLowerCase();
+  const matches = m => (modelFilter === "all" || (modelFilter === "included" ? m.included : m.issue)) &&
+    (!query || [m.providerName, m.model, m.name].some(value => value?.toLowerCase().includes(query)));
+  const visibleGroups = [...groups].map(([id, all]) => [id, all, all.filter(matches)]).filter(([, , models]) => models.length);
   const connection = state.connections.clients[client.id];
   const wsl = state.wslSync?.clients[client.id];
   const wslExcluded = new Set(wsl?.excludedProviders);
@@ -14,8 +44,11 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
     : !connection.applied ? connection.syncError ? "无账号配置异常 · 请修复接入" : "无账号配置待同步"
     : "";
   const excluded = new Set(injection.excludedProviders || []);
-  const enabled = [...groups].filter(([id, models]) => !excluded.has(id) && models.some((m) => !m.issue)).length;
-  const defaultModels = ['codex', 'claude'].includes(client.id) ? injection.models.filter((m) => m.included && !m.issue) : [];
+  const enabled = [...groups.values()].filter(models => models.some(m => m.included)).length;
+  const setIncluded = (models, included) => act("client-model-selection", () => api.call("client-injection", client.id, {
+    modelSelection: { refs: models.map(m => m.ref), included },
+  }));
+  const defaultModels = ['codex', 'claude', 'antigravity'].includes(client.id) ? injection.models.filter((m) => m.included && !m.issue) : [];
   const officialModels = connection?.accountless ? [] : injection.officialModels || [];
   const selectedDefault = [...officialModels, ...defaultModels].some(m => m.ref === injection.defaultModel) ? injection.defaultModel : '';
   const selectedReview = defaultModels.some(m => m.ref === injection.autoModeModel) ? injection.autoModeModel : '';
@@ -49,17 +82,34 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
         <small>与无账号开关联动，使用时 ASS 需保持运行。</small>
       </div>
     </details>}
+    {client.id === "antigravity" && <>
+      <AntigravityAddons {...{ state, act, busy }} />
+      <div className="accountless-control">
+      <div>
+        <strong>独立 ASS 模型窗口</strong>
+        <small>独立配置并行启动，下拉框直接显示已纳入模型与多档 Effort；不影响现有个人账号窗口。</small>
+      </div>
+      {client.launcher?.ready && <button className="button" disabled={!!busy || !defaultModels.length}
+        title={!defaultModels.length ? "请先在下方纳入至少一个供应商模型" : "以 ASS 第三方模型启动独立的 agy CLI 终端"}
+        onClick={() => act("antigravity-model-launch", () => api.call("antigravity-model-launch", selectedDefault || defaultModels[0]?.ref || null), "已打开 Antigravity ASS 模型终端")}>
+        <Terminal size={15} />启动终端</button>}
+      {client.desktop && <button className="button" disabled={!!busy || !defaultModels.length}
+        title={!defaultModels.length ? "请先在下方纳入至少一个供应商模型" : "以独立配置目录启动 ASS 模型桌面版，下拉框直接显示全部 ASS 模型与 Effort 档位"}
+        onClick={() => act("antigravity-desktop-launch", () => api.call("antigravity-desktop-launch", selectedDefault || defaultModels[0]?.ref || null))}>
+        <Monitor size={15} />启动桌面版</button>}
+      </div>
+    </>}
     {client.id === 'codex' && !connection?.enabled && (connection?.resumeRecovery?.count > 0 || connection?.resumeRecovery?.pending) && <button
       className="button" disabled={!!busy || state.connections.busy}
       title="恢复 ASS 对话的官方供应商和模型绑定；需先关闭 Codex"
       onClick={() => onManage({ scope: client.id, enabled: false, restoreSessions: true, name: client.name })}>恢复官方续聊</button>}
-    {['codex', 'claude'].includes(client.id) && (defaultModels.length > 0 || officialModels.length > 0) && <label className="client-default-model">
+    {['codex', 'claude', 'antigravity'].includes(client.id) && (defaultModels.length > 0 || officialModels.length > 0) && <label className="client-default-model">
       <span>{client.id === 'claude' ? 'CLI 默认模型' : '默认模型'}</span>
-      <select aria-label={client.id === 'claude' ? 'Claude Code CLI 默认模型' : 'Codex 默认模型'} value={selectedDefault} disabled={!!busy || state.connections.busy}
+      <select aria-label={client.id === 'claude' ? 'Claude Code CLI 默认模型' : client.id === 'antigravity' ? 'Antigravity 默认模型' : 'Codex 默认模型'} value={selectedDefault} disabled={!!busy || state.connections.busy}
         onChange={(e) => act("client-injection-default", () => api.call("client-injection", client.id, {
           excludedProviders: [...excluded], defaultModel: e.target.value || null,
         }))}>
-        <option value="">自动选择首个已纳入模型</option>
+        <option value="">自动选择</option>
         {officialModels.length > 0 && <optgroup label="OpenAI 官方订阅">{officialModels.map(m => <option key={m.ref} value={m.ref}>{m.name || m.model}</option>)}</optgroup>}
         {defaultModels.length > 0 && <optgroup label="已注入模型">{defaultModels.map((m) => <option key={m.ref} value={m.ref}>{m.providerName} / {m.name || m.model}</option>)}</optgroup>}
       </select>
@@ -99,20 +149,34 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
       展开供应商，在模型菜单中设置工具兼容。工具调用变成普通文字时可切换“兼容模式”；更改后同步接入生效。
     </p>}
     {!client.injectionUnsupported && groups.size > 0 && <p className="codex-tool-mode-hint">
-      {client.id === 'claude' ? '已检测支持 Messages 的模型固定使用原生 Messages；其他模型可选择兼容协议。' : '可为每个模型选择接口协议，仅影响此客户端；自动模式按检测结果选择。'}更改后同步接入生效。
+      {client.id === 'claude' ? '已检测支持 Messages 的模型固定使用原生 Messages；其他模型可选择兼容协议。' : client.id === 'antigravity' ? '可为每个模型选择接口协议；多档思维强度自动分组为 Antigravity 可切换 Effort。个人账号窗口开启右上角接入后可通过 MCP 调用，官方模型与额度保持不变。' : '可为每个模型选择接口协议，仅影响此客户端；自动模式按检测结果选择。'}{client.id === 'antigravity' ? '' : '更改后同步接入生效。'}
     </p>}
+    {!client.injectionUnsupported && groups.size > 0 && <div className="injection-model-filters">
+      <label className="injection-model-search"><Search size={15} />
+        <input type="search" aria-label="搜索接入供应商或模型" placeholder="搜索供应商或模型" value={search}
+          onChange={event => setSearch(event.target.value)} />
+      </label>
+      <select aria-label="筛选接入模型" value={modelFilter} onChange={event => setModelFilter(event.target.value)}>
+        <option value="all">全部模型</option>
+        <option value="included">已纳入</option>
+        <option value="issues">有问题</option>
+      </select>
+    </div>}
     {wsl?.binary && wsl.error && <p className="error-box" role="status">WSL 同步失败：{wsl.error}</p>}
     {client.injectionUnsupported ? <p className="client-support-note">{client.injectionUnsupported}</p> :
-      groups.size ? <div className="client-provider-list">{[...groups].map(([id, models]) => {
+      visibleGroups.length ? <div className="client-provider-list">{visibleGroups.map(([id, all, models]) => {
         const provider = state.providers.find((p) => p.id === id);
         const brand = providerBrand(provider || {}, state.officialProviderIds?.[id]);
-        const compatible = models.filter((m) => !m.issue);
+        const compatible = all.filter((m) => !m.issue);
         const checked = !excluded.has(id) && compatible.length > 0;
+        const toInclude = models.filter(m => !m.issue && !m.included);
+        const toExclude = models.filter(m => m.included);
+        const disabled = !!busy || state.connections.busy;
         const wslChecked = !wslExcluded.has(id);
         const wslHint = !wsl?.enabled ? '请先在客户端设置中打开 WSL 自动同步。' :
           '开启后，此供应商在 Windows 已接入的模型会同步到 WSL；关闭只撤回 WSL 中的接入。新开的 WSL 会话会读取配置。';
         return <section className="client-provider" key={id} aria-label={models[0].providerName + " 接入供应商"}>
-          <details>
+          <details open={query || modelFilter !== "all" ? true : undefined}>
             <summary><span className="client-provider-logo" aria-hidden="true">{brand ? <img src={"./providers/" + brand + ".svg"} alt="" /> : <Layers3 size={21} data-motion-icon={undefined} />}</span>
               <strong>{models[0].providerName}</strong>
               {wsl?.binary && <span className="wsl-provider-toggle" title={wslHint}>
@@ -125,10 +189,22 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
                     act('wsl-configure', () => api.call('wsl-configure', client.id, { providerId: id, enabled: !wslChecked }));
                   }}><i /></button>
               </span>}
-              <small>{compatible.length} 个模型</small><ChevronRight className="provider-disclosure" size={16} /></summary>
+              <small>{all.filter(m => m.included).length} / {compatible.length} 已纳入</small><ChevronRight className="provider-disclosure" size={16} /></summary>
+            {checked && <div className="injection-model-bulk">
+              <button type="button" className="button" disabled={disabled || !toInclude.length}
+                onClick={() => setIncluded(toInclude, true)}>{query || modelFilter !== "all" ? "纳入筛选结果" : "纳入全部模型"}</button>
+              <button type="button" className="button" disabled={disabled || !toExclude.length}
+                onClick={() => setIncluded(toExclude, false)}>{query || modelFilter !== "all" ? "排除筛选结果" : "排除全部模型"}</button>
+            </div>}
             <div className="client-provider-models">{models.map((m) => <div key={m.ref} className={m.issue ? "unavailable" : ""}>
-              <span title={m.model}>{m.name || m.model}<small>{m.name !== m.model ? m.model : ""}</small>
-                <small>{m.issue || m.adapter || protocols[m.protocol] || m.protocol}</small></span>
+              <label className="injection-model-choice">
+                <input type="checkbox" aria-label={`纳入 ${m.providerName} / ${m.name || m.model}`}
+                  checked={m.included} disabled={disabled || !checked || !!m.issue}
+                  title={m.issue || (!checked ? "请先开启此供应商接入" : undefined)}
+                  onChange={event => setIncluded([m], event.target.checked)} />
+                <span title={m.model}>{m.name || m.model}{m.name && m.name !== m.model && <small>{m.model}</small>}
+                  <small>{m.issue || m.adapter || protocols[m.protocol] || m.protocol}</small></span>
+              </label>
               <div className="client-model-controls">
               <label className="model-protocol">
                 <span>接口协议</span>
@@ -163,11 +239,12 @@ export function ClientInjection({ client, state, act, busy, onManage }) {
             </div>)}</div>
           </details>
           <button type="button" role="switch" className="provider-injection-switch" aria-label={models[0].providerName + " 供应商接入"}
-            aria-checked={checked} disabled={!!busy || !compatible.length} title={!compatible.length ? "没有已启用的兼容模型或缺少凭据" : checked ? "排除此供应商" : "纳入此供应商"}
+            aria-checked={checked} disabled={disabled || !compatible.length} title={!compatible.length ? "没有已启用的兼容模型或缺少凭据" : checked ? "排除此供应商" : "纳入此供应商"}
             onClick={() => { const next = new Set(excluded); checked ? next.add(id) : next.delete(id);
               act("client-injection", () => api.call("client-injection", client.id, { excludedProviders: [...next] }));
             }}><i /></button>
         </section>;
-      })}</div> : <div className="injection-empty"><Layers3 size={20} /><span>暂无可接入的供应商</span></div>}
+      })}</div> : <div className="injection-empty"><Layers3 size={20} />
+        <span>{groups.size ? "没有符合筛选条件的模型" : "暂无可接入的供应商"}</span></div>}
   </section>;
 }

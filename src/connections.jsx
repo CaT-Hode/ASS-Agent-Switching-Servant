@@ -9,7 +9,7 @@ export function ConnectionPill({ client, state, onManage, busy }) {
   const connection = state.connections.clients[client.id], enabled = connection.enabled;
   const disabled = !!busy || state.connections.busy;
   const actionable = !!connection.syncError || enabled && connection.pending;
-  const label = enabled ? connection.syncError ? "接入异常" : connection.pending ? "待同步" : "接入已开启" : "未接入";
+  const label = enabled ? connection.syncError ? "恢复已应用配置" : connection.pending ? "应用待同步更改" : "接入已开启" : "未接入";
   return (
     <div
       className="connection-switch"
@@ -18,9 +18,9 @@ export function ConnectionPill({ client, state, onManage, busy }) {
       data-disabled={disabled ? "true" : undefined}
     >
       {actionable ? <button className="connection-state-text" type="button" disabled={disabled}
-        aria-label={client.name + (connection.syncError ? " 修复接入" : " 同步接入")}
+        aria-label={client.name + (connection.syncError ? " 恢复已应用配置" : " 应用待同步更改")}
         onClick={() => onManage({ scope: client.id, enabled: true, sync: true, name: client.name,
-          ...(connection.syncError ? { issue: connection.syncError } : {}) })}>{label}</button> : <span>{label}</span>}
+          ...(connection.syncError ? { repairOnly: true, issue: connection.syncError } : {}) })}>{label}</button> : <span>{label}</span>}
       <button className="connection-toggle" type="button" role="switch" aria-checked={enabled}
         aria-label={client.name + " ASS 接入"} disabled={disabled}
         title={(enabled ? "断开 " : "开启 ") + client.name + " 接入"}
@@ -35,31 +35,76 @@ export function ClientActivity({ client, state }) {
   return <span className="client-request-count" data-idle={active ? undefined : "true"}
     aria-hidden={!active || undefined} aria-live="polite">{active} 个请求</span>;
 }
-export function ConnectionStatus({ client, state, busy, onManage }) {
+export function ConnectionStatus({ client, state }) {
   const connection = state.connections.clients[client.id];
   const sessions = state.connections.processes.sessions.filter(
     (s) => s.harness === client.id && s.status !== "gone",
   );
   if (!connection || client.injectionUnsupported) return null;
-  const note = connection.syncError ? connection.syncError : connection.pending ? "模型变更待同步" : "";
-  if (!note && !sessions.length) return null;
+  const wsl = state.wslSync?.clients?.[client.id];
+  const distro = state.wslSync?.distro;
+  const hasWsl = !!(wsl && distro);
+  const wslStatus = hasWsl && (wsl.error || (!wsl.enabled ? wsl.configured ? "等待撤回" : "未开启" :
+    !state.wslSync.distroRunning ? "等待发行版启动" : !wsl.binary ? "未检测到客户端" : wsl.status || "等待同步"));
+  const lastSync = hasWsl && wsl.lastSync;
+  const note = connection.syncError || (connection.pending ? "模型或路由变更待同步" : "");
+  const runtimeHint = connection.applied && {
+    'reload-required': '配置已写入 · 客户端重新加载时读取',
+    'terminal-ready': '配置已写入 · 新终端读取',
+    'new-window-only': '配置已写入 · 从 ASS 新启动的窗口读取',
+    'client-refresh-required': '配置已写入 · 页面刷新后读取',
+  }[connection.runtimeStatus];
+  if (!note && !runtimeHint && !sessions.length && !hasWsl) return null;
   return (
     <section
       className="connection-status"
       aria-label={client.name + " 接入控制"}
     >
       <div className="connection-overview">
-        {note && <button className="connection-note-action" type="button" disabled={!!busy || state.connections.busy}
-          onClick={() => onManage({ scope: client.id, enabled: true, sync: true, name: client.name,
-            ...(connection.syncError ? { issue: connection.syncError } : {}) })}>
-          <small role={connection.syncError ? "alert" : "status"}>{note}</small>
-        </button>}
+        {note && <small role={connection.syncError ? "alert" : "status"}>{note}</small>}
+        {runtimeHint && <small>{runtimeHint}</small>}
         {sessions.length > 0 && <div className="connection-metrics">
           {sessions.length > 0 && <span>{sessions.length} 个窗口</span>}
         </div>}
       </div>
+      {hasWsl && <div className="connection-wsl-status">
+        <small>WSL · {distro} · {wslStatus}</small>
+        {lastSync && <small>最近成功同步 <time dateTime={lastSync}>{new Date(lastSync).toLocaleString("zh-CN")}</time></small>}
+      </div>}
     </section>
   );
+}
+const PROTOCOL = { 'openai-responses': 'Responses', 'openai-chat': 'Chat Completions', anthropic: 'Messages' };
+const PROTOCOL_MODE = { auto: '自动', fixed: '固定', native: '原生 Messages' };
+const SURFACE = { desktop: '桌面端', cli: 'CLI', 'ass-cli': '从 ASS 启动的 CLI', 'desktop-gateway': '桌面版 Gateway', native: '客户端原生配置' };
+const RELOAD = { restart: '已有窗口需重新打开；本次默认只写入配置。', 'claude-gateway': '新开的终端读取配置。已有桌面窗口需重新打开。',
+  'new-launch': '从 ASS 新启动的会话读取配置。', 'page-refresh': '后端热加载，已打开页面需刷新。', reload: '已打开的客户端需重新加载配置。' };
+function ChangePreview({ changes, wslSync, enabled }) {
+  return changes?.map(change => {
+    const wsl = wslSync?.clients?.[change.id];
+    const modelCount = change.added.length + change.removed.length + change.protocols.length;
+    return <section className="connection-preview" key={change.id} aria-label={change.name + " 接入变更"}>
+      <div><strong>{change.name}</strong><span>Windows · {change.surfaces.map(surface => SURFACE[surface]).join(" / ")}</span></div>
+      {enabled && <small>{RELOAD[change.reload]}</small>}
+      {wsl?.enabled && wslSync.distro && <small>WSL · {wslSync.distro} · {enabled
+        ? "自动同步 Windows 已应用配置" + (wsl.excludedProviders?.length ? `（排除 ${wsl.excludedProviders.length} 个供应商）` : "")
+        : "随 Windows 接入撤回"}{!wslSync.distroRunning && " · 等待发行版启动"}</small>}
+      {[[change.defaultModel, "默认模型", "客户端默认"], [change.reviewModel, "Auto Mode 审查模型", "跟随终端模型"]].map(([selection, label, fallback]) => selection &&
+        <div key={label} className="connection-preview-selection">
+          <span>{label}</span><span>{selection.from || fallback} → {selection.to || fallback}</span>
+          {selection.fallback && <small>所选模型 {selection.requested} 不可用，已预览将采用的模型。</small>}
+        </div>)}
+      {modelCount ? <details open={modelCount <= 8}>
+        <summary>{change.added.length} 新增 · {change.removed.length} 移除 · {change.protocols.length} 协议调整</summary>
+        <ul>{[["新增", change.added], ["移除", change.removed], ["协议", change.protocols]].flatMap(([label, rows]) =>
+          rows.map((row, index) => <li key={label + index}><span>{label}</span><span>{row.provider} / {row.model}</span><small>
+            {row.protocol ? PROTOCOL[row.protocol] || row.protocol
+              : [PROTOCOL[row.from] || row.from, PROTOCOL_MODE[row.fromMode]].filter(Boolean).join(" · ") + " → " +
+                [PROTOCOL[row.to] || row.to, PROTOCOL_MODE[row.toMode]].filter(Boolean).join(" · ")}
+          </small></li>))}</ul>
+      </details> : enabled && <small>模型范围与接口协议一致。</small>}
+    </section>;
+  });
 }
 export function ConnectionDialog(props) {
   return props.request.quit ? <ExitDialog onClose={props.onClose} /> : <ConnectionChangeDialog {...props} />;
@@ -144,7 +189,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
   const client = state?.harnesses.clients.find(c => c.id === request.scope);
   const connection = state?.connections.clients[request.scope];
   const issue = connection?.syncError ?? request.issue;
-  const canInspectRepair = request.accountless === undefined && request.scope !== "all" && !!issue;
+  const canInspectRepair = request.accountless === undefined && request.scope !== "all" && (!!issue || request.repairOnly);
   const inspection = useRef(0), operation = useRef(null), currentRequest = useRef(request), mounted = useRef(false);
   currentRequest.current = request;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; inspection.current++; }; }, []);
@@ -186,23 +231,28 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
         }
       } finally { if (active()) setChecking(false); }
     }
-    void preview();
+    if (request.repairOnly) setChecking(false);
+    else void preview();
     return () => { if (generation === inspection.current) inspection.current++; };
   }, [request, issue, canInspectRepair, client?.launcher?.location, revision]);
   const target = plan?.names.join("、") || repair?.names.join("、") || request.name || client?.name || "客户端";
-  const hasIssue = request.accountless === undefined && request.scope !== "all" && (!!issue || !!error);
+  const hasIssue = request.accountless === undefined && request.scope !== "all" && (!!issue || !!error || request.repairOnly);
   const showRepair = hasIssue;
   const showLocation = request.scope !== "all" && (!!error || !!issue || client?.launcher?.ambiguous);
   const locked = busy || locating || checking || state?.connections.busy;
   const repairLocked = busy || locating || state?.connections.busy;
   const restartPlan = hasIssue ? repair?.restart : plan?.restart;
   const restart = processMode === "restart", close = processMode === "close";
-  const title = request.restoreSessions ? `恢复 ${target} 官方续聊？` : request.accountless !== undefined ? `${request.accountless ? "开启" : "关闭"} ${target} 无账号启动？` : hasIssue ? `${target} 接入异常` : request.scope === "all"
+  const activeRequests = request.scope === "all" && state
+    ? Math.max(state.service?.active || 0, Object.values(state.connections.clients).reduce((sum, client) => sum + (client.active || 0), 0))
+    : connection?.active ?? plan?.active ?? 0;
+  const waitForRequests = activeRequests > 0 && !restart && !close;
+  const title = request.restoreSessions ? `恢复 ${target} 官方续聊？` : request.accountless !== undefined ? `${request.accountless ? "开启" : "关闭"} ${target} 无账号启动？` : request.repairOnly ? `恢复 ${target} 上次已应用配置？` : hasIssue ? `${target} 接入异常` : request.scope === "all"
       ? "停止全部接入？"
       : request.enabled
-        ? `${request.sync ? "同步" : "开启"} ${target} 接入？`
+        ? request.sync ? `应用 ${target} 待同步更改？` : `开启 ${target} 接入？`
         : `断开 ${target} 接入？`;
-  let warning = "正在检查接入状态…";
+  let warning = request.repairOnly ? "检查并恢复上次已应用的接入配置。" : "正在检查接入状态…";
   if (plan) {
     if (request.accountless !== undefined) {
       warning = request.accountless ? request.scope === "claude"
@@ -216,7 +266,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
           ? request.scope === "dsh"
             ? "将同步模型及凭据。DSH 后端会热加载，已打开页面仍需刷新。"
             : "将同步模型及其凭据。请先结束客户端任务；原有登录保留。"
-          : `后续从 ASS 启动的 ${target} 将使用路由配置，不影响已有窗口。`;
+          : `将更新 ${target} 路由。新建会话会读取本次应用的配置。`;
     } else {
       const windows = plan.sessions.length
         ? `并关闭 ${plan.sessions.length} 个由 ASS 启动的窗口`
@@ -225,7 +275,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
     }
   }
   async function commit() {
-    if (!plan || locked) return;
+    if (!plan || locked || waitForRequests) return;
     const run = { request }; operation.current = run; inspection.current++;
     const active = () => mounted.current && currentRequest.current === request && operation.current === run;
     setBusy(true);
@@ -246,7 +296,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
     }
   }
   async function repairConnection() {
-    if (repairLocked || operation.current?.request === request) return;
+    if (repairLocked || waitForRequests || operation.current?.request === request) return;
     const run = { request }; operation.current = run; inspection.current++;
     const active = () => mounted.current && currentRequest.current === request && operation.current === run;
     setBusy(true);
@@ -278,7 +328,7 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
   return (
     <Modal
       title={title}
-      className="connection-confirm"
+      className={`connection-confirm${plan?.changes?.length ? " has-change-preview" : ""}`}
       closeButton={false}
       dismissible={!busy && !locating}
       onClose={onClose}
@@ -289,6 +339,10 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
       >
         {error || issue || (checking ? "正在更新接入状态…" : warning)}
       </p>
+      {plan?.changes?.length > 0 && <div className="connection-previews">
+        <ChangePreview changes={plan.changes} wslSync={state?.wslSync} enabled={plan.enabled} />
+      </div>}
+      {waitForRequests && <p className="connection-repair-note" role="status">还有 {activeRequests} 个请求正在进行。请求结束后可应用或恢复配置。</p>}
       {showLocation && <ClientLocationRecovery key={request.scope} clientId={request.scope}
         disabled={busy || checking} onBusy={setLocating} onUpdated={() => setRevision(v => v + 1)} />}
       {showRepair && <p className="connection-repair-note" role="status">
@@ -305,17 +359,18 @@ function ConnectionChangeDialog({ request, state, onClose, onComplete }) {
         >
           取消
         </button>
-        {(plan || !hasIssue) && <button
+        {!request.repairOnly && !plan && !!error && <button className="button" disabled={locked} onClick={() => setRevision(value => value + 1)}>重新预览</button>}
+        {!request.repairOnly && (plan || !hasIssue) && <button
           className="button primary"
-          disabled={!plan || locked || (restart && !plan.restart?.available) || (close && !plan.restart?.closeAvailable)}
+          disabled={!plan || locked || waitForRequests || (restart && !plan.restart?.available) || (close && !plan.restart?.closeAvailable)}
           onClick={commit}
         >
           {busy && <Loader2 size={14} className="spin" />}
-          {request.accountless !== undefined ? "确定" : request.enabled ? request.sync || hasIssue ? "同步接入" : "开启接入" : request.scope === "all" ? "停止全部接入" : "断开接入"}
+          {request.accountless !== undefined ? "确定" : request.enabled ? request.sync || hasIssue ? "应用更改" : "开启接入" : request.scope === "all" ? "停止全部接入" : "断开接入"}
         </button>}
-        {showRepair && <button className="button primary connection-repair" disabled={repairLocked} onClick={repairConnection}>
+        {showRepair && <button className="button primary connection-repair" disabled={repairLocked || waitForRequests} onClick={repairConnection}>
           {busy ? <Loader2 size={14} className="spin" /> : <Wrench size={15} />}
-          {busy ? "修复中…" : repairReason ? "重试修复" : "一键修复"}
+          {busy ? "恢复中…" : repairReason ? "重试恢复" : "恢复上次已应用配置"}
         </button>}
       </footer>
     </Modal>

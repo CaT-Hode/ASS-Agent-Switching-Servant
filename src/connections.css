@@ -31,6 +31,7 @@
 .connection-status small[role="alert"] {
   color: light-dark(#b83848, #ff8f9c);
 }
+.connection-wsl-status { display: grid; gap: 5px; margin-left: auto; min-width: 0; }
 .connection-card-top {
   display: flex;
   align-items: center;
@@ -130,10 +131,9 @@
   opacity: 0.5;
   cursor: wait;
 }
-.connection-state-text, .connection-toggle, .connection-note-action { border: 0; background: transparent; color: inherit; padding: 0; font: inherit; }
+.connection-state-text, .connection-toggle { border: 0; background: transparent; color: inherit; padding: 0; font: inherit; }
 .connection-state-text { font-size: 11px; font-weight: 600; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
 .connection-toggle { display: inline-flex; align-items: center; justify-content: center; align-self: stretch; min-height: 22px; border-radius: 10px; }
-.connection-note-action { text-align: left; text-decoration: underline; text-underline-offset: 3px; }
 .connection-metrics {
   display: flex;
   gap: 20px;
@@ -190,6 +190,19 @@
 .connection-confirm-message[role="alert"] {
   color: light-dark(#a8443c, #ff8f9c);
 }
+.modal.connection-confirm.has-change-preview { width: 570px; }
+.connection-previews { display: grid; gap: 9px; max-height: min(38vh, 340px); overflow: auto; margin-top: 12px; }
+.connection-preview { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.connection-preview > div { display: flex; gap: 6px 12px; align-items: baseline; flex-wrap: wrap; overflow-wrap: anywhere; font-size: 12px; }
+.connection-preview > div:first-child { justify-content: space-between; }
+.connection-preview small { color: var(--muted); font-size: 11px; }
+.connection-preview-selection small { flex-basis: 100%; }
+.connection-preview details { font-size: 12px; }
+.connection-preview summary { cursor: pointer; }
+.connection-preview ul { padding: 0; margin: 7px 0 0; list-style: none; }
+.connection-preview li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 2px 8px; padding: 5px 0; overflow-wrap: anywhere; }
+.connection-preview li > :first-child { color: var(--muted); }
+.connection-preview li small { grid-column: 2; }
 .connection-repair-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .connection-location { margin-top: 14px; display: grid; gap: 10px; }
 .connection-location > .button { justify-self: start; }

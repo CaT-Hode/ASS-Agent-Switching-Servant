@@ -4,10 +4,13 @@ const { readTaskJSON } = require('./task-outcome.cjs');
 const { endpoint, codexProviderId } = require("./models.cjs");
 const { sseMessages } = require("./adapters.cjs");
 const { write: writeResponse } = require("./stream-write.cjs");
+const { readJSON } = require("./request-body.cjs");
 const { messagesTransport, providerSessionHeaders } = require("./provider-transport.cjs");
 const { messagesRequest, messagesEvents, messagesJSON, normalizeMessages } = require("./messages-adapter.cjs");
 const { claudeModels, resolveClaudeModel } = require("./claude-models.cjs");
 const { withOutputLimit } = require('./output-tokens.cjs');
+const { classifyFailure, requestFailure, responseFailure } = require('./diagnostic-failure.cjs');
+const { upstreamRequestId } = require('./http-passthrough.cjs');
 function authorized(value, token) {
   const a = Buffer.from(value || ""),
     b = Buffer.from(token || "");
@@ -76,7 +79,10 @@ async function forwardHarness(router, req, res) {
     controller = new AbortController();
   const metrics = new RequestMetrics({ began }), requestId = crypto.randomUUID();
   const client = router.requests.get(req)?.client;
-  let route, timer, httpStatus = null;
+  let route, timer, httpStatus = null, upstreamId, upstreamFailure;
+  let failureLayer = 'local';
+  const secrets = [router.clientToken, req.headers['x-api-key'], req.headers.authorization?.replace(/^Bearer /i, '')];
+  const operation = /\/count_tokens/.test(req.url) ? 'count_tokens' : /\/compact/.test(req.url) ? 'compaction' : undefined;
   const write = value => writeResponse(res, value);
   try {
     const credential =
@@ -101,26 +107,14 @@ async function forwardHarness(router, req, res) {
     }
     if (req.method !== "POST")
       throw Object.assign(new Error("仅支持 POST"), { status: 405 });
-    let size = 0;
-    const chunks = [];
-    for await (const b of req) {
-      size += b.length;
-      if (size > 128 * 1024 * 1024)
-        throw Object.assign(new Error("请求过大"), { status: 413 });
-      chunks.push(b);
-    }
-    let body;
-    try {
-      body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    } catch {
-      throw Object.assign(new Error("请求 JSON 无效"), { status: 400 });
-    }
+    const body = await readJSON(req);
     route = harnessRoute(req.url, body, state);
     const { p, m, protocol } = route;
+    secrets.push(p.apiKey);
     const pending = router.requests.get(req);
-    if (!/\/count_tokens/.test(req.url)) router.monitorRequest(req, {
+    if (operation !== 'count_tokens') router.monitorRequest(req, {
       requestId, model: m.model, source: p.name, protocol, providerId: p.id,
-      ...(/\/compact/.test(req.url) ? { operation: 'compaction' } : {}),
+      ...(operation ? { operation } : {}),
     }, metrics);
     const headers = {
       ...p.extraHeaders,
@@ -136,16 +130,19 @@ async function forwardHarness(router, req, res) {
     } else headers.authorization = "Bearer " + p.apiKey;
     router.active++;
     router.controllers.add(controller);
-    timer = setTimeout(() => controller.abort(), 300000);
+    timer = setTimeout(() => controller.abort(Object.assign(Error('上游请求超过 5 分钟，请重试'),
+      { name: 'TimeoutError', code: 'upstream_timeout' })), 300000);
     res.on("close", () => {
       if (!res.writableFinished) controller.abort();
     });
+    const upstreamBody = JSON.stringify(route.adapted ? messagesRequest(body, m, protocol) : protocol === "anthropic" ? normalizeMessages(body) : body);
+    failureLayer = 'network';
     const upstreamResponse = await router.fetch(
       route.url,
       {
         method: "POST",
         headers,
-        body: JSON.stringify(route.adapted ? messagesRequest(body, m, protocol) : protocol === "anthropic" ? normalizeMessages(body) : body),
+        body: upstreamBody,
         redirect: "error",
         credentials: "omit",
         signal: controller.signal,
@@ -154,9 +151,11 @@ async function forwardHarness(router, req, res) {
     );
     const response = metrics.observe(upstreamResponse, controller.signal);
     httpStatus = response.status;
-    if (pending?.monitor) pending.monitor.httpStatus = httpStatus;
+    failureLayer = 'upstream';
+    upstreamId = upstreamRequestId(response.headers, secrets);
+    if (pending?.monitor) Object.assign(pending.monitor, { httpStatus, upstreamRequestId: upstreamId });
     if (!response.ok) {
-      await response.body?.cancel();
+      upstreamFailure = await responseFailure(response, { signal: controller.signal });
       throw Object.assign(
         new Error(
           "上游返回 HTTP " + response.status + "；请检查账户、模型和协议",
@@ -164,6 +163,7 @@ async function forwardHarness(router, req, res) {
         { status: response.status },
       );
     }
+    if (route.adapted || route.stream) failureLayer = 'stream';
     if (route.adapted) {
       const events = messagesEvents(response.body, protocol, m.model, body.stop_sequences);
       if (route.stream) {
@@ -188,7 +188,9 @@ async function forwardHarness(router, req, res) {
           event.type === "response.failed" ||
           event.error
         )
-          throw new Error("上游返回错误事件");
+          throw Object.assign(Error('上游返回错误事件'), {
+            diagnostic: classifyFailure(null, { httpStatus, layer: 'stream', body: event }),
+          });
         if (
           (protocol === "anthropic" && event.type === "message_stop") ||
           (protocol === "openai-chat" &&
@@ -222,11 +224,12 @@ async function forwardHarness(router, req, res) {
       ms: Date.now() - began,
       ok: true,
       httpStatus, httpOk: httpStatus >= 200 && httpStatus < 300, taskOk: true,
-      requestId, client, protocol, providerId: p.id, ...metrics.snapshot(),
+      requestId, upstreamRequestId: upstreamId, client, protocol, providerId: p.id, ...metrics.snapshot(),
       startedAt: new Date(began).toISOString(),
-      ...(/\/count_tokens/.test(req.url) ? { operation: 'count_tokens' } : /\/compact/.test(req.url) ? { operation: 'compaction' } : {}),
+      ...(operation ? { operation } : {}),
     });
   } catch (error) {
+    const failure = upstreamFailure || metrics.taskFailure || requestFailure(error, { httpStatus, layer: failureLayer, signal: controller.signal });
     // Never put raw provider error bodies or parser excerpts into logs.
     let message =
       error instanceof SyntaxError
@@ -234,7 +237,7 @@ async function forwardHarness(router, req, res) {
         : controller.signal.aborted
           ? "请求取消或超时"
           : error.message;
-    for (const secret of [route?.p.apiKey, router.clientToken, req.headers['x-api-key'], req.headers.authorization?.replace(/^Bearer /i, '')].filter(Boolean)) message = message.split(secret).join('[REDACTED]');
+    for (const secret of secrets.filter(Boolean)) message = message.split(secret).join('[REDACTED]');
     if (!res.headersSent) {
       res.writeHead(error.status || 502, {
         "content-type": "application/json",
@@ -263,9 +266,10 @@ async function forwardHarness(router, req, res) {
       ms: Date.now() - began,
       ok: false,
       httpStatus, httpOk: httpStatus !== null && httpStatus >= 200 && httpStatus < 300, taskOk: false,
-      error: message.slice(0, 300),
-      requestId, client, protocol: route?.protocol, providerId: route?.p.id, ...metrics.snapshot(),
+      error: failure.message, failure: failure.failure,
+      requestId, upstreamRequestId: upstreamId, client, protocol: route?.protocol, providerId: route?.p.id, ...metrics.snapshot(),
       startedAt: new Date(began).toISOString(),
+      ...(operation ? { operation } : {}),
     });
   } finally {
     controller.abort();

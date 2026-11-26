@@ -2,7 +2,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { atomic } = require("./config.cjs");
-const IDS = ["codex", "claude", "opencode", "pi", "dsh"];
+const { ids: clientIds } = require("./client-registry.cjs");
+const IDS = clientIds("legacyProxy");
 const NAMES = new Set(["config.toml", "catalog.json", "models.json", "settings.yaml", "settings.json"]);
 const hash = (s) => crypto.createHash("sha256").update(s).digest("hex");
 class InjectionFiles {

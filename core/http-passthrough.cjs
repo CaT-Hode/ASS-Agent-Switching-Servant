@@ -1,4 +1,5 @@
 const { StringDecoder } = require('node:string_decoder');
+const { classifyFailure } = require('./diagnostic-failure.cjs');
 
 // These fields describe one transport connection, not the proxied request.
 // Also honor Connection's nominated fields on either side of the relay.
@@ -41,12 +42,6 @@ function redact(value, secrets = []) {
     text = text.split(secret).join('[REDACTED]');
   return text;
 }
-const diagnosticNames = new Set([
-  'content-type', 'server', 'via', 'cf-ray', 'cf-mitigated', 'retry-after',
-  'x-request-id', 'x-oai-request-id', 'request-id', 'x-client-request-id',
-  'x-mife-upstream-status', 'x-openai-proxy-wasm', 'x-envoy-upstream-service-time',
-  'x-trace-id', '_trace_id_', 'traceparent', 'openai-processing-ms',
-]);
 // Codex requests these read-only backend resources before enabling its new
 // composer. Keep the relay narrow: no task creation or arbitrary proxying.
 const codexBootstrapPathPatterns = [
@@ -81,11 +76,13 @@ function codexWorkspaceRequest(url, method) {
   if (parsed.origin !== 'https://chatgpt.com' || !parsed.pathname.startsWith('/backend-api/')) return null;
   return { upstreamUrl: parsed.origin + parsed.pathname + parsed.search };
 }
-function upstreamDiagnostics(response, secrets) {
-  const headers = Object.fromEntries(Object.entries(upstreamResponseHeaders(response.headers, secrets))
-    .filter(([key]) => diagnosticNames.has(key) || key.startsWith('x-ratelimit-'))
-    .slice(0, 32).map(([key, value]) => [key, redact(value, secrets).slice(0, 512)]));
-  return { status: response.status, headers };
+function upstreamRequestId(headers, secrets = []) {
+  for (const key of ['x-request-id', 'x-oai-request-id', 'request-id']) {
+    const value = typeof headers?.get === 'function' ? headers.get(key) : headers?.[key];
+    if (typeof value !== 'string') continue;
+    const safe = redact(value, secrets);
+    if (/^[A-Za-z0-9._:-]{1,128}$/.test(safe)) return safe;
+  }
 }
 function summarizeUpstreamError(sample, status, contentType = '', secrets = []) {
   const text = redact(sample, secrets);
@@ -100,21 +97,22 @@ function summarizeUpstreamError(sample, status, contentType = '', secrets = []) 
       try { values.push(JSON.parse(data)); } catch {}
     }
   }
+  const diagnostic = classifyFailure(null, { httpStatus: status, contentType,
+    body: values.find(value => value?.error || value?.response?.error || value?.detail) ?? values[0] ?? text });
   for (const value of values) {
     const detail = value?.error || value?.response?.error || value?.detail;
     const prose = typeof detail === 'string' ? detail : detail?.message || value?.message;
     if (typeof prose !== 'string' || !prose) continue;
     const param = typeof detail?.param === 'string' && detail.param ? `（${detail.param}）` : '';
-    return { message: redact(prose + param, secrets).slice(0, 500), kind: /(?:^|[\r\n])data:/.test(text) ? 'sse_error' : 'json' };
+    return { message: redact(prose + param, secrets).slice(0, 500), diagnostic };
   }
-  if (values.length) return { message, kind: 'json' };
+  if (values.length) return { message, diagnostic };
   if (/text\/html/i.test(contentType) || /<!doctype\s+html|<html\b/i.test(text)) {
     const title = (/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1] || '')
       .replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
-    return { message: message + '（HTML 网关错误页）' + (title ? '：' + title : ''),
-      kind: 'html_gateway', ...(title ? { title } : {}) };
+    return { message: message + '（HTML 网关错误页）' + (title ? '：' + title : ''), diagnostic };
   }
-  return { message, kind: text ? 'text' : 'empty' };
+  return { message, diagnostic };
 }
 
 // Preserve the complete error body, with backpressure, without buffering/logging
@@ -152,6 +150,6 @@ async function forwardErrorBody(response, write, secrets = []) {
 }
 
 module.exports = {
-  officialRequestHeaders, upstreamResponseHeaders, upstreamDiagnostics,
+  officialRequestHeaders, upstreamResponseHeaders, upstreamRequestId,
   summarizeUpstreamError, forwardErrorBody, redact, codexBootstrapRequest, codexImagesRequest, codexWorkspaceRequest,
 };

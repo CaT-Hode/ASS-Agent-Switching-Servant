@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Modal } from "./editors.jsx";
 import { AlertTriangle, Download } from "./icons.jsx";
+import "./config-export.css";
 
 export function ExportConfigDialog({ onClose }) {
   const [includeSecrets, setIncludeSecrets] = useState(false);

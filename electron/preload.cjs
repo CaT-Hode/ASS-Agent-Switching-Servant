@@ -6,6 +6,7 @@ const allowed = [
   "request-widget",
   "ui-preferences",
   "usage-refresh",
+  "usage-drilldown",
   "supplier-refresh",
   "client-model",
   "client-injection",
@@ -82,6 +83,16 @@ const allowed = [
   "client-executable",
   "client-detect",
   "client-open-desktop",
+  "antigravity-open-cli",
+  "antigravity-login-status",
+  "antigravity-model-launch",
+  "antigravity-desktop-launch",
+  "antigravity-cli-info",
+  "antigravity-conversations",
+  "antigravity-resume",
+  "antigravity-hook-toggle",
+  "antigravity-mcp-toggle",
+  "antigravity-connection-toggle",
   "client-location",
   "client-workspace",
   "client-launch",
@@ -117,6 +128,11 @@ contextBridge.exposeInMainWorld("ass", {
     const handler = (_, value) => callback(value);
     ipcRenderer.on("ass:state", handler);
     return () => ipcRenderer.removeListener("ass:state", handler);
+  },
+  onRequestActivity: (callback) => {
+    const handler = (_, value) => callback(value);
+    ipcRenderer.on("ass:request-activity", handler);
+    return () => ipcRenderer.removeListener("ass:request-activity", handler);
   },
   onStateError: (callback) => {
     const handler = (_, message) => callback(message);

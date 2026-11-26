@@ -8,6 +8,7 @@ export const CLIENT_NAMES = {
   dsh: "DSH",
   kimi: "Kimi Code",
   zcode: "ZCode",
+  antigravity: "Antigravity",
 };
 export const detectedClients = (state) => state.harnesses.clients.filter((c) =>
   c.detected === true || (c.detected === undefined && !!(c.executable || c.launcher?.installed || c.desktop)) ||
@@ -145,9 +146,31 @@ export function summarize(rows, options, now = new Date()) {
 export function overviewAccountPriority(row) {
   return row.quotas.length ? 3 : row.amounts.length ? 2 : row.plan && row.plan.toLowerCase() !== "free" ? 1 : 0;
 }
+export function groupQuotaWindows(quotas) {
+  const groups = new Map();
+  for (const quota of quotas) {
+    const group = quota.group || "";
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(quota);
+  }
+  return [...groups];
+}
 const validAmount = (f) =>
   ["number", "string"].includes(typeof f?.value) &&
   String(f.value).trim() !== "" && Number.isFinite(Number(f.value));
+export function quotaAmounts(fields, clientId, observed = false) {
+  const amounts = fields.filter(f => f.quotaDetail ||
+    ((f.id?.startsWith("balance-") || f.id === "remaining") && validAmount(f)));
+  if (clientId !== "codex" || !observed) return amounts;
+  for (const [id, label] of [["codex-credits", "Codex Credits"], ["codex-reset-credits", "可用重置"]]) {
+    if (!amounts.some(f => f.id === id)) amounts.push({ id, label, value: "—", kind: "amount", quotaDetail: true, unknown: true });
+  }
+  return amounts;
+}
+export function quotaAmountText(field) {
+  const amount = field.limit === undefined ? field.value : field.value + " / " + field.limit;
+  return amount + (field.unit ? " " + field.unit : "");
+}
 export function overviewAccounts(state, clientFilter) {
   const accounts = new Map();
   for (const client of detectedClients(state)) {
@@ -168,11 +191,11 @@ export function overviewAccounts(state, clientFilter) {
         quota = a.quota || a.profile;
       const get = (id) => fields.find((f) => f.id === id)?.value;
       const balance = state.balances?.[a.providerId];
-      const amounts = fields.filter(
-        (f) => (f.id?.startsWith("balance-") || f.id === "remaining") && validAmount(f),
-      );
+      const subscription = a.kind !== "api" && a.quota?.canRefresh;
+      const amounts = quotaAmounts(fields, subscription ? client.id : null, !!a.quota?.remote);
       const row = {
         key,
+        quotaKey: a.oauthRecordId ? client.id + ":oauth:" + a.oauthRecordId : key,
         account: a,
         client,
         clients: [client.name],
@@ -188,6 +211,8 @@ export function overviewAccounts(state, clientFilter) {
               }))
             : [],
         updatedAt: quota?.updatedAt || a.profile?.updatedAt || (balance?.ok ? balance.time : undefined),
+        quotaHistory: quota?.history,
+        source: quota?.remote && subscription ? quota.source : null,
         error: quota?.error,
         canRefresh: quota?.canRefresh || a.profile?.canRefresh,
       };

@@ -4,13 +4,11 @@ import {
   KeyRound,
   UserRound,
   Plus,
-  Folder,
   LogIn,
   LogOut,
   Check,
   RefreshCw,
   ChevronRight,
-  Search,
   Settings2,
   Wallet,
   Unlink,
@@ -19,7 +17,6 @@ import {
   MessagesSquare,
 } from "./icons.jsx";
 import { Modal } from "./editors.jsx";
-import { WslSyncControl } from './wsl-sync.jsx';
 import { transitionUI } from './surface-motion.jsx';
 import {
   AddAccount,
@@ -31,11 +28,12 @@ import { ActionMenu } from "./menus.jsx";
 import { AccountProfile, AccountPlan } from "./account-profile.jsx";
 import { ConnectionStatus, ConnectionPill, ConnectionService, ClientActivity } from "./connections.jsx";
 import { ClientInjection } from "./client-injection.jsx";
+import { AntigravityPanel } from "./antigravity-panel.jsx";
 import { ClientProcessChoice } from "./client-process-choice.jsx";
 import { CodexDesktopLaunch } from "./codex-desktop-launch.jsx";
 import { detectedClients } from "./usage-view.mjs";
 const api = window.ass;
-const clientBrands = { codex: "openai", claude: "anthropic", opencode: "opencode", dsh: "deepseek", pi: "pi", kimi: "kimi", zcode: "zai" };
+const clientBrands = { codex: "openai", claude: "anthropic", opencode: "opencode", dsh: "deepseek", pi: "pi", kimi: "kimi", zcode: "zai", antigravity: "antigravity" };
 function ClientEntry({ client: c, activeClient, onSelect }) {
   return <div className={"client-entry" + (c.id === activeClient ? " active" : "")}>
     <button className="client-select" aria-label={c.name} aria-pressed={c.id === activeClient} onClick={() => onSelect(c.id)}>
@@ -302,7 +300,6 @@ export function Clients({
     [oauth, setOAuth] = useState(false),
     [editor, setEditor] = useState(null),
     [nativeKey, setNativeKey] = useState(null),
-    [candidates, setCandidates] = useState(null),
     [switching, setSwitching] = useState(null),
     [loggingIn, setLoggingIn] = useState(null),
     [refreshResult, setRefreshResult] = useState(null),
@@ -325,7 +322,7 @@ export function Clients({
   const recognized = detectedClients(state);
   const otherClients = state.harnesses.clients.filter((c) => !recognized.some((r) => r.id === c.id));
   const selectClient = (id) => {
-    transitionUI(() => { setSelected(id); onSelectClient?.(id); setNotice(""); setLaunchNotice(""); setCandidates(null); });
+    transitionUI(() => { setSelected(id); onSelectClient?.(id); setNotice(""); setLaunchNotice(""); });
     if (panelRef.current?.getBoundingClientRect().top < 0)
       requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: "start", behavior: "instant" }));
   };
@@ -338,27 +335,29 @@ export function Clients({
     setOAuth(false);
     requestAnimationFrame(() => addButton.current?.focus());
   }
-  // Returning from a native login window refreshes status without running auth helpers.
+  const antigravitySelected = !nativeService && client.id === "antigravity";
+  // Antigravity stores its login in the OS keyring, which a snapshot alone does not reread.
   useEffect(() => {
     let mounted = true, pending = false;
-    const refresh = async () => {
+    const refresh = async (checkLogin = false) => {
       if (pending || document.hidden) return;
       pending = true;
-      try { await api.call("snapshot"); }
+      try { await api.call(checkLogin && antigravitySelected ? "antigravity-login-status" : "snapshot"); }
       catch { if (mounted) setNotice("状态读取失败，请点击刷新状态。"); }
       finally { pending = false; }
     };
     const tick = setInterval(() => {
       if (document.hasFocus()) refresh();
     }, 15000);
-    window.addEventListener("focus", refresh);
-    refresh();
+    const refreshOnFocus = () => refresh(true);
+    window.addEventListener("focus", refreshOnFocus);
+    refreshOnFocus();
     return () => {
       mounted = false;
       clearInterval(tick);
-      window.removeEventListener("focus", refresh);
+      window.removeEventListener("focus", refreshOnFocus);
     };
-  }, []);
+  }, [antigravitySelected]);
   const run = (account, action, model) =>
     act("client-" + action, async () => {
       const r = await api.call(
@@ -371,17 +370,6 @@ export function Clients({
       if (r?.message) setNotice(r.message);
       return r;
     });
-  const detect = () =>
-    act("client-detect", async () => {
-      const result = await api.call("client-detect", client.id);
-      if (!result.selected && result.candidates.length > 1) setCandidates(result.candidates);
-      else
-        setNotice(
-          result.selected
-            ? "已识别并选择客户端入口。"
-            : "未找到客户端，请选择安装或源码目录。",
-        );
-    });
   const openDesktop = () => {
     setLaunchNotice("");
     return act("client-open-desktop", async () => {
@@ -393,24 +381,26 @@ export function Clients({
   };
   return (
     <>
+      <div className="clients-toolbar page-action-bar">
+        <div className="page-actions">
+          <button className="button" disabled={!!busy || state.connections.busy || !Object.values(state.connections.clients).some(c => c.enabled)}
+            title="同步已开启的接入；跳过正在请求或有配置冲突的客户端"
+            onClick={() => act("connections-refresh", async () => {
+              setRefreshResult(null);
+              const result = await api.call("connections-refresh");
+              setRefreshResult(result);
+              return result;
+            })}>
+            <RefreshCw size={15} className={busy === "connections-refresh" ? "spin" : undefined} />
+            {busy === "connections-refresh" ? "正在同步接入…" : "同步全部接入"}
+          </button>
+        </div>
+      </div>
       {state.connections.error && (
         <p role="alert" className="error-box">
           {state.connections.error}
         </p>
       )}
-      <div className="clients-toolbar">
-        <button className="button" disabled={!!busy || state.connections.busy || !Object.values(state.connections.clients).some(c => c.enabled)}
-          title="刷新所有已开启的接入；不重启客户端，跳过正在请求或有配置冲突的项"
-          onClick={() => act("connections-refresh", async () => {
-            setRefreshResult(null);
-            const result = await api.call("connections-refresh");
-            setRefreshResult(result);
-            return result;
-          })}>
-          <RefreshCw size={15} className={busy === "connections-refresh" ? "spin" : undefined} />
-          {busy === "connections-refresh" ? "正在刷新注入…" : "刷新全部注入"}
-        </button>
-      </div>
       {refreshResult && <div className="clients-refresh-result" role="status">
         <p>{refreshResult.message}</p>
         {refreshResult.skipped?.length > 0 && <ul>{refreshResult.skipped.map(item => <li key={item.id}>{item.name}：{item.reason}</li>)}</ul>}
@@ -476,8 +466,6 @@ export function Clients({
                 <h2>{client.name}</h2><ClientActivity {...{ client, state }} />
               </div>
               <div className="actions">
-                <button className="icon-button" aria-label="自动识别客户端" title="自动识别客户端"
-                  disabled={!!busy} onClick={detect}><Search size={16} /></button>
                 {client.desktop && client.id !== "codex" && (
                   <button
                     className="icon-button"
@@ -489,16 +477,20 @@ export function Clients({
                     <ExternalLink size={16} />
                   </button>
                 )}
+                {client.id === "antigravity" && client.launcher?.ready && (
+                  <button className="icon-button" title="打开 Antigravity CLI" aria-label="打开 Antigravity CLI"
+                    disabled={!!busy} onClick={() => act("antigravity-open-cli", async () => {
+                      const result = await api.call("antigravity-open-cli");
+                      setNotice("已打开 Antigravity CLI。");
+                      return result;
+                    })}><Terminal size={16} /></button>
+                )}
                 <button
                   className="icon-button"
-                  aria-label={state.connections.clients[client.id]?.enabled ? "同步接入配置" : "刷新状态"}
-                  title={state.connections.clients[client.id]?.enabled ? "同步接入配置" : "刷新账户、额度和模型"}
+                  aria-label="刷新状态"
+                  title="刷新账户、额度和模型"
                   disabled={!!busy}
-                  onClick={() => {
-                    if (state.connections.clients[client.id]?.enabled)
-                      onManage({ scope: client.id, enabled: true, sync: true, name: client.name });
-                    else act("client-refresh", () => api.call("client-refresh", client.id));
-                  }}
+                  onClick={() => act("client-refresh", () => api.call("client-refresh", client.id))}
                 >
                   <RefreshCw size={14} />
                 </button>
@@ -506,10 +498,54 @@ export function Clients({
                   onClick={() => onConversations?.(client.id)}><MessagesSquare size={18} /></button>}
                 {client.id === "codex" && <CodexDesktopLaunch desktop={client.desktop}
                   connection={state.connections.clients.codex} {...{ busy }} onLaunch={openDesktop} />}
-                {!client.injectionUnsupported && <ConnectionPill {...{ client, state, busy, onManage }} />}
+                {client.id === "antigravity" && (() => {
+                  const hook = state.antigravity?.hook || {};
+                  const mcp = state.antigravity?.mcp || {};
+                  const enabled = !!(hook.enabled && mcp.installed);
+                  const partial = !enabled && !!(hook.enabled || mcp.installed);
+                  const issue = mcp.error || hook.error || "";
+                  const disabled = !!busy || !!issue;
+                  const label = issue ? "接入异常" : enabled ? "接入已开启" : partial ? "部分接入" : "未接入";
+                  return (
+                    <div
+                      className="connection-switch"
+                      data-enabled={enabled || partial ? "true" : undefined}
+                      data-error={issue ? "true" : undefined}
+                      data-disabled={disabled ? "true" : undefined}
+                    >
+                      <span>{label}</span>
+                      <button
+                        className="connection-toggle"
+                        type="button"
+                        role="switch"
+                        aria-checked={enabled}
+                        aria-label="Antigravity ASS 接入"
+                        disabled={disabled}
+                        title={
+                          issue ||
+                          (enabled
+                            ? "关闭 Antigravity 实时监控 Hook 与同窗口 MCP 桥接（保留其他已有配置）"
+                            : "一键开启 Antigravity 实时监控 Hook 与同窗口 MCP 桥接（ass-router），保留个人账号与官方模型")
+                        }
+                        onClick={() =>
+                          act(
+                            "antigravity-connection-toggle",
+                            () => api.call("antigravity-connection-toggle", !enabled),
+                            !enabled
+                              ? "已开启 Antigravity 接入（实时监控 Hook + 同窗口 MCP 桥接）"
+                              : "已关闭 Antigravity 接入",
+                          )
+                        }
+                      >
+                        <span className="connection-pill-track" aria-hidden="true"><i /></span>
+                      </button>
+                    </div>
+                  );
+                })()}
+                {!client.injectionUnsupported && !client.sessionInjectionOnly && <ConnectionPill {...{ client, state, busy, onManage }} />}
               </div>
             </header>
-            <ConnectionStatus {...{ client, state, busy, onManage }} />
+            <ConnectionStatus {...{ client, state }} />
             {launchNotice && <p className="codex-launch-result" role="status">{launchNotice}</p>}
             <ClientInjection key={"injection:" + client.id} {...{ client, state, act, busy, onManage }} />
             <header className="client-accounts-heading"><h3>官方账户 <span className="count">{client.accounts.length}</span></h3>
@@ -538,128 +574,16 @@ export function Clients({
                 <div className="empty">
                   <KeyRound size={23} />
                   <p>
-                    {client.nativeLoginOnly && !["kimi", "zcode"].includes(client.id) ? "在原生客户端中管理登录" : "暂无官方账户"}
+                    {antigravitySelected
+                      ? client.credentialSources.some(source => source.status === "unreadable")
+                        ? "暂时无法读取 Antigravity 登录状态。请点击刷新状态。"
+                        : "未检测到 Google 登录。请在 Antigravity 登录后切回此页面。"
+                      : "暂无官方账户"}
                   </p>
                 </div>
               )}
             </div>
-            <details className="client-settings" key={"paths:" + client.id}>
-              <summary><Settings2 size={16} />客户端设置 <ChevronRight size={15} /></summary>
-              <WslSyncControl client={client} state={state} act={act} busy={busy} />
-              <div className="client-location-actions" aria-label="客户端位置">
-                <button className="button" disabled={!!busy} onClick={detect}>
-                  <Search size={14} />
-                  自动识别
-                </button>
-                <button
-                  className="button"
-                  disabled={!!busy}
-                  onClick={() =>
-                    act("client-directory", () =>
-                      api.call("client-executable", client.id, true),
-                    )
-                  }
-                >
-                  <Folder size={14} />
-                  选择目录
-                </button>
-                <button
-                  className="button"
-                  disabled={!!busy}
-                  onClick={() =>
-                    act("client-path", () =>
-                      api.call("client-executable", client.id),
-                    )
-                  }
-                >
-                  选择文件
-                </button>
-              </div>
-              <div className="client-location" role="status">
-                <p
-                  className={
-                    "launcher-state " +
-                    (client.launcher?.ready || client.launcher?.installed
-                      ? "ready"
-                      : "")
-                  }
-                >
-                  {(client.launcher?.ready || client.launcher?.installed) && (
-                    <Check size={14} />
-                  )}
-                  {client.launcher?.message || "未检测到安装"}
-                </p>
-                {client.launcher?.location && (
-                  <p className="client-path mono">{client.launcher.location}</p>
-                )}
-                {client.launcher?.ready && (
-                  <details className="launcher-command">
-                    <summary>查看启动入口</summary>
-                    <code>{client.launcher.command}</code>
-                  </details>
-                )}
-              </div>
-              {client.id === "kimi" && <label className="field">
-                Kimi 配置版本
-                <select aria-label="Kimi 配置版本" value={client.nativeVariant || "auto"}
-                  disabled={!!busy || state.connections.clients.kimi?.enabled}
-                  onChange={(event) => act("client-native-variant", () => api.call("client-native-variant", client.id, event.target.value))}>
-                  <option value="auto">自动识别</option>
-                  <option value="current">Kimi Code（新版）</option>
-                  <option value="legacy">Kimi CLI（旧版）</option>
-                </select>
-              </label>}
-              <div className="section-heading">
-                <h3>凭据检测位置</h3>
-                <div className="actions">
-                  <button
-                    className="text-button"
-                    disabled={!!busy}
-                    onClick={() =>
-                      act("client-credentials", () =>
-                        api.call("client-credentials", client.id),
-                      )
-                    }
-                  >
-                    指定凭据目录
-                  </button>
-                  {client.credentialHome && (
-                    <button
-                      className="text-button"
-                      onClick={() =>
-                        act("client-credentials", () =>
-                          api.call("client-credentials", client.id, true),
-                        )
-                      }
-                    >
-                      恢复默认
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="credential-sources">
-                {client.credentialSources.map((s) => (
-                  <div key={s.file}>
-                    <code>{s.file}</code>
-                    <span>{s.message}</span>
-                  </div>
-                ))}
-              </div>
-            </details>
-            <div className="client-workspace">
-              <Folder size={15} />
-              <span className="ellipsis" title={state.harnesses.workspace}>
-                {state.harnesses.workspace || "ASS 独立工作目录"}
-              </span>
-              <button
-                className="text-button"
-                onClick={() =>
-                  act("client-workspace", () => api.call("client-workspace"))
-                }
-              >
-                选择工作目录
-              </button>
-            </div>
+            {antigravitySelected && <AntigravityPanel {...{ client, act, busy }} />}
             {client.id === "pi" && (
               <details className="pi-import">
                 <summary>
@@ -753,41 +677,6 @@ export function Clients({
             await act("account-refresh", () => api.call("snapshot"));
           }}
         />
-      )}
-      {candidates && (
-        <Modal
-          title="选择识别到的客户端"
-          description="选择要使用的位置。"
-          onClose={() => setCandidates(null)}
-        >
-          <div className="launcher-candidates">
-            {candidates.map((candidate) => (
-              <button
-                className="account-row"
-                key={candidate.location}
-                disabled={!!busy}
-                onClick={() =>
-                  act("client-location", async () => {
-                    await api.call(
-                      "client-location",
-                      client.id,
-                      candidate.location,
-                    );
-                    setCandidates(null);
-                    setNotice("已选择客户端入口。");
-                  })
-                }
-              >
-                <Folder size={18} />
-                <span className="account-content">
-                  <strong>{candidate.message}</strong>
-                  <small>{candidate.location}</small>
-                </span>
-                <ChevronRight size={16} />
-              </button>
-            ))}
-          </div>
-        </Modal>
       )}
     </>
   );

@@ -3,8 +3,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { atomic } = require("./config.cjs");
-const { parseSubscription } = require("./subscription-usage.cjs");
+const { parseSubscription, parseCodexResetCredits } = require("./subscription-usage.cjs");
+const { recordQuotaHistory, quotaRetentionMs } = require("./quota-history.mjs");
 const oauthInfo = require("./oauth-info.cjs");
+const { KIND: ANTIGRAVITY_QUOTA, UPDATE_REQUIRED: ANTIGRAVITY_UPDATE_REQUIRED, displayFields: antigravityFields } = require("./antigravity-quota.cjs");
 const { canQueryBalance, isOpenAIApi } = require('./balance.cjs');
 const { withReadScope } = require("./read-scope.cjs");
 
@@ -15,7 +17,7 @@ const ACCOUNT_DOCS = {
   "zcode-info": { label: "ZCode 套餐与额度接口", url: "https://github.com/zai-org/ZCode/blob/872ad960de7ec172591f7e1952f7849229f94521/packages/services/src/usage-stats/providers/bigmodelUsageQuotaProvider.ts" },
   kimi: { label: "Kimi Code 配置目录", url: "https://moonshotai.github.io/kimi-code/en/configuration/data-locations.html" },
   zcode: { label: "ZCode 原生凭据格式", url: "https://github.com/zai-org/ZCode/blob/872ad960de7ec172591f7e1952f7849229f94521/apps/zcode-cli/packages/adapters/src/auth/shared-credentials.ts" },
-  antigravity: { label: "Antigravity 登录与 API", url: "https://antigravity.google/docs/cli/install" },
+  antigravity: { label: "Antigravity 登录与 API", url: "https://antigravity.google/docs/install/" },
   codex: {
     label: "Codex 账户接口",
     url: "https://learn.chatgpt.com/docs/app-server#auth-endpoints",
@@ -68,7 +70,7 @@ const PROVIDERS = {
   "anthropic-api": "Anthropic API",
   "github-copilot": "GitHub Copilot",
   "google-gemini-cli": "Google Gemini CLI",
-  "google-antigravity": "Google Antigravity",
+  "google-antigravity": "Gemini",
   deepseek: "DeepSeek",
   DEEPSEEK_API_KEY: "DeepSeek",
   "opencode-go": "OpenCode Go",
@@ -435,9 +437,25 @@ const fingerprint = (p) =>
     .createHash("sha256")
     .update(
       JSON.stringify([p.id, p.baseUrl, p.apiKey, p.network, p.extraHeaders, p.subscriptionKind, p.appVersion,
-        ...(p.subscriptionKind === "zcode-account" ? [p.family, p.oauthAccess, p.coding] : [])]),
+        ...(p.subscriptionKind === "zcode-account" ? [p.family, p.oauthAccess, p.coding] : []),
+        ...(p.subscriptionKind === ANTIGRAVITY_QUOTA ? [p.executable] : [])]),
     )
     .digest("hex");
+
+function quotaHistoryOwner(provider, key) {
+  if (!["openai", "anthropic", ANTIGRAVITY_QUOTA].includes(provider.subscriptionKind)) return null;
+  // Saved OAuth records and Antigravity account IDs are already bound to an identity.
+  if (provider.subscriptionKind === ANTIGRAVITY_QUOTA || /:oauth-record:[a-f0-9]{24}$/.test(provider.id)) return provider.id;
+  if (provider.subscriptionKind === "openai") {
+    const auth = object(claims(provider.apiKey)["https://api.openai.com/auth"]);
+    const workspace = text(provider.extraHeaders?.["chatgpt-account-id"]) || text(auth.chatgpt_account_id);
+    const user = text(auth.chatgpt_user_id || auth.user_id);
+    if (workspace && user && (!auth.chatgpt_account_id || auth.chatgpt_account_id === workspace))
+      return crypto.createHash("sha256").update(JSON.stringify([provider.id, workspace, user])).digest("hex");
+  }
+  // Other native slots can be reused by a different login.
+  return key;
+}
 function cachedModelEntitlement(entry) {
   const section = entry?.sections?.usage, value = section?.modelEntitlement;
   if (!value || !["available", "pending", "unavailable"].includes(value.status)) return null;
@@ -464,7 +482,7 @@ function queryError(error, label = "资料") {
     return `${label}查询无法连接系统代理，请检查代理设置`;
   if (/^HTTP \d{3}$/.test(message)) return `${label}查询失败 · ${message}`;
   if (error instanceof SyntaxError) return `${label}接口返回无效 JSON`;
-  if (["资料响应为空", "资料响应过大", "接口未返回可识别的账户资料", "未返回订阅额度窗口"].includes(message)) return message;
+  if (["资料响应为空", "资料响应过大", "接口未返回可识别的账户资料", "未返回订阅额度窗口", ANTIGRAVITY_UPDATE_REQUIRED].includes(message)) return message;
   return `${label}查询失败，请检查网络或接口权限`;
 }
 class AccountInfo {
@@ -498,30 +516,61 @@ class AccountInfo {
   }
   save() {
     if (!this.vault.isEncryptionAvailable()) throw Error("资料缓存加密不可用");
-    const active = withReadScope(() => Object.fromEntries(
-      Object.entries(this.cache).filter(([id, r]) => {
+    const saved = withReadScope(() => Object.fromEntries(
+      Object.entries(this.cache).map(([id, entry]) => {
+        const { quotaOwner, quotaHistory, quotaObservedAt } = object(entry);
+        const history = quotaHistory && this.now() - quotaObservedAt <= quotaRetentionMs
+          ? { quotaOwner, quotaHistory, quotaObservedAt } : {};
         try {
           const p = this.getProvider(id);
-          return p && r?.fingerprint === fingerprint(p);
+          if (p && entry?.fingerprint === fingerprint(p))
+            return [id, { fingerprint: entry.fingerprint, fields: entry.fields, sections: entry.sections, updatedAt: entry.updatedAt, ...history }];
         } catch {
           // An unavailable old account must not poison another account's save.
-          return false;
         }
-      }),
+        // Antigravity only exposes the active login. Keep the previous account's
+        // observations when switching, without keeping its last AccountInfo fields.
+        return [id, history];
+      }).filter(([, entry]) => entry.fields || entry.quotaHistory),
     ));
+    // Leave room below the cache's existing 2 MiB read limit for account fields.
+    let historyBudget = 768 * 1024;
+    for (const [id, entry] of Object.entries(saved).sort((a, b) => (b[1].quotaObservedAt || 0) - (a[1].quotaObservedAt || 0))) {
+      if (!entry.quotaHistory) continue;
+      const size = Buffer.byteLength(JSON.stringify(entry.quotaHistory));
+      if (size <= historyBudget) {
+        historyBudget -= size;
+        continue;
+      }
+      if (!entry.fields) delete saved[id];
+      else {
+        delete entry.quotaOwner;
+        delete entry.quotaHistory;
+        delete entry.quotaObservedAt;
+      }
+    }
     atomic(
       this.file,
       JSON.stringify({
         encrypted: this.vault
-          .encryptString(JSON.stringify(active))
+        .encryptString(JSON.stringify(saved))
           .toString("base64"),
       }),
     );
-    this.cache = active;
+    this.cache = saved;
   }
   saveResult(key) {
     try { this.save(); this.warnings.clear(); }
     catch { this.warnings.set(key, "资料已更新，但未保存到本机；重启后将重新查询"); }
+  }
+  observedQuota(provider, key, fields, observedAt) {
+    const quotaOwner = quotaHistoryOwner(provider, key);
+    if (!quotaOwner) return {};
+    const existing = this.cache[provider.id];
+    const previous = existing?.quotaOwner === quotaOwner ? existing : undefined;
+    if (!fields) return previous ? { quotaOwner, quotaHistory: previous.quotaHistory, quotaObservedAt: previous.quotaObservedAt } : {};
+    const time = Date.parse(observedAt);
+    return { quotaOwner, quotaHistory: recordQuotaHistory(previous?.quotaHistory, fields, time), quotaObservedAt: time };
   }
   public(provider) {
     const base = apiProfile(provider),
@@ -533,11 +582,12 @@ class AccountInfo {
       ...base,
       ...(valid
         ? {
-            fields: [...base.fields, ...entry.fields],
-            source: "官方 API · 上次查询",
+            fields: [...base.fields, ...(provider.subscriptionKind === ANTIGRAVITY_QUOTA ? antigravityFields(entry.fields) : entry.fields)],
+            source: provider.subscriptionKind === ANTIGRAVITY_QUOTA ? base.source : "官方 API · 上次查询",
             remote: true,
             updatedAt: entry.updatedAt,
             stale: this.now() - Date.parse(entry.updatedAt) > 15 * 60000,
+            ...(entry.quotaHistory ? { history: entry.quotaHistory } : {}),
             ...(modelEntitlement ? { modelEntitlement } : {}),
           }
         : {}),
@@ -549,7 +599,7 @@ class AccountInfo {
   async refresh(id, { automatic = false } = {}) {
     const p = this.getProvider(id),
       kind = p && adapter(p);
-    if (!kind || !p.apiKey) throw Error("此账户没有可查询的官方资料接口");
+    if (!kind || !p.apiKey && kind !== ANTIGRAVITY_QUOTA) throw Error("此账户没有可查询的官方资料接口");
     if (p.queryBlocked) throw Error(p.queryBlocked);
     const key = fingerprint(p);
     if (this.jobs.has(key)) return this.jobs.get(key);
@@ -582,7 +632,12 @@ class AccountInfo {
               ? "https://opencode.ai/zen/go/v1/usage"
               : "https://openrouter.ai/api/v1/key";
     try {
-      const { data } = await this.fetchJSON(p, route, kind.endsWith("-subscription") ? p.extraHeaders : {});
+      const usage = this.fetchJSON(p, route, kind.endsWith("-subscription") ? p.extraHeaders : {});
+      const resets = kind === "openai-subscription"
+        ? this.fetchJSON(p, "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+          { ...p.extraHeaders, "openai-beta": "codex-1" }, undefined, 8000).catch(() => null)
+        : null;
+      const [{ data }, resetResponse] = await Promise.all([usage, resets]);
       const expectedAccount = p.extraHeaders?.["chatgpt-account-id"];
       if (
         kind === "openai-subscription" &&
@@ -592,13 +647,21 @@ class AccountInfo {
       )
         throw Error("额度账户不匹配");
       const fields = parseRemote(kind, data, [p.apiKey]);
+      const resetData = resetResponse?.data;
+      const account = expectedAccount || data?.account_id;
+      if (resetData && (!resetData.account_id || resetData.account_id === account)) {
+        const field = parseCodexResetCredits(resetData, this.now());
+        if (field) fields.push(field);
+      }
       const current = this.getProvider(p.id);
       if (!current || fingerprint(current) !== key)
         return { ok: false, message: "账户配置已变化，请重新查询" };
+      const updatedAt = new Date(this.now()).toISOString();
       this.cache[p.id] = {
         fingerprint: key,
         fields,
-        updatedAt: new Date(this.now()).toISOString(),
+        updatedAt,
+        ...this.observedQuota(p, key, fields, updatedAt),
       };
       this.errors.delete(key);
       this.saveResult(key);
@@ -621,10 +684,10 @@ class AccountInfo {
       return { ok: false, message };
     }
   }
-  async fetchJSON(p, url, extraHeaders = {}, authorization = "Bearer " + p.apiKey) {
+  async fetchJSON(p, url, extraHeaders = {}, authorization = "Bearer " + p.apiKey, timeoutMs = 15000) {
     const r = await this.fetcher(url, { method: "GET", headers: { ...extraHeaders,
       accept: "application/json", authorization },
-      signal: AbortSignal.timeout(15000), redirect: "error", cache: "no-store" }, p.network);
+      signal: AbortSignal.timeout(timeoutMs), redirect: "error", cache: "no-store" }, p.network);
     if (!r.ok) { await r.body?.cancel(); throw Error("HTTP " + r.status); }
     if (Number(r.headers.get("content-length")) > 256 * 1024) { await r.body?.cancel(); throw Error("资料响应过大"); }
     const chunks = [], reader = r.body?.getReader(); let size = 0;
@@ -645,7 +708,7 @@ class AccountInfo {
     const secrets = new Set([p.apiKey, p.oauthAccess, ...(p.coding || []).map((c) => c.apiKey)].filter(Boolean));
     const protect = (value) => { if (typeof value === "string" && value) secrets.add(value); };
     const get = (url, headers = {}) => this.fetchJSON(p, url, headers, headers.authorization || "Bearer " + p.apiKey);
-    const results = await Promise.all(requests.map(async (request) => {
+    const querySection = async (request) => {
       const { section, url } = request;
       try {
         const response = request.run ? await request.run(get, protect) : await get(url);
@@ -661,7 +724,13 @@ class AccountInfo {
           : queryError(e, label);
         return { section, error: message };
       }
-    }));
+    };
+    const results = [];
+    if (kind === ANTIGRAVITY_QUOTA) {
+      for (const request of requests) results.push(await querySection(request));
+    } else {
+      results.push(...await Promise.all(requests.map(querySection)));
+    }
     const current = this.getProvider(p.id);
     if (!current || fingerprint(current) !== key) return { ok: false, message: "账户配置已变化，请重新查询" };
     const previous = this.cache[p.id]?.fingerprint === key ? this.cache[p.id] : null;
@@ -675,8 +744,10 @@ class AccountInfo {
       // The public timestamp is the oldest displayed section, not a false fresh
       // timestamp on retained quota data. No cache can cross token fingerprints.
       const items = Object.values(sections);
+      const usage = results.find(r => r.section === "usage" && !r.error);
       this.cache[p.id] = { fingerprint: key, sections, fields: items.flatMap((s) => s.fields),
-        updatedAt: items.map((s) => s.updatedAt).sort()[0] };
+        updatedAt: items.map((s) => s.updatedAt).sort()[0],
+        ...this.observedQuota(p, key, usage?.fields, usage?.updatedAt) };
       this.saveResult(key);
     }
     return { ok: errors.length === 0, partial: errors.length > 0 && results.some((r) => !r.error), message: errors.join("；") || undefined, warning: this.warnings.get(key) };

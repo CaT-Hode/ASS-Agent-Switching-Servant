@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { UsageMeter } from './usage-meter.jsx';
 import {
   Activity,
@@ -10,20 +10,28 @@ import {
   Info,
   Zap,
   UserRound,
+  Pin,
 } from "./icons.jsx";
 import {
   CLIENT_NAMES,
   detectedClients,
   dayKey,
+  groupQuotaWindows,
   overviewAccounts,
   overviewAccountPriority,
+  quotaAmountText,
   summarize,
 } from "./usage-view.mjs";
-import { ElapsedTime } from "./diagnostic-time.jsx";
-import { exactTime } from "./relative-time.mjs";
+import { ElapsedTime, QuotaResetTime } from "./diagnostic-time.jsx";
+import { quotaDateTime } from "./relative-time.mjs";
+import { hasFreshQuotaSample, quotaWindowKey } from "../core/quota-history.mjs";
+import { QuotaHistory, ResetCreditDetails } from "./quota-monitor.jsx";
+import { UsageDrilldown } from "./usage-drilldown.jsx";
 import "./overview.css";
 const api = window.ass;
 const count = (n) => n.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
+const hasQuotaCard = (row) =>
+  overviewAccountPriority(row) > 0 || (row.client.id === "antigravity" && row.canRefresh);
 const compact = (n) =>
   n >= 1e9
     ? (n / 1e9).toFixed(2) + "B"
@@ -47,6 +55,16 @@ function Segments({ label, value, items, onChange }) {
     </div>
   );
 }
+function UsageRefreshGlyph({ busy = false, large = false }) {
+  return (
+    <span
+      className={`usage-refresh-glyph${busy ? " is-reading" : ""}${large ? " is-large" : ""}`}
+      aria-hidden="true"
+    >
+      <RefreshCw size={large ? 20 : 16} strokeWidth={1.7} />
+    </span>
+  );
+}
 function DayDetail({ data }) {
   return (
     <span className="usage-day-detail" role="status">
@@ -61,12 +79,12 @@ function DayDetail({ data }) {
           )}
         </>
       ) : (
-        <span>指向格子查看用量</span>
+        <span>指向格子查看用量，点击查看会话</span>
       )}
     </span>
   );
 }
-function HeatCell({ data, max, onSelect, children }) {
+function HeatCell({ data, max, onSelect, onDrill }) {
   return (
     <button
       className="heatmap-cell"
@@ -80,9 +98,8 @@ function HeatCell({ data, max, onSelect, children }) {
       onMouseLeave={() => onSelect(null)}
       onFocus={() => onSelect(data)}
       onBlur={() => onSelect(null)}
-    >
-      {children}
-    </button>
+      onClick={data.observations ? (event) => onDrill(data, event.currentTarget) : undefined}
+    />
   );
 }
 function HeatFooter({ selected }) {
@@ -99,7 +116,7 @@ function HeatFooter({ selected }) {
     </div>
   );
 }
-function PeriodHeatmap({ stats, selected, onSelect }) {
+function PeriodHeatmap({ stats, selected, onSelect, onDrill }) {
   const max = Math.max(1, ...stats.timeline.map((d) => d.calls));
   const buckets = new Map(stats.timeline.map((d) => [d.key, d]));
   const isWeek = stats.range === "week";
@@ -150,7 +167,7 @@ function PeriodHeatmap({ stats, selected, onSelect }) {
                 key = `${day}T${String(hour).padStart(2, "0")}`,
                 d = buckets.get(key);
               return d ? (
-                <HeatCell key={key} data={d} {...{ max, selected, onSelect }} />
+                <HeatCell key={key} data={d} {...{ max, onSelect, onDrill }} />
               ) : (
                 <span
                   key={key}
@@ -166,9 +183,9 @@ function PeriodHeatmap({ stats, selected, onSelect }) {
     </div>
   );
 }
-function Heatmap({ stats, selected, onSelect }) {
+function Heatmap({ stats, selected, onSelect, onDrill }) {
   if (stats.grain === "hour")
-    return <PeriodHeatmap {...{ stats, selected, onSelect }} />;
+    return <PeriodHeatmap {...{ stats, selected, onSelect, onDrill }} />;
   const max = Math.max(1, ...stats.timeline.map((d) => d.calls));
   const pad = (stats.start.getDay() + 6) % 7;
   const cells = [...Array(pad).fill(null), ...stats.timeline];
@@ -197,7 +214,7 @@ function Heatmap({ stats, selected, onSelect }) {
         <div className="heatmap-grid">
           {cells.map((d, i) =>
             d ? (
-              <HeatCell key={d.key} data={d} {...{ max, selected, onSelect }} />
+              <HeatCell key={d.key} data={d} {...{ max, onSelect, onDrill }} />
             ) : (
               <span key={"pad" + i} />
             ),
@@ -208,7 +225,7 @@ function Heatmap({ stats, selected, onSelect }) {
     </div>
   );
 }
-function TokenChart({ stats, selected, onSelect }) {
+function TokenChart({ stats, selected, onSelect, onDrill }) {
   const max = Math.max(1, ...stats.timeline.map((d) => d.input + d.output));
   return (
     <>
@@ -239,7 +256,7 @@ function TokenChart({ stats, selected, onSelect }) {
               aria-label={`${d.label || d.day} · ${count(d.input + d.output)} Tokens${!d.observations ? " · 无记录" : ""}`}
               onMouseEnter={() => onSelect(d)}
               onFocus={() => onSelect(d)}
-              onClick={() => onSelect(d)}
+              onClick={d.observations ? (event) => onDrill(d, event.currentTarget) : undefined}
             >
               <span
                 className="token-stack"
@@ -275,7 +292,7 @@ function TokenChart({ stats, selected, onSelect }) {
     </>
   );
 }
-function DailyOnly({ stats }) {
+function DailyOnly({ stats, onDrill }) {
   if (!stats.unallocated.observations) return null;
   return (
     <details className="usage-daily-only">
@@ -289,7 +306,7 @@ function DailyOnly({ stats }) {
       <dl>
         {stats.dailyOnly.map((d) => (
           <div key={d.key}>
-            <dt>{d.day}</dt>
+            <dt><button type="button" className="usage-drill-trigger" onClick={(event) => onDrill(d, event.currentTarget)}>{d.day}</button></dt>
             <dd>{count(d.calls)} 次调用</dd>
             <dd>
               <strong>{count(d.input + d.output)} Tokens</strong>
@@ -300,10 +317,63 @@ function DailyOnly({ stats }) {
     </details>
   );
 }
-function AccountCard({ row, refresh, busy }) {
+function AccountCard({ row, refresh, busy, monitor, changeMonitor, now }) {
   const { account: a } = row;
+  const antigravity = row.client.id === "antigravity";
+  const codex = row.client.id === "codex" && a.kind !== "api";
+  const monitored = a.kind !== "api" && ["antigravity", "claude", "codex"].includes(row.client.id);
+  const pinnedKey = monitor.pinned?.[row.quotaKey];
+  const pinned = row.quotas.find(field => quotaWindowKey(field) === pinnedKey);
+  const tightest = antigravity && row.quotas.length > 1
+    ? row.quotas.reduce((lowest, q) => q.remainingPercent < lowest.remainingPercent ? q : lowest)
+    : null;
+  const ordered = pinned ? [pinned, ...row.quotas.filter(field => field !== pinned)] : row.quotas;
+  const accountStatus = <>
+    <span className={"overview-account-present" + (!a.ready ? " danger" : "")}>
+      <i />
+      {a.status === "expired" ? "授权已到期"
+        : a.status === "refresh-required" ? "待客户端刷新"
+          : a.ready ? "已添加" : "待配置"}
+    </span>
+    {row.source && <span>{row.source.replace(" · 上次查询", "")}</span>}
+    {row.updatedAt && <ElapsedTime value={row.updatedAt} prefix={row.source ? "查询于 " : "更新于 "} />}
+    {row.error && <span className="danger" title={row.error}>刷新失败</span>}
+  </>;
+  const renderQuota = (q) => {
+    const title = codex && q.label === "5h" ? "5 小时额度"
+      : codex && q.label === "周" ? "每周额度" : q.label;
+    const label = [q.group, title].filter(Boolean).join(" · ");
+    const key = quotaWindowKey(q);
+    const observed = row.quotaHistory?.[key]?.at(-1);
+    const low = monitor.lowThreshold > 0 && hasFreshQuotaSample(observed, now) && q.remainingPercent <= monitor.lowThreshold;
+    return (
+      <div className="overview-quota-window" key={key} data-tightest={q === tightest || undefined}
+        data-pinned={q === pinned || undefined} data-low={low || undefined}>
+        <div className="overview-quota-title">
+          <span>{title}</span>
+          <strong>
+            {Number(q.remainingPercent.toFixed(1))}% <small>剩余</small>
+          </strong>
+        </div>
+        <UsageMeter label={label + " 剩余额度"} value={q.remainingPercent} quota={q} />
+        <div className="overview-quota-reset">
+          {q.resetsAt ? <QuotaResetTime value={q.resetsAt} /> : <span>重置时间未知</span>}
+          {codex && q.resetsAt && <time dateTime={q.resetsAt}>{quotaDateTime(q.resetsAt)}</time>}
+        </div>
+        {monitored && <div className="overview-quota-actions">
+          <button type="button" className="overview-quota-pin" aria-pressed={q === pinned}
+            aria-label={(q === pinned ? "取消关注 " : "关注 ") + label}
+            onClick={() => changeMonitor({ pinned: { [row.quotaKey]: q === pinned ? null : key } })}>
+            <Pin size={12} />{q === pinned ? "已关注" : "关注"}
+          </button>
+          {low && <span className="overview-quota-low">低额度</span>}
+          {q === tightest && <span className="overview-quota-tightest">最紧窗口</span>}
+        </div>}
+      </div>
+    );
+  };
   return (
-    <article className="overview-account">
+    <article className="overview-account" data-expanded-codex={codex || undefined} data-antigravity={antigravity || undefined}>
       <header>
         <span className="overview-account-avatar">
           <UserRound size={19} />
@@ -331,60 +401,41 @@ function AccountCard({ row, refresh, busy }) {
           </button>
         )}
       </header>
-      {!!row.quotas.length && (
-        <div className="overview-quota-windows">
-          {row.quotas.map((q) => (
-            <div
-              key={q.id}
-              title={q.resetsAt ? "重置：" + exactTime(q.resetsAt) : undefined}
-            >
-              <div>
-                <span>{q.label}</span>
-                <strong>
-                  {Number(q.remainingPercent.toFixed(1))}% <small>剩余</small>
-                </strong>
-              </div>
-              <UsageMeter label={q.label + ' 剩余额度'} value={q.remainingPercent} quota={q} />
-            </div>
-          ))}
-        </div>
-      )}
-      {!!row.amounts.length && (
+      {antigravity && <div className="overview-account-meta">
+        {accountStatus}
+        {row.amounts.map((field) => (
+          <span className="overview-account-amount" key={field.id}
+            title={field.unknown ? "接口未返回可确认的数值" : undefined}>
+            {field.label} <strong>{quotaAmountText(field)}</strong>
+          </span>
+        ))}
+      </div>}
+      {!!row.quotas.length && <div className="overview-quota-groups">
+        {groupQuotaWindows(ordered).map(([group, windows]) => (
+          <div key={group} role={group ? "group" : undefined} aria-label={group || undefined}>
+            {(group || codex) && <h3 className="quota-group-title">{group || "订阅额度"}</h3>}
+            <div className="overview-quota-windows" data-primary={codex && !group || undefined}>{windows.map(renderQuota)}</div>
+          </div>
+        ))}
+      </div>}
+      {!antigravity && !!row.amounts.length && (
         <div className="overview-amounts">
           {row.amounts.map((f) => (
-            <span key={f.id}>
+            <span key={f.id} title={f.unknown ? "接口未返回可确认的数值" : undefined}>
               <small>{f.label}</small>
-              <strong>
-                {f.value} <small>{f.unit}</small>
-              </strong>
+              <strong>{quotaAmountText(f)}</strong>
+              {codex && f.id === "codex-reset-credits" && <ResetCreditDetails credit={f} />}
             </span>
           ))}
         </div>
       )}
-      <footer>
-        <span
-          className={"overview-account-present" + (!a.ready ? " danger" : "")}
-        >
-          <i />
-          {a.status === "expired"
-            ? "授权已到期"
-            : a.status === "refresh-required"
-              ? "待客户端刷新"
-              : a.ready
-                ? "已添加"
-                : "待配置"}
-        </span>
-        {row.updatedAt && <ElapsedTime value={row.updatedAt} />}{" "}
-        {row.error && (
-          <span className="danger" title={row.error}>
-            刷新失败
-          </span>
-        )}
-      </footer>
+      {monitored && row.quotas.length > 0 &&
+        <QuotaHistory windows={row.quotas} history={row.quotaHistory} focus={pinned || tightest || row.quotas[0]} now={now} />}
+      {!antigravity && <footer>{accountStatus}</footer>}
     </article>
   );
 }
-export function Overview({ state, act, setView, setClientTarget }) {
+export function Overview({ state, act, setView, setClientTarget, onOpenUsageConversation }) {
   const savedOptions = state.preferences.usage || {
     client: "all",
     range: "month",
@@ -397,19 +448,25 @@ export function Overview({ state, act, setView, setClientTarget }) {
   const usage = state.usage || { rows: [], sources: [] };
   const [selected, setSelected] = useState(null),
     [refreshing, setRefreshing] = useState("");
+  const [drill, setDrill] = useState(null);
+  const drillOpener = useRef(null);
   const [today, setToday] = useState(() => new Date());
   const stats = useMemo(
     () => summarize(usage.rows.filter((r) => visibleIds.has(r.client)), options, today),
     [usage.rows, options.client, options.range, options.group, today, clients.map((c) => c.id).join(",")],
   );
   const accounts = overviewAccounts(state, options.client);
-  const quotaAccounts = accounts.filter((row) => overviewAccountPriority(row) > 0);
-  const otherAccounts = accounts.filter((row) => overviewAccountPriority(row) === 0);
+  const quotaAccounts = accounts.filter(hasQuotaCard);
+  const otherAccounts = accounts.filter((row) => !hasQuotaCard(row));
+  const quotaMonitor = state.preferences.quotaMonitor || {};
+  const quotaNow = Date.now();
+  const changeQuotaMonitor = patch => act("quota-monitor", () => api.call("ui-preferences", { quotaMonitor: patch }));
   const filteredSources = usage.sources.filter(
     (s) => visibleIds.has(s.client) && (options.client === "all" || s.client === options.client),
   );
   const change = (patch) => {
     setSelected(null);
+    setDrill(null);
     act("usage-options", () => api.call("ui-preferences", { usage: patch }));
   };
   const refresh = () => act("usage-refresh", () => api.call("usage-refresh"));
@@ -437,6 +494,23 @@ export function Overview({ state, act, setView, setClientTarget }) {
   const hasData = stats.total.observations > 0;
   const day = selected && stats.timeline.find((d) => d.key === selected.key);
   const hasTimedData = stats.timeline.some((d) => d.observations > 0);
+  function openDrill(label, query, trigger) {
+    drillOpener.current = trigger;
+    setDrill({ label, query: {
+      from: stats.from, to: stats.to, cutoffDay: stats.to, cutoffHour: today.getHours(),
+      filterClients: options.client === 'all' ? [...visibleIds] : [options.client], ...query,
+    } });
+  }
+  function openPeriod(bucket, trigger) {
+    openDrill(bucket.label || bucket.day, { from: bucket.day, to: bucket.day,
+      ...(Number.isInteger(bucket.hour) ? { hours: [bucket.hour, bucket.hour + stats.periodHours] } : {}),
+      ...(bucket.key.endsWith('-daily') ? { dayOnly: true } : {}),
+    }, trigger);
+  }
+  function closeDrill() {
+    setDrill(null);
+    drillOpener.current?.focus();
+  }
   return (
     <div className="usage-overview">
       <div
@@ -493,16 +567,15 @@ export function Overview({ state, act, setView, setClientTarget }) {
             />
           )}
           <button
-            className="model-icon"
+            type="button"
+            className="usage-refresh-button"
             aria-label="刷新本地用量"
-            title="刷新本地用量"
-            disabled={usage.loading}
-            onClick={refresh}
+            aria-disabled={usage.loading === true}
+            aria-busy={usage.loading === true}
+            title={usage.loading ? "读取本地用量…" : "刷新本地用量"}
+            onClick={() => { if (!usage.loading) refresh(); }}
           >
-            <RefreshCw
-              size={16}
-              className={usage.loading ? "spin" : undefined}
-            />
+            <UsageRefreshGlyph busy={usage.loading} />
           </button>
         </div>
       </div>
@@ -547,9 +620,9 @@ export function Overview({ state, act, setView, setClientTarget }) {
               </span>
             </header>
             {usage.loading && !usage.updatedAt ? (
-              <div className="usage-empty">
-                <RefreshCw className="spin" size={22} />
-                读取本地用量…
+              <div className="usage-empty usage-loading" role="status">
+                <UsageRefreshGlyph busy large />
+                <span>读取本地用量…</span>
               </div>
             ) : !hasData ? (
               <div className="usage-empty">
@@ -563,12 +636,12 @@ export function Overview({ state, act, setView, setClientTarget }) {
               </div>
             ) : options.tab === "tokens" ? (
               <TokenChart
-                {...{ stats, selected: day, onSelect: setSelected }}
+                {...{ stats, selected: day, onSelect: setSelected, onDrill: openPeriod }}
               />
             ) : (
-              <Heatmap {...{ stats, selected: day, onSelect: setSelected }} />
+              <Heatmap {...{ stats, selected: day, onSelect: setSelected, onDrill: openPeriod }} />
             )}
-            <DailyOnly stats={stats} />
+            <DailyOnly stats={stats} onDrill={openPeriod} />
             <div className="usage-chart-meta">
               <span>
                 {hasData
@@ -603,9 +676,12 @@ export function Overview({ state, act, setView, setClientTarget }) {
             {stats.groups.length ? (
               <div className="usage-group-list">
                 {stats.groups.map((g) => (
-                  <div className="usage-group" key={g.name}>
-                    <span title={g.name}>{g.name}</span>
-                    <div className="usage-group-track">
+                  <button type="button" className="usage-group" key={g.name}
+                    onClick={(event) => openDrill(g.name, options.group === 'model' ? { model: g.name } : {
+                      filterClients: clients.filter((client) => (CLIENT_NAMES[client.id] || client.id) === g.name).map((client) => client.id),
+                    }, event.currentTarget)}>
+                    <span className="usage-group-label" title={g.name}>{g.name}</span>
+                    <span className="usage-group-track" aria-hidden="true">
                       <i
                         style={{
                           width:
@@ -616,18 +692,20 @@ export function Overview({ state, act, setView, setClientTarget }) {
                               : 0) + "%",
                         }}
                       />
-                    </div>
+                    </span>
                     <strong title={count(g.input + g.output)}>
                       {compact(g.input + g.output)}
                     </strong>
                     <small>{count(g.calls)} 次</small>
-                  </div>
+                  </button>
                 ))}
               </div>
             ) : (
               <p className="muted tiny">暂无记录</p>
             )}
           </section>
+          {drill ? <UsageDrilldown key={JSON.stringify(drill.query)} selection={drill} act={act}
+            onClose={closeDrill} onOpenConversation={onOpenUsageConversation} /> : null}
         </>
       )}
       <section className="overview-accounts">
@@ -654,6 +732,9 @@ export function Overview({ state, act, setView, setClientTarget }) {
                 row={row}
                 busy={refreshing}
                 refresh={refreshAccount}
+                monitor={quotaMonitor}
+                changeMonitor={changeQuotaMonitor}
+                now={quotaNow}
               />
             ))}
           </div>
@@ -665,7 +746,8 @@ export function Overview({ state, act, setView, setClientTarget }) {
             <summary>其他账户 <span className="count">{otherAccounts.length}</span></summary>
             <div className="overview-accounts-grid">
               {otherAccounts.map((row) => (
-                <AccountCard key={row.key} row={row} busy={refreshing} refresh={refreshAccount} />
+                <AccountCard key={row.key} row={row} busy={refreshing} refresh={refreshAccount}
+                  monitor={quotaMonitor} changeMonitor={changeQuotaMonitor} now={quotaNow} />
               ))}
             </div>
           </details>

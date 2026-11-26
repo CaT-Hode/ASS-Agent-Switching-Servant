@@ -1,6 +1,6 @@
 # Logo 与图标导出
 
-图形以用户提供的 `docs/assets/ass-reference-flat.png` 为参考，矢量底稿为 `public/ass-logo-reference.svg`。八片花瓣保留各自的曲线，最终图形由 `scripts/brand-geometry.cjs` 生成，使用白色花瓣与橙色中心。
+图形以用户提供的 `design/ass-reference-flat.png` 为参考，矢量底稿为 `public/ass-logo-reference.svg`。八片花瓣保留各自的曲线，最终图形由 `scripts/brand-geometry.cjs` 生成，使用白色花瓣与橙色中心。
 
 在项目根目录运行 `npx electron scripts/make-icons.cjs`，统一生成：
 

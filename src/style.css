@@ -166,6 +166,23 @@ main {
   gap: 10px;
   align-items: center;
 }
+.page-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  min-height: 46px;
+}
+.page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: none;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+.page-actions > .button { min-height: 36px; }
+.page-actions > .icon-button { width: 36px; height: 36px; }
 .button {
   display: inline-flex;
   align-items: center;

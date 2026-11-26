@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Plus,
-  Download,
   Search,
   ChevronRight,
   Settings2,
@@ -12,7 +11,6 @@ import {
   GripVertical,
   RefreshCw,
   AlertTriangle,
-  Upload,
 } from "./icons.jsx";
 import { Modal, ModelEditor, ProviderEditor } from "./editors.jsx";
 import { ActionMenu } from "./menus.jsx";
@@ -25,11 +23,12 @@ import {
 } from "./model-inspection.jsx";
 import "./providers.css";
 import { DiagnosticTime } from "./diagnostic-time.jsx";
-import { SupplierQuota } from "./supplier-quota.jsx";
+import { SupplierQuota, SupplierQuotaRefresh, quotaAccountCaption, useSupplierQuota } from "./supplier-quota.jsx";
+import { AccountProfile } from "./account-profile.jsx";
+import { accountPlan } from "./account-plan.mjs";
 import { providerBrand } from "./provider-brand.mjs";
 import { orderProviders } from "./provider-order.mjs";
 import { useProviderDrag } from "./provider-drag.jsx";
-import { ExportConfigDialog } from "./config-export.jsx";
 const api = window.ass;
 const protocols = {
   "openai-responses": "Responses",
@@ -59,7 +58,7 @@ function ProviderActions({ p, act, busy, onSelect, onEdit }) {
       label={p.name + " 更多操作"}
       disabled={!!busy}
       items={[
-        onSelect && { label: "查看模型", icon: Layers, action: onSelect },
+        onSelect && { label: p.nativeAccountId ? "查看账户" : "查看模型", icon: Layers, action: onSelect },
         !p.readOnly &&
           p.id !== "official" && {
             label: "编辑供应商",
@@ -109,6 +108,14 @@ function SourceCard({
 }) {
   const [failedBrand, setFailedBrand] = useState(null);
   const brand = providerBrand(p, state.officialProviderIds[p.id]);
+  const quota = useSupplierQuota(p, state);
+  const accountInHeader = !!(p.nativeAccountId && quota.account);
+  const caption = accountInHeader ? quotaAccountCaption(quota.account) : "";
+  const accountLine = accountInHeader ? [
+    caption === p.name ? null : caption,
+    quota.profile?.remote && quota.profile.source?.replace(" · 上次查询", "") || quota.client?.name,
+    "OAuth", accountPlan(quota.account),
+  ].filter(Boolean).join(" · ") : "";
   return (
     <article
       className="supplier-card"
@@ -125,7 +132,7 @@ function SourceCard({
         type="button"
         className="supplier-open"
         data-icon-scope="parent"
-        aria-label={"查看 " + p.name + " 的模型"}
+        aria-label={"查看 " + p.name + (p.nativeAccountId ? " 的账户" : " 的模型")}
         onClick={onSelect}
       />
       <header>
@@ -147,14 +154,17 @@ function SourceCard({
           >
             {p.name}
           </h2>
-          <span>
-            {p.id === "official"
-              ? "OAuth 订阅"
-              : p.readOnly
-                ? "原生账户"
-                : "API"}
+          <span title={accountLine || undefined}>
+            {accountLine || (p.nativeAccountId
+              ? "OAuth"
+              : p.id === "official"
+                ? "OAuth 订阅"
+                : p.readOnly
+                  ? "原生账户"
+                  : "API")}
           </span>
         </div>
+        {accountInHeader && <SupplierQuotaRefresh name={p.name} quota={quota} />}
         <button
           type="button"
           className="model-icon provider-drag-handle"
@@ -166,13 +176,13 @@ function SourceCard({
         </button>
         <ProviderActions {...{ p, act, busy, onSelect, onEdit }} />
       </header>
-      <div className="supplier-meta">
-        <span>{p.models.length} 个模型</span>
+      {!accountInHeader && <div className="supplier-meta">
+        <span>{p.nativeAccountId ? `${p.accountCount} 个账户` : `${p.models.length} 个模型`}</span>
         {p.enabled === false && <span>已停用</span>}
         {!!draftCount && <span className="danger">{draftCount} 项未保存</span>}
         <ChevronRight size={15} />
-      </div>
-      <SupplierQuota p={p} state={state} />
+      </div>}
+      <SupplierQuota p={p} quota={quota} accountInHeader={accountInHeader} />
     </article>
   );
 }
@@ -495,7 +505,6 @@ export function Providers({
     [modelSearch, setModelSearch] = useState(""),
     [editor, setEditor] = useState(null),
     [providerEditor, setProviderEditor] = useState(null),
-    [exportOpen, setExportOpen] = useState(false),
     [directory, setDirectory] = useState(null),
     [drafts, setDrafts] = useState({});
   const gallerySearch = useRef(null),
@@ -517,6 +526,10 @@ export function Providers({
         .includes(search.toLowerCase()),
   );
   const p = all.find((p) => p.id === activeProvider);
+  const accountClient = p?.nativeAccountId
+    ? state.harnesses.clients.find((client) => client.id === p.id.slice(7))
+    : null;
+  const nativeAccount = accountClient?.accounts.find((account) => account.id === p.nativeAccountId);
   const dragProps = useProviderDrag({
     ids: all.map((p) => p.id),
     visibleIds: matches.map((p) => p.id),
@@ -536,9 +549,9 @@ export function Providers({
   const sideOpen = !!(editor || directory || providerEditor);
   const revision = state.modelDirectoryRevisions?.[p?.id] || 0;
   useEffect(() => {
-    if (p && (p.readOnly || p.hasKey || p.id === "official"))
+    if (p && !p.nativeAccountId && (p.readOnly || p.hasKey || p.id === "official"))
       api.call("models-discover", p.id).catch(() => {});
-  }, [p?.id, p?.hasKey, p?.readOnly, revision]);
+  }, [p?.id, p?.hasKey, p?.readOnly, p?.nativeAccountId, revision]);
   const directoryProvider = all.find((p) => p.id === directory);
   function select(p) {
     onOpenProvider(p.id);
@@ -565,7 +578,7 @@ export function Providers({
   return (
     <>
       <section className="provider-gallery" aria-label="供应商卡片">
-        <div className="inventory-toolbar">
+        <div className="inventory-toolbar page-action-bar">
           <label className="search">
             <Search size={16} />
             <input
@@ -589,19 +602,12 @@ export function Providers({
             {all.reduce((n, p) => n + p.models.length, 0)} 个模型 · {all.length}{" "}
             个来源
           </span>
-          <button className="button" disabled={!!busy} onClick={() => act("import", () => api.call("import"))}>
-            <Upload size={15} />导入配置
-          </button>
-          <button className="button export-config-button" onClick={() => setExportOpen(true)}>
-            <Download size={15} />导出配置
-          </button>
-          <button
-            className="button primary"
-            onClick={() => setProviderEditor({})}
-          >
-            <Plus size={15} />
-            添加供应商
-          </button>
+          <div className="page-actions">
+            <button className="button primary" onClick={() => setProviderEditor({})}>
+              <Plus size={15} />
+              添加供应商
+            </button>
+          </div>
         </div>
         {orderError && (
           <p className="danger" role="alert">
@@ -639,8 +645,19 @@ export function Providers({
           </div>
         )}
       </section>
-      {exportOpen && <ExportConfigDialog onClose={() => setExportOpen(false)} />}
-      {p && (
+      {p?.nativeAccountId && (
+        <Modal
+          title={p.name + " · 账户"}
+          description="Antigravity 原生 OAuth"
+          onClose={onBack}
+          fallbackFocus={() => cardButtons.current.get(p.id) || gallerySearch.current}
+        >
+          {nativeAccount ? (
+            <AccountProfile account={nativeAccount} client={accountClient} {...{ state, act, busy }} />
+          ) : <p className="muted">账户已变更，请重新打开供应商。</p>}
+        </Modal>
+      )}
+      {p && !p.nativeAccountId && (
         <Modal
           title={p.name + " · 模型"}
           description={p.baseUrl || p.catalogSource || "原生客户端目录"}

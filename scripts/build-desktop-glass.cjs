@@ -18,7 +18,7 @@ const vswhere = path.join(process.env['ProgramFiles(x86)'], 'Microsoft Visual St
 const vs = execFileSync(vswhere, ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath'], { encoding: 'utf8', windowsHide: true }).trim();
 const cmake = path.join(vs, 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe');
 const build = path.join(root, 'native/build');
-execFileSync(cmake, ['-S', path.join(root, 'native'), '-B', build, '-A', 'x64', '-DNODE_INCLUDE=' + headers, '-DNODE_LIBRARY=' + library], { stdio: 'inherit', windowsHide: true });
+execFileSync(cmake, ['-S', path.join(root, 'native'), '-B', build, '-A', 'x64', '-DBUILD_TESTING=OFF', '-DNODE_INCLUDE=' + headers, '-DNODE_LIBRARY=' + library], { stdio: 'inherit', windowsHide: true });
 execFileSync(cmake, ['--build', build, '--config', 'Release', '--parallel', '4'], { stdio: 'inherit', windowsHide: true });
 const output = path.join(root, 'native/bin/desktop-glass');fs.mkdirSync(output, { recursive: true });
 for (const [source, name] of [['Release/RequestGlass.node', 'RequestGlass.node'], ['desktop-glass/Release/DesktopGlass.dll', 'DesktopGlass.dll']])

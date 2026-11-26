@@ -155,13 +155,21 @@ function resolveLauncher(harness, selectedPath, env = process.env) {
       const product = readDesktopJson(path.join(root, "resources/app/product.json"));
       const ide = [product.nameShort, product.nameLong].some((name) => ["Antigravity", "Antigravity IDE"].includes(name)) &&
         ["antigravity", "antigravity-ide"].includes(product.applicationName);
-      if (!manifest && !ide) return fail("未找到 Antigravity 产品元数据，请选择实际安装目录");
+      if (!manifest && !ide) continue;
       const variant = manifest ? "desktop" : "ide";
-      const version = manifest?.version || readDesktopJson(path.join(root, "resources/app/package.json")).version;
+      const version = trustedVersion(manifest?.version || product.ideVersion);
       return { ...fail(variant === "ide" ? "Antigravity IDE · 原生账户" : "Antigravity 2.0 · 原生账户"),
         installed: true, kind: "desktop", desktopExecutable: desktop, nativeVariant: variant,
-        ...(typeof version === "string" && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version) ? { version } : {}) };
+        ...(version ? { version } : {}) };
     }
+    const entries = info.isDirectory() ? [location, path.join(location, "bin")].flatMap(dir =>
+      ["agy.exe", "agy.cmd", "agy.ps1"].map(name => path.join(dir, name))) : [location];
+    const cli = entries.find(file => /^agy\.(?:exe|cmd|ps1)$/i.test(path.basename(file)) && stat(file)?.isFile());
+    if (cli) {
+      return { ...launch(cli, [], info.isDirectory() ? "directory" : "executable", "Antigravity CLI · 原生账户"),
+        nativeVariant: "cli" };
+    }
+    return fail("请选择 agy 程序、Antigravity 桌面程序或对应安装目录");
   }
   if (harness === "zcode") {
     const desktop = info.isDirectory() ? ["ZCode.exe", "ZCode Preview.exe"].map((name) => path.join(location, name))
@@ -329,7 +337,7 @@ function searchLocations(harness, env = process.env) {
     if (env.LOCALAPPDATA) locations.push(path.join(env.LOCALAPPDATA, "agy", "bin", "agy.exe"));
     for (const root of [env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs"), env.ProgramFiles, env["ProgramFiles(x86)"]].filter(Boolean))
       for (const name of ["Antigravity", "Antigravity IDE"])
-        locations.push(path.join(root, name, name + ".exe"));
+        locations.push(path.join(root, name));
     if (env.ProgramFiles) locations.push(path.join(env.ProgramFiles, "Google/antigravity-cli/agy.exe"));
   }
   if (harness === "zcode") {

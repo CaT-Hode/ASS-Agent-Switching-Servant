@@ -74,6 +74,12 @@ class ProjectConversations {
         scope, inactive: r.inactive, retained: Object.fromEntries(HARNESSES.map((h) => [h, r.records.filter((r) => r.harness === h && r.retained).length])), errors: r.errors, error: this.error || this.lastError || '' };
     });
   }
+  usageReferences() {
+    return this.serial(async () => {
+      const { projects, records } = await this.run('discover', { scope: 'all', history: await this.history?.() || [] });
+      return { items: projects, records };
+    });
+  }
   async configure(id, { enabled, targets = HARNESSES } = {}) {
     if (typeof enabled !== 'boolean' || !Array.isArray(targets) || !targets.length || targets.some((h) => !HARNESSES.includes(h))) throw Error('项目同步选项无效');
     if (id === 'unassigned') throw Error('无项目会话只管理内容，不支持同步');
@@ -127,11 +133,13 @@ class ProjectConversations {
       sourceOmissions: t.sourceOmissions || [],
       projections: t.routes.filter(r => !r.contextStale).map((r) => ({ harness: r.harness, mode: r.mode })) })) };
   }
-  async records(id, { offset = 0, query = '', harness = '', pinned = false } = {}) {
-    if (!Number.isInteger(offset) || offset < 0 || typeof query !== 'string' || query.length > 500 || (harness && !HARNESSES.includes(harness))) throw Error('会话查询无效');
+  async records(id, { offset = 0, query = '', harness = '', pinned = false, recordId = '' } = {}) {
+    if (!Number.isInteger(offset) || offset < 0 || typeof query !== 'string' || query.length > 500 ||
+        (harness && !HARNESSES.includes(harness)) || typeof recordId !== 'string' || recordId.length > 128) throw Error('会话查询无效');
     if (!this.recordsCache.length || !this.candidates.some((p) => p.id === id) && !this.state.projects.some((p) => p.id === id)) await this.list();
     const all = this.recordsCache.filter((r) => r.projectId === id && (!harness || r.harness === harness));
-    const filtered = all.filter((r) => (!pinned || r.pinned) && `${r.title} ${r.sessionId}`.toLowerCase().includes(query.toLowerCase()))
+    const filtered = all.filter((r) => (!recordId || r.id === recordId) && (!pinned || r.pinned) &&
+        `${r.title} ${r.sessionId}`.toLowerCase().includes(query.toLowerCase()))
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt));
     return { total: filtered.length, offset, items: filtered.slice(offset, offset + 40).map((r) => ({ ...r, kind: 'native' })) };
   }

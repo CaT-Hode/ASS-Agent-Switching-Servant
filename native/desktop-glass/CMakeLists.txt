@@ -27,7 +27,7 @@ if(DESKTOP_GLASS_BUILD_EXAMPLE)
 endif()
 
 include(CTest)
-if(BUILD_TESTING)
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/shader_smoke.cpp")
   add_executable(desktop-glass-smoke tests/shader_smoke.cpp)
   target_compile_features(desktop-glass-smoke PRIVATE cxx_std_20)
   target_compile_definitions(desktop-glass-smoke PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)

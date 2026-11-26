@@ -17,6 +17,6 @@
 
 新增的是自动遵循系统 `prefers-reduced-motion` 的兼容处理，不增加“减少动态效果”设置项。
 
-这套配色、主题胶囊和圆形切换已从当前源码提炼为项目内的 [best-light-dark-switching skill](../skills/best-light-dark-switching/SKILL.md)，包含独立可复制的参考代码。项目实际实现与用户要求是依据，skill 是提炼结果，不是要求项目套用的旧规范。
+ASS 的主题胶囊、运动参数和揭幕实现分别位于 [主题控件](../src/theme.jsx)、[主题运动](../src/theme-motion.mjs)和[圆形揭幕](../src/theme-reveal.mjs)。
 
 当前胶囊在全屏揭幕期间使用独立实时命名层，避免旧 root 截图遮住移动中的滑块；自动档包含日轮升沉、内光、地平线和海面倒影，装饰运动不占用滑块外层 transform。

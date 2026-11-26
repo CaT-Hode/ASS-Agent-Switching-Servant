@@ -16,9 +16,7 @@ const { decryptZCode, kimiReference, publicGrant, status: authorization } = requ
 const SPECS = [
   { id: "kimi", name: "Kimi Code", command: "kimi" },
   { id: "zcode", name: "ZCode", command: "zcode" },
-  // Kept only so older persisted state and encrypted OAuth history remain
-  // readable. Retired clients are never scanned or exposed by Harnesses.
-  { id: "antigravity", name: "Antigravity", command: "agy", retired: true, injectionUnsupported: "此客户端已停止支持。" },
+  { id: "antigravity", name: "Antigravity", command: "agy", sessionInjectionOnly: true },
 ].map((s) => ({ ...s, oauth: true, nativeLoginOnly: true }));
 const object = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 const has = (v) => typeof v === "string" && !!v.trim();

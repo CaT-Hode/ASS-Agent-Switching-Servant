@@ -1,3 +1,4 @@
+const fs = require("node:fs");
 const path = require("node:path");
 const { locations } = require("./additional-harnesses.cjs");
 const { read, safePath } = require("./native-fields.cjs");
@@ -113,4 +114,98 @@ function retainZCodeHistory(entry, previous, now) {
   return { ...entry, rows: [...rows.values()] };
 }
 
-module.exports = { rootsFor, zcodeFiles, kimiContext, kimiParser, readZCode, retainZCodeHistory };
+const antigravityUsageSession = (conversationId) => hash("antigravity\0" + conversationId);
+
+function excludedAntigravityUsageSessions(dataDir) {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(dataDir, "usage-exclusions.json"), "utf8"));
+    const ids = Array.isArray(value?.antigravity) ? value.antigravity : [];
+    return new Set(ids.filter(id => typeof id === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id))
+      .map(antigravityUsageSession));
+  } catch { return new Set(); }
+}
+
+function antigravityFiles(options, source) {
+  const dirs = rootsFor("antigravity", options);
+  const found = [];
+  for (const dir of dirs) {
+    const brain = path.join(dir, "brain");
+    let entries;
+    try {
+      safePath(brain);
+      entries = fs.readdirSync(brain, { withFileTypes: true });
+    } catch (e) {
+      if (e.code !== "ENOENT") source.partial = true;
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      found.push(path.join(brain, entry.name, ".system_generated", "logs", "transcript.jsonl"));
+      if (found.length >= 5000) {
+        source.partial = true;
+        return found;
+      }
+    }
+  }
+  return found;
+}
+
+function antigravityContext(file) {
+  const logsDir = path.dirname(file);
+  const sysDir = path.dirname(logsDir);
+  const convDir = path.dirname(sysDir);
+  const conversationId = path.basename(convDir) || hash(file);
+  return { conversationId, signature: conversationId };
+}
+
+function antigravityParser(fileKey, context = {}) {
+  const rows = new Map();
+  let ordinal = 0;
+  const conversationId = context.conversationId || fileKey;
+  const session = antigravityUsageSession(conversationId);
+  return {
+    rows,
+    accept(x, line = ++ordinal) {
+      if (x?.type !== "PLANNER_RESPONSE") return;
+      if (!known(x.input_tokens) || !known(x.output_tokens)) return;
+      if (x.input_tokens + x.output_tokens + num(x.cache_read_tokens) === 0) return;
+      const day = dayKey(x.created_at);
+      if (!day) return;
+      const stepKey = Number.isSafeInteger(x.step_index)
+        ? `${conversationId}\0${x.step_index}`
+        : `${fileKey}\0${line}`;
+      const model = label(x.model);
+      const provider =
+        typeof x.model === "string" && x.model.startsWith("ass-")
+          ? "ASS 注入"
+          : "Google Antigravity";
+      rows.set(stepKey, {
+        key: hash("antigravity\0" + stepKey),
+        client: "antigravity",
+        session,
+        day,
+        hour: localHour(x.created_at),
+        model,
+        provider,
+        calls: 1,
+        updatedAt: Date.parse(x.created_at) || 0,
+        // Antigravity transcript input_tokens excludes cache_read_tokens.
+        ...normalized(x.input_tokens, x.output_tokens, x.cache_read_tokens, 0, 0, false),
+      });
+    },
+  };
+}
+
+module.exports = {
+  rootsFor,
+  zcodeFiles,
+  kimiContext,
+  kimiParser,
+  readZCode,
+  retainZCodeHistory,
+  antigravityFiles,
+  antigravityUsageSession,
+  excludedAntigravityUsageSessions,
+  antigravityContext,
+  antigravityParser,
+};

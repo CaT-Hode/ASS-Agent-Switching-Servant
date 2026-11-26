@@ -8,7 +8,9 @@ const { safePath } = require("./native-fields.cjs");
 const { hash, num, known, label, dayKey, localHour, normalized } = require("./usage-common.cjs");
 const extra = require("./usage-extra.cjs");
 const locations = require('./usage-locations.cjs');
-const CLIENTS = ["codex", "claude", "opencode", "pi", "dsh", "kimi", "zcode"];
+const { ids: clientIds } = require("./client-registry.cjs");
+const CLIENTS = clientIds("usage");
+const CODEX_CACHE_VERSION = 4;
 function codexUsage(u) {
   return normalized(
     u.input_tokens,
@@ -27,13 +29,19 @@ function newerUsage(a, b) {
   for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return left[i] > right[i];
   return false;
 }
+function indexUsage(records, row, fileUpdatedAt) {
+  const candidate = { ...row, fileUpdatedAt };
+  if (newerUsage(candidate, records.get(row.key))) records.set(row.key, candidate);
+}
 function parser(client, fileKey) {
   let model = "未标注",
     provider = "未标注",
     session = fileKey,
     previous,
     created = 0;
+  let codexThreadId, codexParent, codexTurn, codexResponseUsage = false;
   const rows = new Map();
+  const superseded = new Set();
   function put(key, time, usage, extra = {}) {
     const day = dayKey(time);
     if (!day || !usage) return;
@@ -54,26 +62,58 @@ function parser(client, fileKey) {
   }
   return {
     rows,
+    superseded,
     accept(x) {
       if (client === "codex") {
-        if (x.type === "session_meta") {
-          session = x.payload?.id || session;
-          provider = x.payload?.model_provider || provider;
-          created = Date.parse(x.payload?.timestamp) || 0;
+        const p = x.payload;
+        if (x.type === "session_meta" && !codexThreadId) {
+          codexThreadId = p?.id;
+          session = codexThreadId || session;
+          codexParent = p?.forked_from_id || p?.parent_thread_id || p?.source?.subagent?.thread_spawn?.parent_thread_id;
+          provider = p?.model_provider || provider;
+          model = p?.model || model;
+          created = Date.parse(p?.timestamp || x.timestamp) || 0;
         }
-        if (x.type === "turn_context") model = x.payload?.model || model;
+        if (x.type === "turn_context") {
+          model = p?.model || model;
+          codexTurn = p?.turn_id || codexTurn;
+        }
+        if (x.type === "event_msg" && (p?.type === "task_started" || p?.type === "turn_started")) codexTurn = p.turn_id;
+
+        if (x.type === "token_usage_record") {
+          const usage = p?.usage;
+          if (!known(usage?.input_tokens) || !known(usage?.output_tokens) || usage.input_tokens + usage.output_tokens === 0) return;
+          if (typeof p.response_id !== "string" || !p.response_id || !dayKey(x.timestamp)) return;
+          // Current Codex writes this response record before the trailing token_count notification.
+          codexResponseUsage = true;
+          // Forks copy the original records and re-stamp their outer timestamps.
+          if (codexThreadId && p.thread_id && p.thread_id !== codexThreadId) return;
+          if (created && Date.parse(x.timestamp) < created) return;
+          const key = "response\0" + (p.thread_id || session) + "\0" + p.response_id;
+          put(key, x.timestamp, codexUsage(usage), {
+            model: label(p.model || model),
+            ...(!p.thread_id && codexParent ? { codexReplayOf: hash("codex\0response\0" + codexParent + "\0" + p.response_id) } : {}),
+          });
+          return;
+        }
         if (
           x.type !== "event_msg" ||
-          x.payload?.type !== "token_count" ||
-          !x.payload.info?.total_token_usage
+          p?.type !== "token_count" ||
+          !p.info?.total_token_usage
         )
           return;
-        const reported = x.payload.info.total_token_usage;
+        const reported = p.info.total_token_usage;
         if (!known(reported.input_tokens) || !known(reported.output_tokens))
           return;
         const total = codexUsage(reported),
-          last = x.payload.info.last_token_usage;
+          last = p.info.last_token_usage;
         const signature = JSON.stringify(total);
+        const key = session + "\0" + x.timestamp + "\0" + signature;
+        if (codexResponseUsage) {
+          // An offline WSL mirror may still hold this notification from the old parser.
+          superseded.add(hash("codex\0" + key));
+          return;
+        }
         if (previous?.signature === signature) return;
         // Seeded/forked histories must not count their inherited cumulative total.
         let delta = last ? codexUsage(last) : total;
@@ -98,11 +138,12 @@ function parser(client, fileKey) {
         previous = { signature, total };
         if (created && Date.parse(x.timestamp) < created) return;
         if (delta.input + delta.output === 0) return;
-        put(
-          session + "\0" + x.timestamp + "\0" + signature,
-          x.timestamp,
-          delta,
-        );
+        // Only corroborated parent turns can identify legacy replay after re-stamping.
+        const legacyTurn = codexTurn ? "\0" + codexTurn + "\0" + signature : "";
+        put(key, x.timestamp, delta, legacyTurn ? {
+          codexLegacyIdentity: hash("codex\0legacy\0" + session + legacyTurn),
+          ...(codexParent ? { codexReplayOf: hash("codex\0legacy\0" + codexParent + legacyTurn) } : {}),
+        } : {});
       } else if (client === "claude") {
         if (x.type !== "assistant" || !x.message?.usage || !x.message.id)
           return;
@@ -152,14 +193,23 @@ function parser(client, fileKey) {
   };
 }
 async function readJsonl(file, client, fileKey, context) {
-  const reader = client === "kimi" ? extra.kimiParser(fileKey, context) : parser(client, fileKey);
+  const reader =
+    client === "kimi"
+      ? extra.kimiParser(fileKey, context)
+      : client === "antigravity"
+        ? extra.antigravityParser(fileKey, context)
+        : parser(client, fileKey);
   let pending = "",
     oversized = false,
     malformed = 0, lineNumber = 0;
   const wanted =
     client === "codex"
-      ? /"(?:token_count|turn_context|session_meta)"/
-      : client === "kimi" ? /"(?:usage.record|llm.request|forked|StatusUpdate)"/ : /"(?:assistant|session)"/;
+      ? /"(?:token_count|token_usage_record|turn_context|session_meta|task_started|turn_started)"/
+      : client === "kimi"
+        ? /"(?:usage.record|llm.request|forked|StatusUpdate)"/
+        : client === "antigravity"
+          ? /"PLANNER_RESPONSE"/
+          : /"(?:assistant|session)"/;
   for await (const chunk of fs.createReadStream(file, {
     encoding: "utf8",
     highWaterMark: 256 * 1024,
@@ -193,7 +243,11 @@ async function readJsonl(file, client, fileKey, context) {
       /* a live append may be incomplete */
     }
   }
-  return { rows: [...reader.rows.values()], malformed };
+  return {
+    rows: [...reader.rows.values()],
+    malformed,
+    ...(reader.superseded?.size ? { superseded: [...reader.superseded] } : {}),
+  };
 }
 function readOpenCode(file) {
   const { DatabaseSync } = require("node:sqlite");
@@ -299,7 +353,7 @@ function filesUnder(dir, found, depth = 0, status) {
 }
 function rootsFor(client, options) {
   if (client === "kimi") return extra.rootsFor(client, options);
-  if (client === "zcode") return [];
+  if (client === "zcode" || client === "antigravity") return [];
   const dirs = nativeLocations(
     client,
     options.home,
@@ -318,7 +372,7 @@ function rootsFor(client, options) {
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   return [...new Set(dirs)];
 }
-async function scan(options, previousCache = {}, previousLocations = {}) {
+async function scan(options, previousCache = {}, previousLocations = {}, onRecords) {
   const cache = {},
     records = new Map(),
     sources = [];
@@ -328,19 +382,27 @@ async function scan(options, previousCache = {}, previousLocations = {}) {
   const from = dayKey(earliest),
     to = dayKey(now);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const excludedAntigravity = extra.excludedAntigravityUsageSessions(options.dataDir);
   let codexRoots = [];
   try { codexRoots = rootsFor('codex', options); } catch { /* Per-client status below reports inaccessible roots. */ }
   const discovery = await locations.discover({ ...options, codexRoots }, previousLocations);
   let bytes = 0;
+  const codexIdentities = new Set(), codexSuperseded = new Set();
   const putRecord = (row, fileUpdatedAt) => {
+    if (row.client === 'codex') codexIdentities.add(row.codexLegacyIdentity || row.key);
     if (row.day < from || row.day > to) return;
     // Claude Code writes zero-usage synthetic assistant placeholders on errors;
     // these are not model calls, including when read from an older cache.
     if (row.client === 'claude' && row.model === '<synthetic>' && row.input + row.output === 0) return;
-    const candidate = { ...row, fileUpdatedAt };
-    if (newerUsage(candidate, records.get(row.key))) records.set(row.key, candidate);
+    if (row.client === 'antigravity' && excludedAntigravity.has(row.session)) return;
+    indexUsage(records, row, fileUpdatedAt);
+  };
+  const putEntry = (entry, fileUpdatedAt) => {
+    for (const key of entry.superseded || []) codexSuperseded.add(key);
+    for (const row of entry.rows || []) putRecord(row, fileUpdatedAt);
   };
   for (const client of CLIENTS) {
+    const cacheVersion = client === "codex" ? CODEX_CACHE_VERSION : 3;
     const source = {
       client,
       files: 0,
@@ -354,9 +416,15 @@ async function scan(options, previousCache = {}, previousLocations = {}) {
             ? "OpenCode SQLite"
             : client === "zcode" ? "ZCode SQLite · 原生保留 30 天，已读取历史本地留存"
             : client === "kimi" ? "Kimi 会话 Wire JSONL"
+            : client === "antigravity" ? "Antigravity 会话 transcript JSONL"
             : "本机会话 JSONL",
     };
-    const files = client === "zcode" ? extra.zcodeFiles(options, source) : [];
+    const files =
+      client === "zcode"
+        ? extra.zcodeFiles(options, source)
+        : client === "antigravity"
+          ? extra.antigravityFiles(options, source)
+          : [];
     if (client === 'pi' && options.env?.PI_CODING_AGENT_SESSION_DIR)
       filesUnder(path.resolve(options.env.PI_CODING_AGENT_SESSION_DIR.replace(/^~(?=[/\\]|$)/, options.home)), files, 0, source);
     let roots;
@@ -404,10 +472,19 @@ async function scan(options, previousCache = {}, previousLocations = {}) {
             }
           })();
       let context;
-      try { if (client === "kimi") context = extra.kimiContext(file, roots); }
+      try {
+        if (client === "kimi") context = extra.kimiContext(file, roots);
+        else if (client === "antigravity") {
+          context = extra.antigravityContext(file);
+          if (excludedAntigravity.has(extra.antigravityUsageSession(context.conversationId))) {
+            source.files--;
+            continue;
+          }
+        }
+      }
       catch { source.partial = true; continue; }
       const signature = [
-        3,
+        cacheVersion,
         timeZone,
         stat.size,
         stat.mtimeMs,
@@ -434,29 +511,36 @@ async function scan(options, previousCache = {}, previousLocations = {}) {
           };
         }
         if (client === "zcode") entry = extra.retainZCodeHistory(entry, previousCache[key], now);
-        entry = { ...entry, client, distro: locations.distroOf(file) };
+        const distro = locations.distroOf(file);
+        if (entry.client !== client || entry.distro !== distro) entry = { ...entry, client, distro };
         cache[key] = entry;
         if (entry.malformed) source.partial = true;
-        for (const row of entry.rows) putRecord(row, stat.mtimeMs);
+        putEntry(entry, stat.mtimeMs);
       } catch {
         source.partial = true;
         const previous = previousCache[key];
-        if ([2, 3].some(version => previous?.signature?.startsWith(`${version}:${timeZone}:`))) {
+        if ([2, 3, cacheVersion].some(version => previous?.signature?.startsWith(`${version}:${timeZone}:`))) {
           // A locked or damaged live file must not erase already observed
           // metadata. Keep its old signature so the next scan retries it.
           cache[key] = previous;
-          for (const row of previous.rows || []) putRecord(row, Number(previous.signature.split(':').at(3)) || 0);
+          putEntry(previous, Number(previous.signature.split(':').at(3)) || 0);
         }
       }
     }
     // Sleeping/offline WSL roots retain their last observed metadata. Reuse the
     // same record keys so a Windows copy still cannot add a second charge.
     for (const [key, entry] of Object.entries(previousCache))
-      if (entry.client === client && discovery.unavailable.has(entry.distro) &&
-          entry.signature?.startsWith(`3:${timeZone}:`)) {
-        source.partial = true; cache[key] = entry;
-        for (const row of entry.rows || []) putRecord(row, Number(entry.signature.split(':').at(3)) || 0);
+      if (entry.client === client && !(key in cache) && discovery.unavailable.has(entry.distro) &&
+          [3, cacheVersion].some(version => entry.signature?.startsWith(`${version}:${timeZone}:`))) {
+        source.partial = true;
+        cache[key] = entry;
+        putEntry(entry, Number(entry.signature.split(':').at(3)) || 0);
       }
+    if (client === 'codex') {
+      for (const [key, row] of records) {
+        if (row.client === 'codex' && (codexSuperseded.has(key) || codexIdentities.has(row.codexReplayOf))) records.delete(key);
+      }
+    }
     source.records = [...records.values()].filter(
       (r) => r.client === client,
     ).length;
@@ -467,6 +551,23 @@ async function scan(options, previousCache = {}, previousLocations = {}) {
         : "empty";
     sources.push(source);
   }
+  const rows = aggregateUsage(records);
+  onRecords?.(records);
+  return {
+    cache,
+    locations: discovery.saved,
+    snapshot: {
+      rows,
+      sources,
+      from,
+      to,
+      updatedAt: new Date(now).toISOString(),
+      timeZone,
+    },
+  };
+}
+
+function aggregateUsage(records) {
   const buckets = new Map();
   for (const r of records.values()) {
     const key = JSON.stringify([r.day, r.hour, r.client, r.provider, r.model]);
@@ -498,21 +599,38 @@ async function scan(options, previousCache = {}, previousLocations = {}) {
     buckets.set(key, b);
   }
   // Session digests are used only for distinct counts across model/day groups.
-  return {
-    cache,
-    locations: discovery.saved,
-    snapshot: {
-      rows: [...buckets.values()].map((b) => ({
-        ...b,
-        sessions: [...b.sessions],
-      })),
-      sources,
-      from,
-      to,
-      updatedAt: new Date(now).toISOString(),
-      timeZone,
-    },
-  };
+  return [...buckets.values()].map(b => ({ ...b, sessions: [...b.sessions] }));
+}
+
+function purgeAntigravityUsageCache(value, excluded) {
+  if (!value || !excluded.size) return value;
+  const { snapshot } = value;
+  const cache = { ...value.cache };
+  let removedFiles = 0, changed = false;
+  for (const [key, entry] of Object.entries(cache)) {
+    if (entry.client !== 'antigravity') continue;
+    const rows = entry.rows.filter(row => !excluded.has(row.session));
+    if (rows.length === entry.rows.length) continue;
+    changed = true;
+    if (rows.length) cache[key] = { ...entry, rows };
+    else { delete cache[key]; removedFiles++; }
+  }
+  if (!changed && !snapshot.rows.some(row => row.client === 'antigravity' && row.sessions?.some(id => excluded.has(id)))) return value;
+
+  // Recount the retained sessions so a real call sharing the same hourly
+  // model bucket as an excluded session stays in the totals.
+  const records = new Map();
+  for (const entry of Object.values(cache)) if (entry.client === 'antigravity') {
+    const updatedAt = Number(entry.signature.split(':').at(3)) || 0;
+    for (const row of entry.rows) if (row.day >= snapshot.from && row.day <= snapshot.to) indexUsage(records, row, updatedAt);
+  }
+  return { ...value, cache, snapshot: { ...snapshot,
+    rows: [...snapshot.rows.filter(row => row.client !== 'antigravity'), ...aggregateUsage(records)],
+    sources: snapshot.sources.map(source => source.client !== 'antigravity' ? source : { ...source,
+      files: Math.max(0, source.files - removedFiles), records: records.size,
+      status: source.partial ? 'partial' : records.size ? 'ready' : 'empty',
+    }),
+  } };
 }
 module.exports = {
   CLIENTS,
@@ -522,5 +640,6 @@ module.exports = {
   readJsonl,
   readOpenCode,
   readDsh,
+  purgeAntigravityUsageCache,
   scan,
 };

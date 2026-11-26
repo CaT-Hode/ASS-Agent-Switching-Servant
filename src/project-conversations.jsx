@@ -18,17 +18,18 @@ const Transcript = memo(function Transcript({ value }) {
       ? <details><summary>会话上下文</summary><ConversationMarkdown text={m.text} /></details> : <ConversationMarkdown text={m.text} />}
   </article>)}{!value && <Loader2 className="spin" />}</div>;
 });
-export function ProjectConversations({ state, initialHarness, onClient, onNotify }) {
+export function ProjectConversations({ state, initialHarness, initialSelection, onClient, onNotify }) {
   const [list, setList] = useState(null), [query, setQuery] = useState(''), [project, setProject] = useState(null);
   const [threads, setThreads] = useState(null), [selected, setSelected] = useState(null), [preview, setPreview] = useState(null), [before, setBefore] = useState(0);
   const [contextHistory, setContextHistory] = useState(-1);
   const [revision, setRevision] = useState(0), [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [offset, setOffset] = useState(0), [search, setSearch] = useState(null), [pinned, setPinned] = useState(false);
   const available = detectedClients(state).filter((c) => Object.hasOwn(labels, c.id));
-  const [view, setView] = useState(initialHarness || state.preferences.conversations?.harness || 'codex'), [target, setTarget] = useState(initialHarness || 'codex'), [confirm, setConfirm] = useState('');
-  const [nativeView, setNativeView] = useState(false);
+  const [view, setView] = useState(initialSelection?.harness || initialHarness || state.preferences.conversations?.harness || 'codex'),
+    [target, setTarget] = useState(initialSelection?.harness || initialHarness || 'codex'), [confirm, setConfirm] = useState('');
+  const [nativeView, setNativeView] = useState(Boolean(initialSelection)), [focusedRecord, setFocusedRecord] = useState(initialSelection?.recordId || '');
   const [deleting, setDeleting] = useState(null), [trash, setTrash] = useState(null);
-  const [scope, setScope] = useState('active'), [historyOpen, setHistoryOpen] = useState(false);
+  const [scope, setScope] = useState(initialSelection?.scope || 'active'), [historyOpen, setHistoryOpen] = useState(false);
   const previewSelection = useRef(''), trashGeneration = useRef(0);
   useEffect(() => () => { trashGeneration.current++; }, []);
   function closeTrash() { trashGeneration.current++; setTrash(null); }
@@ -49,7 +50,11 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
     let current = true;
     api.call('project-conversations-list', { scope }).then((r) => {
       if (!current) return; setList(r); setError(r.error || '');
-      setProject((old) => r.items.find((p) => p.id === old?.id) || r.items.find((p) => p.id === state.preferences.conversations?.project) || r.items[0] || null);
+      if (focusedRecord) {
+        const match = r.items.find((p) => p.id === initialSelection?.projectId);
+        setProject(match || null);
+        if (!match) setError('对应项目记录已变化，无法定位此会话');
+      } else setProject((old) => r.items.find((p) => p.id === old?.id) || r.items.find((p) => p.id === state.preferences.conversations?.project) || r.items[0] || null);
     }).catch((e) => { if (current) setError(errorText(e)); });
     return () => { current = false; };
   }, [revision, scope]);
@@ -68,11 +73,11 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
   useEffect(() => {
     let current = true; setThreads(null); setConfirm('');
     const timer = setTimeout(() => { if (project && list) api.call(shared ? 'project-conversations-threads' : 'project-conversations-records', project.id,
-      { offset, query: threadQuery, harness: view, pinned, cached: !!searchTerm }).then((r) => {
+      { offset, query: threadQuery, harness: view, pinned, cached: !!searchTerm, recordId: focusedRecord }).then((r) => {
       if (current) { setThreads(r); setSelected((old) => r.items.find((t) => t.id === old?.id) || r.items[0] || null); }
     }).catch((e) => { if (current) setError(errorText(e)); }); }, 0);
     return () => { current = false; clearTimeout(timer); };
-  }, [project?.id, shared, view, list, offset, threadQuery, pinned, !!searchTerm]);
+  }, [project?.id, shared, view, list, offset, threadQuery, pinned, !!searchTerm, focusedRecord]);
   useEffect(() => {
     let current = true; setPreview(null); setConfirm('');
     const selection = JSON.stringify([selected?.id, selected?.kind]);
@@ -92,9 +97,9 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
     return () => { cancelAnimationFrame(focus); document.removeEventListener('keydown', close); document.removeEventListener('pointerdown', close); if (opener?.isConnected) opener.focus(); };
   }, [confirm]);
   const items = useMemo(() => list?.items.filter((p) => (p.harnesses?.includes(view) || (p.enabled && p.targets.includes(view))) && (!searchTerm || !searchReady || matches.has(p.id))) || [], [list, view, searchTerm, searchReady, matches]);
-  useEffect(() => { if (list && !items.some((p) => p.id === project?.id)) {
+  useEffect(() => { if (!focusedRecord && list && !items.some((p) => p.id === project?.id)) {
     setProject(items[0] || null); setOffset(0); setBefore(0);
-  } }, [items, list, project?.id]);
+  } }, [items, list, project?.id, focusedRecord]);
   async function action(name, ...args) {
     const generation = trashGeneration.current;
     setBusy(name); setError(''); setNotice(''); setConfirm('');
@@ -108,7 +113,7 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
       if (!name.includes('resume') && name !== 'conversations-open-desktop') setRevision((n) => n + 1);
     } catch (e) { if (destructive && onNotify) onNotify(errorText(e), true); else setError(errorText(e)); } finally { setBusy(''); }
   }
-  function choose(p) { transitionUI(() => { setProject(p); setSelected(null); setOffset(0); setBefore(0); setNotice(''); setError(''); });
+  function choose(p) { transitionUI(() => { setProject(p); setFocusedRecord(''); setSelected(null); setOffset(0); setBefore(0); setNotice(''); setError(''); });
     api.call('ui-preferences', { conversations: { project: p.id, scope: 'projects' } }).catch((e) => setError(errorText(e))); }
   const targets = project?.targets || available.map((c) => c.id);
   useEffect(() => { setTarget(view); }, [view]);
@@ -122,18 +127,18 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
     setDeleting({ projectId: p.id, recordId: t?.id, title: t?.title || p.name, left: Math.max(16, Math.min(rect.right - 290, window.innerWidth - 306)), top: Math.max(16, Math.min(rect.bottom + 8, window.innerHeight - 180)) });
   }
   return <section ref={columns.root} className="project-conversation-page" aria-label="对话管理">
-    <div className="project-sync-toolbar"><div className="conversation-tabs" aria-label="会话客户端">{available.map((c) => <button key={c.id} aria-pressed={view === c.id} onClick={() => {
-      setView(c.id); setOffset(0); setBefore(0); if (!shared) setSelected(null); setNativeView(false);
+    <div className="project-sync-toolbar page-action-bar"><div className="conversation-tabs" aria-label="会话客户端">{available.map((c) => <button key={c.id} aria-pressed={view === c.id} onClick={() => {
+      setView(c.id); setFocusedRecord(''); setOffset(0); setBefore(0); if (!shared) setSelected(null); setNativeView(false);
       api.call('ui-preferences', { conversations: { harness: c.id } }).catch((e) => setError(errorText(e)));
     }}><img src={'./providers/' + brands[c.id] + '.svg'} alt="" />{labels[c.id]}</button>)}</div>
-      <div className="conversation-scope" aria-label="对话范围">{[['active', '当前对话'], ['inactive', '归档及残留']].map(([id, label]) => <button key={id} aria-pressed={scope === id} onClick={() => { setScope(id); setOffset(0); setBefore(0); setSelected(null); }}>{label}{id === 'inactive' && !!list?.inactive?.[view] && <small>{list.inactive[view]}</small>}</button>)}</div>
+      <div className="conversation-scope" aria-label="对话范围">{[['active', '当前对话'], ['inactive', '归档及残留']].map(([id, label]) => <button key={id} aria-pressed={scope === id} onClick={() => { setScope(id); setFocusedRecord(''); setOffset(0); setBefore(0); setSelected(null); }}>{label}{id === 'inactive' && !!list?.inactive?.[view] && <small>{list.inactive[view]}</small>}</button>)}</div>
       <span className="conversation-count">{list ? items.reduce((n, p) => n + (p.enabled ? p.count : p.counts?.[view] || 0), 0) + ' 个对话' : '读取记录…'}</span>
-      <div className="actions"><button className="button" disabled={!!busy} onClick={() => setHistoryOpen(true)}><ShieldCheck size={15} />历史与存储</button>
-        <button className="icon-button" aria-label="已删除记录" onClick={openTrash}><Trash2 size={17} /></button>
-        <button className="icon-button" aria-label="刷新项目记录" disabled={!!busy} onClick={() => setRevision((n) => n + 1)}><RefreshCw size={17} /></button></div></div>
+      <div className="page-actions"><button className="button" disabled={!!busy} onClick={() => setHistoryOpen(true)}><ShieldCheck size={15} />历史与存储</button>
+        <button className="icon-button" aria-label="已删除记录" title="已删除记录" onClick={openTrash}><Trash2 size={16} /></button>
+        <button className="icon-button" aria-label="刷新项目记录" title="刷新项目记录" disabled={!!busy} onClick={() => setRevision((n) => n + 1)}><RefreshCw size={16} /></button></div></div>
     {error && <p className="error-box" role="alert">{error}</p>}{notice && <p className="client-notice" role="status">{notice}</p>}
     <div className="conversation-layout project-sync-layout">
-      <section className="conversation-list" aria-label="项目记录列表"><div className="conversation-search"><Search size={15} /><input type="search" aria-label="搜索项目或对话" placeholder="搜索项目或对话" maxLength={500} value={query} onChange={(e) => { setQuery(e.target.value); setOffset(0); setBefore(0); }} /></div>
+      <section className="conversation-list" aria-label="项目记录列表"><div className="conversation-search"><Search size={15} /><input type="search" aria-label="搜索项目或对话" placeholder="搜索项目或对话" maxLength={500} value={query} onChange={(e) => { setQuery(e.target.value); setFocusedRecord(''); setOffset(0); setBefore(0); }} /></div>
         <div className="conversation-rows">{items.slice(0, 200).map((p) => <article data-project-id={p.id} className={'conversation-row' + (p.id === project?.id ? ' selected' : '')} key={p.id}>
           <button className="conversation-row-main" aria-pressed={p.id === project?.id} onClick={() => choose(p)}><span className="conversation-row-title">{p.nonProject ? <MessagesSquare size={14} /> : <Folder size={14} />}{p.name}</span>
             <span className="conversation-row-meta">{p.cwd && <span className="conversation-row-project" title={p.cwd}>{p.cwd}</span>}<span className="conversation-row-count">{p.enabled ? p.count : p.counts?.[view] || 0} 个对话</span>{p.enabled && <span className="conversation-retained">同步中</span>}</span></button>
@@ -148,16 +153,17 @@ export function ProjectConversations({ state, initialHarness, onClient, onNotify
               <button className="project-sync-switch" role="switch" aria-label="项目同步" aria-checked={project.enabled} disabled={!!busy}
                 onClick={() => project.enabled ? setConfirm('disable') : action('project-conversations-configure', project.id, { enabled: true, targets })}><span className="project-switch-track"><i /></span>项目同步</button></div></div>}
         </header>
-        {project.enabled && <div className="project-record-tabs"><button aria-pressed={!nativeView} onClick={() => { setNativeView(false); setOffset(0); }}>共享记录</button><button aria-pressed={nativeView} onClick={() => { setNativeView(true); setOffset(0); }}>原生记录</button><small>{time(project.lastSync)}</small></div>}
+        {project.enabled && <div className="project-record-tabs"><button aria-pressed={!nativeView} onClick={() => { setNativeView(false); setFocusedRecord(''); setOffset(0); }}>共享记录</button><button aria-pressed={nativeView} onClick={() => { setNativeView(true); setOffset(0); }}>原生记录</button><small>{time(project.lastSync)}</small></div>}
         {project.enabled && <details className="project-target-options"><summary>同步客户端</summary><div className="project-sync-targets" aria-label="参与同步的客户端">{available.map(({ id: h }) => <button key={h} aria-label={'参与同步 ' + labels[h]} aria-pressed={targets.includes(h)} disabled={!!busy} onClick={() => toggleTarget(h)}>{labels[h]}</button>)}</div></details>}
         <div className="project-shared-body"><nav className="project-shared-threads" aria-label="项目对话列表"><div className="project-thread-toolbar"><span>{threads?.total || 0} 个对话</span>
+          {focusedRecord && <button type="button" className="text-button" onClick={() => setFocusedRecord('')}>查看全部</button>}
           {!shared && <div className="conversation-pin-control"><button className="icon-button conversation-pin-filter" aria-label="只看置顶" aria-describedby="conversation-pin-description" aria-pressed={pinned} title={pinned ? '显示全部对话' : '只显示当前项目的置顶对话'} onClick={() => { setPinned(!pinned); setOffset(0); }}><Pin size={14} /></button><span id="conversation-pin-description" role="tooltip">{pinned ? '显示全部对话' : '只看置顶对话'}</span></div>}</div>
           {threads?.items.map((t) => <article data-record-id={t.id} key={t.id} className={'project-thread-row' + (t.id === selected?.id ? ' selected' : '')}><button className="project-thread-main" aria-pressed={t.id === selected?.id} onClick={() => { setSelected(t); setBefore(0); }}>
             <strong>{t.title}</strong><small>{t.branchOf ? '分支 · ' : ''}{t.kind === 'native' ? labels[t.harness] : t.harnesses.map((h) => labels[h]).join(' / ')} · {time(t.updatedAt)}</small>
             {(t.syncedFrom || (!t.kind && t.originHarness !== view)) && <span className="conversation-sync-origin">来自 {originLabels[t.syncedFrom || t.originHarness]} 的同步</span>}<HistoryBadge row={t} /></button>
             <div className="conversation-row-actions">{t.libraryId && <button className={'icon-button conversation-pin' + (t.pinned ? ' pinned' : '')} aria-label={t.pinned ? '取消置顶对话' : '置顶对话'} title={t.pinned ? '取消置顶' : '置顶此对话'} disabled={!!busy} onClick={() => action('conversations-pin', t.libraryId, !t.pinned)}><Pin size={14} /></button>}
             <button className="icon-button conversation-delete" data-delete-opener aria-label={t.retained && !t.nativePresent ? '管理保留副本 ' + t.title : '删除对话 ' + t.title} title={t.retained && !t.nativePresent ? '在历史与存储中查看或清理副本' : project.enabled ? '关闭同步后删除原生记录' : '删除本地对话，不保存备份'} disabled={!!busy || project.enabled} onClick={(e) => t.retained && !t.nativePresent ? setHistoryOpen(true) : deletePrompt(e, project, t)}><Trash2 size={14} /></button></div></article>)}
-          {!threads && <Loader2 className="spin" />}{threads && !threads.items.length && <p>暂无对话</p>}
+          {!threads && <Loader2 className="spin" />}{threads && !threads.items.length && <p>{focusedRecord ? '对应会话不在当前记录中' : '暂无对话'}</p>}
           <div className="project-thread-pages"><button className="icon-button" aria-label="上一页对话" disabled={!offset || !threads} onClick={() => setOffset((n) => Math.max(0, n - 40))}><ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /></button><small>{threads?.total || 0} 个对话</small><button className="icon-button" aria-label="下一页对话" disabled={!threads || offset + 40 >= threads.total} onClick={() => setOffset((n) => n + 40)}><ChevronRight size={14} /></button></div></nav>
           <div {...columns.separator('threads')} />
           <div className="project-shared-preview">{selected ? <>

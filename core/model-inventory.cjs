@@ -296,8 +296,11 @@ function modelSources(
   { home, env = {}, directories = {}, nativeApiModels = [], ownsModel = () => false } = {},
 ) {
   const officialClient = harnesses.clients.find((c) => c.id === "codex");
+  const accountCount = officialClient?.accounts.filter(
+    (a) => a.kind !== "api" && a.authType === "oauth",
+  ).length || 0;
   const sources = [
-    {
+    ...(accountCount ? [{
       id: "official",
       name: "OpenAI 官方",
       baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -305,14 +308,26 @@ function modelSources(
       readOnly: true,
       enabled: true,
       models: store.officialModels,
-      accountCount:
-        officialClient?.accounts.filter(
-          (a) => a.kind !== "api" && a.authType === "oauth",
-        ).length || 0,
-    },
+      accountCount,
+    }] : []),
     ...store.providers,
   ];
   for (const client of harnesses.clients.filter((c) => c.id !== "codex")) {
+    if (client.id === "antigravity") {
+      const account = (client.modelAccounts || client.accounts).find((a) =>
+        a.kind === "native" && a.authType === "oauth" && a.provider === "google-antigravity");
+      if (account) sources.push({
+        id: "native-antigravity",
+        name: "Gemini",
+        kind: "subscription",
+        readOnly: true,
+        enabled: true,
+        accountCount: 1,
+        nativeAccountId: account.id,
+        models: [],
+      });
+      continue;
+    }
     const accounts = (client.modelAccounts || client.accounts).filter((a) => a.kind !== "api" &&
       (!store.providers.some((p) => p.id === a.supplierId) ||
         (client.id === 'dsh' && directories['native-dsh']?.accounts?.[a.id]) ||

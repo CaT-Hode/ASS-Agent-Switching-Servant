@@ -1,0 +1,77 @@
+.settings-range-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  gap: 15px;
+}
+.settings-range {
+  position: relative;
+  min-width: 0;
+  height: 42px;
+  --range-rest-width: calc(var(--range-lens-width) * .6);
+  --range-position: calc(var(--range-rest-width) / 2 + (100% - var(--range-rest-width)) * var(--range-progress));
+  --range-active: light-dark(#648a70, #7fb18d);
+  --range-inactive: light-dark(#a6aea6, #616962);
+}
+.settings-range-track {
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 8px;
+  border-radius: 999px;
+  translate: 0 -50%;
+  background: linear-gradient(to right, var(--range-active) var(--range-position), var(--range-inactive) 0);
+}
+.settings-range-optics { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.settings-range-lens {
+  position: absolute;
+  inset: 50% auto auto var(--range-position);
+  width: var(--range-lens-width);
+  height: var(--range-lens-height);
+  border-radius: 999px;
+  scale: var(--range-scale-x, .6) var(--range-scale-y, .6);
+  translate: -50% -50%;
+  box-shadow: 0 2px 9px #0003;
+  pointer-events: none;
+}
+.settings-range-material, .settings-range-fill { position: absolute; inset: 0; border-radius: inherit; }
+.settings-range-material { overflow: hidden; }
+.settings-range-refraction { position: absolute; }
+.settings-range-fill { background: rgb(255 255 255 / var(--range-fill, 1)); }
+.settings-range-control input.settings-range-input {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  touch-action: none;
+}
+.settings-range-input::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+.settings-range-input::-webkit-slider-thumb { appearance: none; width: var(--range-rest-width); height: 100%; border: 0; background: transparent; box-shadow: none; }
+.settings-range:has(.settings-range-input:focus-visible) .settings-range-track { outline: 2px solid var(--accent); outline-offset: 3px; }
+.settings-range:has(.settings-range-input:disabled) { opacity: .55; }
+.settings-range-control .settings-range-input:disabled { cursor: default; }
+.settings-range-units { position: relative; display: flex; align-items: center; }
+.settings-range-control input.settings-range-number { width: 86px; padding: 7px 9px; min-height: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.settings-range-units:has(> span) > input.settings-range-number { padding-inline-end: 32px; }
+.settings-range-number::-webkit-inner-spin-button, .settings-range-number::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.settings-range-units > span { pointer-events: none; position: absolute; inset-inline-end: 8px; color: var(--muted); font-size: 11px; }
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .settings-range-refraction { display: none; }
+  .settings-range-fill { background: #fff; }
+}
+@media (forced-colors: active) {
+  .settings-range-track { forced-color-adjust: none; --range-active: Highlight; --range-inactive: GrayText; }
+  .settings-range-fill { forced-color-adjust: none; background: ButtonFace; border: 1px solid ButtonText; }
+}

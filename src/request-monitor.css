@@ -1,9 +1,8 @@
 .request-monitor { --monitor-green: light-dark(#23896b, #76cbb0); --monitor-purple: light-dark(#7a65b3, #b4a1e0); --monitor-orange: light-dark(#bf7942, #dba374); display: grid; gap: 22px; max-width: 1600px; }
-.monitor-heading, .monitor-toolbar, .monitor-panel > header, .monitor-log-heading, .monitor-pagination { display: flex; justify-content: space-between; align-items: center; gap: 18px; }
-.monitor-eyebrow { display: block; margin-bottom: 6px; font-size: 10px; font-weight: 600; letter-spacing: 1.8px; color: var(--muted); }
+.monitor-toolbar, .monitor-panel > header, .monitor-log-heading, .monitor-pagination { display: flex; justify-content: space-between; align-items: center; gap: 18px; }
 .monitor-heading h2 { font-size: 28px; letter-spacing: -.6px; }
 .monitor-heading p { color: var(--muted); margin-top: 7px; }
-.monitor-live { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+
 .monitor-live > span { color: var(--monitor-green); display: flex; align-items: center; gap: 7px; font-size: 12px; }
 .monitor-live i { width: 6px; height: 6px; background: currentColor; border-radius: 50%; box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 10%, transparent); }
 .monitor-live .paused { color: var(--muted); }
@@ -27,11 +26,13 @@
 .monitor-legend span { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .monitor-legend i { width: 6px; height: 6px; background: var(--monitor-green); border-radius: 2px; }
 .monitor-legend i.failed { background: var(--monitor-orange); }.monitor-legend i.tps { background: var(--monitor-purple); }
+.monitor-legend i.observed { background: var(--muted); }
 .monitor-chart { position: relative; margin: 15px 22px 18px; padding-top: 16px; }
 .monitor-chart svg { display: block; width: 100%; height: 135px; overflow: visible; }
 .monitor-axis-left, .monitor-axis-right { position: absolute; top: 0; color: var(--muted); font-size: 10px; }.monitor-axis-right { right: 0; }
 .monitor-grid { stroke: var(--muted); opacity: .15; stroke-dasharray: 2 5; }
 .monitor-bar { fill: var(--monitor-green); opacity: .65; }.monitor-bar.failed { fill: var(--monitor-orange); opacity: .95; }
+.monitor-bar.observed { fill: var(--muted); }
 .monitor-tps-line { fill: none; stroke: var(--monitor-purple); stroke-width: 1.8; vector-effect: non-scaling-stroke; }.monitor-tps-dot { fill: var(--monitor-purple); }
 .monitor-chart-times { display: flex; justify-content: space-between; margin-top: 5px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .monitor-tokens > div:not(.monitor-token-track):not(.monitor-cache-total) { display: flex; justify-content: space-between; padding: 6px 22px; align-items: center; }
@@ -57,7 +58,8 @@
 .monitor-table td small { display: block; color: var(--muted); font-size: 10px; margin-top: 5px; }.monitor-table td time { color: var(--muted); font-size: 10px; }
 .monitor-model-button { display: flex; align-items: center; gap: 6px; text-align: left; padding: 0; border: 0; background: transparent; font-size: 11px; color: var(--ink); max-width: 240px; overflow: hidden; text-overflow: ellipsis; }.monitor-model-button svg { flex-shrink: 0; color: var(--muted); }
 .monitor-provider-name { display: block; max-width: 115px; overflow: hidden; text-overflow: ellipsis; }.monitor-cache-hit { color: var(--monitor-green); }.monitor-tps-value { color: var(--monitor-purple); font-weight: 600; }
-.monitor-status { display: inline-flex; align-items: center; gap: 5px; border-radius: 5px; padding: 4px 6px; font-size: 10px; }.monitor-status b { font-weight: 500; opacity: .7; }.monitor-status.ok { color: var(--monitor-green); background: color-mix(in srgb, var(--monitor-green) 10%, transparent); }.monitor-status.failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.monitor-status { display: inline-flex; align-items: center; gap: 5px; border-radius: 5px; padding: 4px 6px; font-size: 10px; }.monitor-status b { font-weight: 500; opacity: .7; }.monitor-status.success { color: var(--monitor-green); background: color-mix(in srgb, var(--monitor-green) 10%, transparent); }.monitor-status.failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.monitor-status.observed { color: var(--muted); background: var(--surface); }
 .monitor-status.running { color: var(--monitor-purple); background: color-mix(in srgb, var(--monitor-purple) 12%, transparent); }
 .monitor-table tr[data-in-progress] { background: color-mix(in srgb, var(--monitor-purple) 4%, var(--panel)); }
 .monitor-summary-table td:nth-child(2) { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }.monitor-summary-table strong { font-weight: 550; }

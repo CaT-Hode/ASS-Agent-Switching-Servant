@@ -9,6 +9,7 @@ const { makeCatalog, codexModelId, PROTOCOLS } = require("./models.cjs");
 const { apiProfile } = require("./account-info.cjs");
 const additional = require("./additional-harnesses.cjs");
 const additionalOAuth = require("./additional-oauth.cjs");
+const antigravity = require("./antigravity-status.cjs");
 const kimiConfig = require("./kimi-config.cjs");
 const dshConfig = require('./dsh-config.cjs');
 const { TOOL_MODES, validToolRef, validToolModes } = require('./deepseek-compat.cjs');
@@ -76,9 +77,9 @@ const SPECS = [
   },
   ...additional.SPECS,
 ];
-const ACTIVE_SPECS = SPECS.filter((spec) => !spec.retired);
 const validModelProtocols = (protocols) => protocols && typeof protocols === 'object' && !Array.isArray(protocols) &&
   Object.keys(protocols).length <= 5000 && Object.entries(protocols).every(([ref, protocol]) => validToolRef(ref) && PROTOCOLS.includes(protocol));
+const validModelExclusions = refs => Array.isArray(refs) && refs.length <= 5000 && refs.every(validToolRef);
 const json = (file) => {
   try {
     if (!fs.existsSync(file)) return {};
@@ -96,6 +97,7 @@ const json = (file) => {
       if (Object.values(value[key] || {}).some((v) => !strings(v))) throw Error();
     for (const [harness, config] of Object.entries(value.injections || {}))
       if (!object(config) || !strings(config.excludedProviders || config.excluded || []) ||
+          (value.schemaVersion === 3 && config.excluded !== undefined && !validModelExclusions(config.excluded)) ||
           (config.predictionCompatibility !== undefined && (harness !== 'codex' || typeof config.predictionCompatibility !== 'boolean')) ||
           (config.codexToolModes !== undefined && (harness !== 'codex' || !validToolModes(config.codexToolModes))) ||
           (config.modelProtocols !== undefined && !validModelProtocols(config.modelProtocols)) ||
@@ -261,7 +263,7 @@ class HarnessManager {
       const backup = path.join(dataDir, "clients.before-provider-injection.json");
       if (!fs.existsSync(backup)) atomic(backup, fs.readFileSync(this.file, "utf8"));
     }
-    for (const { id } of ACTIVE_SPECS) {
+    for (const { id } of SPECS) {
       const providers = this.getState().providers;
       const bindings = this.state.accountBindings[id] || (legacy ? this.state.apiBindings?.[id] : []) || [];
       this.state.accountBindings[id] = bindings.filter((pid) =>
@@ -280,7 +282,7 @@ class HarnessManager {
         } else delete this.state.selected[id];
       }
     }
-    if (providerMigration) for (const { id } of ACTIVE_SPECS) {
+    if (providerMigration) for (const { id } of SPECS) {
       const old = this.state.injections[id];
       // A partially excluded provider migrates OFF: never broaden access to a
       // previously excluded model. Applied native/proxy configuration is untouched.
@@ -297,12 +299,20 @@ class HarnessManager {
     if (providerMigration && fs.existsSync(this.file)) this.save();
   }
   async refreshOAuth({ rediscover = false } = {}) {
-    for (const { id } of ACTIVE_SPECS) {
-      if (rediscover || !this.state.executables[id] || ["codex", "opencode"].includes(id)) this.detect(id);
+    for (const { id } of SPECS) {
+      if (rediscover || !this.state.executables[id] || ["codex", "opencode", "antigravity"].includes(id)) this.detect(id);
     }
     const pi = this.launcher("pi");
-    const [piProviders] = await Promise.all([piOAuthProviders(pi.ready ? pi.entryPoint : "")]);
+    const [piProviders] = await Promise.all([
+      piOAuthProviders(pi.ready ? pi.entryPoint : ""),
+      this.refreshAntigravityOAuth(),
+    ]);
     this.piProviders = piProviders;
+  }
+  async refreshAntigravityOAuth() {
+    const options = { home: this.nativeHome, override: this.state.credentialHomes.antigravity,
+      launcher: this.launcher("antigravity") };
+    this.antigravityKeyring = antigravity.shouldReadKeyring(options) ? await antigravity.readKeyring() : undefined;
   }
   oauthHistorySources() {
     const native = ["kimi", "zcode"].flatMap((id) => additional.locations(id, {
@@ -313,7 +323,7 @@ class HarnessManager {
       catch { return [{ ...location, harness: id, authFile: path.join(location.dir, "config.toml"),
         issue: "Kimi OAuth 配置无法读取" }]; }
     }));
-    return [...native, ...ACTIVE_SPECS.filter((s) => s.oauth && !s.nativeLoginOnly).flatMap(({ id }) => [
+    return [...native, ...SPECS.filter((s) => s.oauth && !s.nativeLoginOnly).flatMap(({ id }) => [
       ...this.nativeLocations(id)
         .map((dir) => ({ harness: id, dir, native: true })),
       ...this.state.profiles.filter((p) => p.harness === id)
@@ -450,7 +460,8 @@ class HarnessManager {
     const ready = candidates.filter((c) => c.ready);
     // A formerly misidentified Desktop executable is never called with CLI
     // flags. Keep it as the desktop choice and use the sole detected CLI.
-    if (harness === "claude" && selected && resolveLauncher(harness, selected, this.launchEnv).kind === "desktop" && ready.length === 1)
+    if (["claude", "antigravity"].includes(harness) && selected &&
+        resolveLauncher(harness, selected, this.launchEnv).kind === "desktop" && ready.length === 1)
       return resolveLauncher(harness, ready[0].location, this.launchEnv);
     if (!selected && (ready.length || candidates.length) > 1) {
       return {
@@ -529,7 +540,7 @@ class HarnessManager {
     this.persisted = text;
   }
   spec(id) {
-    const spec = ACTIVE_SPECS.find((s) => s.id === id);
+    const spec = SPECS.find((s) => s.id === id);
     if (!spec) throw new Error("未知客户端");
     return spec;
   }
@@ -557,11 +568,12 @@ class HarnessManager {
       oauthSources: accountsOnly ? [] : this.oauthSources().map(
         ({ file, sourceProvider, credentialId, ...s }) => s,
       ),
-      clients: ACTIVE_SPECS.map((s) => {
+      clients: SPECS.map((s) => {
         if (s.nativeLoginOnly) {
           const launcher = this.launcher(s.id);
           const native = additional.inspect(s.id, { home: this.nativeHome, env: this.nativeEnv,
-            override: this.state.credentialHomes[s.id], launcher });
+            override: this.state.credentialHomes[s.id], launcher,
+            ...(s.id === "antigravity" ? { keyring: this.antigravityKeyring } : {}) });
           const ownedCache = new Map();
           const owned = (file, provider) => {
             const key = JSON.stringify([file, provider]);
@@ -810,23 +822,39 @@ class HarnessManager {
   }
   setInjection(harness, changes) {
     if (this.spec(harness).injectionUnsupported) throw Error("此客户端尚未支持供应商接入");
-    if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).some((k) => !["excludedProviders", "defaultModel", 'autoModeModel', 'predictionCompatibility', 'codexToolMode', 'modelProtocol'].includes(k)))
-      throw Error("接入范围请按供应商设置");
+    if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).some((k) => !["excludedProviders", "defaultModel", 'autoModeModel', 'predictionCompatibility', 'codexToolMode', 'modelProtocol', 'modelSelection'].includes(k)))
+      throw Error("无效的接入设置");
     if (Object.hasOwn(changes, 'predictionCompatibility') && (harness !== 'codex' || typeof changes.predictionCompatibility !== 'boolean'))
       throw Error('提示词预测兼容设置无效');
-    if (Object.hasOwn(changes, "defaultModel") && !['codex', 'claude'].includes(harness))
+    if (Object.hasOwn(changes, "defaultModel") && !['codex', 'claude', 'antigravity'].includes(harness))
       throw Error("接入范围请按供应商设置");
     if (Object.hasOwn(changes, "defaultModel") && changes.defaultModel !== null &&
         (typeof changes.defaultModel !== "string" || changes.defaultModel.length > 500))
       throw Error("默认模型引用无效");
     for (const key of ['defaultModel', 'autoModeModel']) {
-      if (!Object.hasOwn(changes, key) || (key === 'defaultModel' && harness !== 'claude')) continue;
-      if (harness !== 'claude' || (changes[key] !== null && (!validToolRef(changes[key]) ||
+      if (!Object.hasOwn(changes, key) || (key === 'defaultModel' && !['claude', 'antigravity'].includes(harness))) continue;
+      if ((key === 'autoModeModel' && harness !== 'claude') || (changes[key] !== null && (!validToolRef(changes[key]) ||
           !this.getState().providers.some(p => p.models.some(m => modelRef(p.id, m.model) === changes[key])))))
         throw Error(key === 'autoModeModel' ? 'Auto Mode 审查模型引用无效' : '默认模型引用无效');
     }
-    const { codexToolMode, modelProtocol, ...settings } = changes;
+    const { codexToolMode, modelProtocol, modelSelection, ...settings } = changes;
     const next = { ...this.state.injections[harness], ...settings };
+    if (Object.hasOwn(changes, 'modelSelection')) {
+      if (!modelSelection || typeof modelSelection !== 'object' || Array.isArray(modelSelection) ||
+          Object.keys(modelSelection).some(key => !['refs', 'included'].includes(key)) ||
+          typeof modelSelection.included !== 'boolean' || !validModelExclusions(modelSelection.refs) ||
+          !modelSelection.refs.length) throw Error('模型接入选择无效');
+      const known = new Set(this.getState().providers.flatMap(p => p.models.map(m => modelRef(p.id, m.model))));
+      if (modelSelection.refs.some(ref => !known.has(ref))) throw Error('模型列表已变化，请刷新后重新选择');
+      const excluded = new Set(next.excluded || []);
+      for (const ref of modelSelection.refs) {
+        if (modelSelection.included) excluded.delete(ref);
+        else excluded.add(ref);
+      }
+      if (excluded.size > 5000) throw Error('模型排除数量超过上限');
+      if (excluded.size) next.excluded = [...excluded];
+      else delete next.excluded;
+    }
     if (Object.hasOwn(changes, 'modelProtocol')) {
       if (!modelProtocol || typeof modelProtocol !== 'object' || Array.isArray(modelProtocol) ||
           Object.keys(modelProtocol).some(k => !['ref', 'protocol'].includes(k)) ||
@@ -1279,8 +1307,117 @@ class HarnessManager {
     if (harness === "claude") await assertClaudePicker(launcher);
     return this.launchPlan(harness, this.accountlessPlan(harness, token), "accountless", "launch", launcher);
   }
+  agyRoutingState(localToken) {
+    const settings = this.state.injections.antigravity || {};
+    const excludedProviders = new Set(settings.excludedProviders || []);
+    const excluded = new Set(settings.excluded || []);
+    const providers = this.effectiveProviders("antigravity")
+      .filter((p) => p.enabled && p.apiKey && !excludedProviders.has(p.id))
+      .map((p) => ({
+        ...p,
+        models: p.models.filter((m) => m.enabled && !excluded.has(modelRef(p.id, m.model))),
+      }))
+      .filter((p) => p.models.length > 0);
+    return { providers, localToken, defaultModel: settings.defaultModel || null };
+  }
+  async launchAntigravityModel(localToken, { defaultRef, capabilities = {}, workspace, extraArgs = [], wireProtocol = "genai" } = {}) {
+    const launcher = this.launcher("antigravity");
+    if (!launcher.ready) throw Error("未找到 agy 命令，请安装 Antigravity CLI 后重新识别");
+    const { agyLaunch } = require("./agy-injection.cjs");
+    const state = this.agyRoutingState(localToken);
+    const launch = agyLaunch({
+      port: this.options.port || 25819,
+      localToken,
+      providers: state.providers,
+      defaultRef: defaultRef || state.defaultModel,
+      capabilities,
+      wireProtocol,
+    });
+    const env = { ...this.launchEnv };
+    for (const key of Object.keys(env)) {
+      if (/^(AGY_LLM_GATEWAY_|GEMINI_API_KEY$|GOOGLE_GEMINI_BASE_URL$)/i.test(key)) delete env[key];
+    }
+    Object.assign(env, launch.gatewayEnv);
+    return this.launchPlan("antigravity", {
+      env,
+      args: [...launch.gatewayArgs, ...extraArgs],
+      ...(workspace ? { workspace } : {}),
+      expectInteractive: true,
+      pauseOnFailure: true,
+      routed: true,
+      hint: `ASS 模型终端（${launch.defaultModel}，共 ${launch.modelCount} 个模型，动态 Gateway 模式）。支持 /model 实时切换，不修改 ~/.gemini/antigravity-cli/settings.json；请保持 ASS 运行。`,
+    }, "model", "launch", launcher);
+  }
+  antigravityAppExecutable() {
+    const selected = this.state.executables.antigravity;
+    if (!this.discovery.antigravity?.length) this.detect("antigravity");
+    const candidates = [
+      ...(selected ? [resolveLauncher("antigravity", selected, this.launchEnv)] : []),
+      ...(this.discovery.antigravity || []),
+    ];
+    for (const c of candidates) {
+      if (c?.kind !== "desktop" || !c.desktopExecutable) continue;
+      const current = resolveLauncher("antigravity", c.desktopExecutable, this.launchEnv);
+      if (current.kind === "desktop" && path.basename(current.desktopExecutable).toLowerCase() === "antigravity.exe") {
+        return current.desktopExecutable;
+      }
+    }
+    return null;
+  }
+  async launchAntigravityDesktop(localToken, { defaultRef, capabilities = {}, wireProtocol = "genai" } = {}) {
+    const executable = this.antigravityAppExecutable();
+    if (!executable) {
+      throw Error("未找到 Antigravity 桌面版（Antigravity.exe），请先安装并在客户端页重新自动识别");
+    }
+    const { agyDesktopLaunch } = require("./agy-injection.cjs");
+    const state = this.agyRoutingState(localToken);
+    const plan = agyDesktopLaunch({
+      executable,
+      dataDir: this.dataDir,
+      port: this.options.port || 25819,
+      localToken,
+      providers: state.providers,
+      defaultRef: defaultRef || state.defaultModel,
+      capabilities,
+      wireProtocol,
+      launchEnv: this.launchEnv,
+    });
+    safePath(plan.profileDir);
+    fs.mkdirSync(plan.profileDir, { recursive: true });
+    const spawnFn = this.options.spawn || spawn;
+    await new Promise((resolve, reject) => {
+      const child = spawnFn(plan.executable, plan.args, {
+        env: plan.env,
+        cwd: path.dirname(plan.executable),
+        stdio: "ignore",
+        detached: true,
+        windowsHide: false,
+      });
+      child.once("error", () => reject(Error("Antigravity ASS 模型桌面版启动失败，请检查安装文件")));
+      child.once("spawn", () => {
+        child.unref();
+        resolve();
+      });
+    });
+    return {
+      ok: true,
+      message: `已启动 ASS 模型桌面版（共 ${plan.modelCount} 个模型，默认 ${plan.defaultModel}）。模型下拉框已加载全部已纳入的 ASS 模型，与现有个人账号窗口独立并行；请保持 ASS 运行。`,
+    };
+  }
+  async launchAntigravityCli(extraArgs = [], workspace) {
+    const launcher = this.launcher("antigravity");
+    if (!launcher.ready) throw Error("未找到 agy 命令，请安装 Antigravity CLI 后重新识别");
+    return this.launchPlan("antigravity", {
+      env: this.launchEnv,
+      args: Array.isArray(extraArgs) ? extraArgs : [],
+      ...(workspace ? { workspace } : {}),
+      expectInteractive: true,
+      pauseOnFailure: true,
+      hint: "使用 agy 原生登录和设置。",
+    }, "native", "launch", launcher);
+  }
   async launchPlan(harness, plan, account, action, launcher) {
-    this.materialize(plan);
+    if (harness !== "antigravity") this.materialize(plan);
     if (harness === 'opencode' && require('./opencode-version.cjs').version(launcher, plan.dir) === 2 && !plan.args.includes('--standalone'))
       plan = { ...plan, args: [...plan.args, '--standalone'] };
     if (harness === 'opencode' && plan.nativeCredential) {
@@ -1343,7 +1480,7 @@ class HarnessManager {
       child.unref();
     }
     let tracking = "";
-    if (this.options.processes) {
+    if (this.options.processes && harness !== "antigravity") {
       try {
         await this.options.processes.register({
           id: marker,

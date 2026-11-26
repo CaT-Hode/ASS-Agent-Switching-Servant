@@ -97,9 +97,9 @@ function publicGrant(harness, provider, grant, now) {
   if (harness === "antigravity") {
     const parsed = antigravity.parseStoredToken(grant, now);
     if (parsed.invalid || !parsed.account) return { ...status("", "", null, now), provider,
-      label: "Google Antigravity", profile: { source: "local", docs: ["antigravity"], fields: [] } };
+      label: "Gemini", profile: { source: "local", docs: ["antigravity"], fields: [] } };
     const { identityKey, refreshable, ...account } = parsed.account;
-    return { ...account, provider, label: "Google Antigravity" };
+    return { ...account, provider, label: "Gemini" };
   }
   const user = zcodeUser(grant), secrets = [grant.access_token, grant.refresh_token, grant.session_token,
     ...(Array.isArray(grant.coding) ? grant.coding.map((c) => c?.apiKey) : [])];

@@ -1,11 +1,12 @@
 import { usageModelName, CLIENT_NAMES } from './usage-view.mjs';
-import { known, requestOK, emptyStats, addRequestStats as add } from '../core/request-stats.mjs';
+import { isNativeObservation, known, requestOK, emptyStats, addRequestStats as add } from '../core/request-stats.mjs';
 export { known, requestOK, emptyStats };
-export const PROTOCOL_NAMES = { 'openai-responses': 'Responses', 'openai-chat': 'Chat Completions', anthropic: 'Messages' };
+export const PROTOCOL_NAMES = { 'openai-responses': 'Responses', 'openai-chat': 'Chat Completions', anthropic: 'Messages', 'antigravity-native': '原生' };
 export const clientName = id => id === 'diagnostics' ? '连接测试' : CLIENT_NAMES[id] || '未记录';
 export const providerName = row => row.source || '未标注';
 export const requestKey = row => row.requestId || [row.time, row.model, row.source].join(':');
 export const phaseName = row => row.phase === 'streaming' ? '生成中' : row.phase === 'waiting-output' ? '等待首输出' : '等待上游';
+export const requestStatus = row => row.inProgress ? 'running' : isNativeObservation(row) ? 'observed' : requestOK(row) ? 'success' : 'failed';
 export const fmt = (value, digits = 0) => known(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: digits }) : '—';
 export const seconds = value => known(value) ? (value / 1000).toFixed(2) + ' s' : '—';
 export const aggregateTps = stats => stats.visibleMs > 0 ? stats.visibleTokens * 1000 / stats.visibleMs : null;
@@ -19,18 +20,20 @@ export function monitorRows(rows, options, now = Date.now()) {
     (options.diagnostics || row.client !== 'diagnostics') && row.operation !== 'count_tokens' &&
     (options.provider === 'all' || providerName(row) === options.provider) &&
     (options.client === 'all' || (row.client || 'unknown') === options.client) &&
-    (options.status === 'all' || (options.status === 'running' ? row.inProgress : !row.inProgress && requestOK(row) === (options.status === 'success'))) &&
-    (!query || [usageModelName(row.model), providerName(row), clientName(row.client), row.model, row.requestId].some(value => value?.toLowerCase().includes(query))))
+    (options.status === 'all' || requestStatus(row) === options.status) &&
+    (!query || [usageModelName(row.model, row.client), providerName(row), clientName(row.client), row.model, row.requestId, row.upstreamRequestId]
+      .some(value => value?.toLowerCase().includes(query))))
     .sort((a, b) => Number(!!b.inProgress) - Number(!!a.inProgress) || Date.parse(b.time) - Date.parse(a.time));
 }
 export function summarizeRequests(rows, group = 'model') {
   const total = emptyStats(), groups = new Map();
   for (const row of rows) {
     add(total, row);
-    const name = group === 'provider' ? providerName(row) : usageModelName(row.model);
+    const modelName = usageModelName(row.model, row.client);
+    const name = group === 'provider' ? providerName(row) : modelName;
     if (!groups.has(name)) groups.set(name, { name, providers: new Set(), models: new Set(), ...emptyStats() });
     const entry = groups.get(name); add(entry, row);
-    entry.providers.add(providerName(row)); entry.models.add(usageModelName(row.model));
+    entry.providers.add(providerName(row)); entry.models.add(modelName);
   }
   return { total, groups: [...groups.values()].sort((a, b) => b.calls - a.calls) };
 }

@@ -4,6 +4,7 @@ const path = require("node:path");
 const { readDesktopJson } = require("./desktop-metadata.cjs");
 const { subscriptionProvider } = require("./subscription-usage.cjs");
 const zcodeInfo = require("./zcode-account-info.cjs");
+const antigravityQuota = require("./antigravity-quota.cjs");
 const KIMI_BASES = new Set(["https://api.kimi.com/coding/v1", "https://api.kimi.ai/coding/v1"]);
 const version = (v) => typeof v === "string" && /^\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(v) ? v : null;
 const number = (v) => (typeof v === "number" || typeof v === "string" && v.trim() !== "") && Number.isFinite(Number(v)) ? Number(v) : null;
@@ -113,18 +114,22 @@ function historyProvider(history, manager, harness, recordId) {
   return p;
 }
 function adapter(p) {
+  if (p.subscriptionKind === antigravityQuota.KIND && p.executable) return antigravityQuota.KIND;
   return p.subscriptionKind === "kimi-code" && KIMI_BASES.has(p.baseUrl) ? "kimi-code"
     : ["zcode-start", "zcode-account"].includes(p.subscriptionKind) && p.baseUrl === "https://zcode.z.ai" ? p.subscriptionKind : null;
 }
 function profile(p) {
   const kind = adapter(p);
   if (!kind) return null;
+  if (kind === antigravityQuota.KIND)
+    return { source: "Antigravity CLI · 上次查询", fields: [], docs: ["antigravity"], canRefresh: true };
   return { source: "官方接口 · 上次查询", fields: [], docs: [kind === "kimi-code" ? "kimi-info" : "zcode-info"],
     canRefresh: !!p.apiKey && !p.queryBlocked && (kind === "kimi-code" || !!version(p.appVersion) || kind === "zcode-account" && zcodeInfo.requests(p).length > 0),
     note: p.queryBlocked || (kind.startsWith("zcode-") ? "Start Plan、个人 / 团队 Coding Plan 和 MCP 额度分别读取，不合并计量单位。" : "按当前授权查询账户资料与编程额度，不发送模型请求。") };
 }
 function requests(p) {
   const kind = adapter(p);
+  if (kind === antigravityQuota.KIND) return antigravityQuota.requests(p);
   if (kind === "kimi-code") return [{ section: "identity", url: p.baseUrl + "/me" }, { section: "usage", url: p.baseUrl + "/usages" }];
   if (kind?.startsWith("zcode-")) {
     const result = version(p.appVersion) ? [{ section: "usage", label: "Start Plan 额度", url:
@@ -135,6 +140,7 @@ function requests(p) {
   throw Error("账户接口或客户端版本尚未适配");
 }
 function parseResponse(kind, request, response, options) {
+  if (kind === antigravityQuota.KIND) return antigravityQuota.parseQuota(request.section, response.data);
   return request.run ? zcodeInfo.parse(request, response, options)
     : parse(kind === "zcode-account" ? "zcode-start" : kind, request.section, response.data, { ...options, responseTime: response.responseTime });
 }

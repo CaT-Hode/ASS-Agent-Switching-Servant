@@ -2,6 +2,8 @@ import React from "react";
 import { RefreshCw, ExternalLink } from "./icons.jsx";
 import { accountPlan } from './account-plan.mjs';
 import { UsageMeter } from './usage-meter.jsx';
+import { groupQuotaWindows, quotaAmounts, quotaAmountText } from './usage-view.mjs';
+import { ElapsedTime, QuotaResetTime } from './diagnostic-time.jsx';
 const api = window.ass;
 const plans = {
   free: "Free",
@@ -16,6 +18,7 @@ const plans = {
   pro20x: "Pro 20×",
 };
 function valueOf(field) {
+  if (field.quotaDetail) return quotaAmountText(field);
   if (field.kind === "date")
     return new Date(field.value).toLocaleString("zh-CN", { hour12: false });
   return field.value + (field.unit ? " " + field.unit : "");
@@ -47,6 +50,7 @@ export function AccountProfile({ account, client, state, act, busy, hideIdentity
   // Subscription usage is cached separately from local identity. Do not drop
   // the quota cache merely because the identity snapshot is local-only.
   const quota = account.quota || p;
+  const subscription = account.kind !== "api" && ["codex", "claude", "antigravity"].includes(client.id);
   const quotas = (quota.fields || []).filter((f) => f.kind === "quota");
   const get = (id) => p.fields.find((f) => f.id === id)?.value;
   const email = get("email"),
@@ -60,13 +64,45 @@ export function AccountProfile({ account, client, state, act, busy, hideIdentity
         : f.kind === "amount"
           ? 2
           : 3;
-  const facts = p.fields
+  const quotaFacts = subscription ? quotaAmounts(quota.fields || [], client.id, !!quota.remote) : [];
+  const factFields = [...new Map([...p.fields, ...quotaFacts].map((f) => [f.id, f])).values()];
+  const facts = factFields
     .filter(
       (f) =>
         f.kind === "amount" &&
         !["email", "name", "keyLabel", "plan", "scopes"].includes(f.id),
     )
     .sort((a, b) => priority(a) - priority(b));
+  const renderQuota = (f) => {
+    const label = f.group ? f.group + " · " + f.label : f.label;
+    return (
+      <div
+        className={"account-quota" + (f.status === "rate-limited" ? " limited" : "")}
+        key={f.id}
+      >
+        <div>
+          <strong>{subscription ? f.label : label}</strong>
+          <span>剩余 {Number(f.remainingPercent.toFixed(1))}%</span>
+        </div>
+        <UsageMeter label={label + " 剩余额度"} value={f.remainingPercent} quota={f} />
+        <small>
+          已用 {Number(f.usedPercent.toFixed(1))}%
+          {f.status === "rate-limited" ? " · 已达上限" : ""}
+          {f.resetsAt && subscription && <>{" · "}<QuotaResetTime value={f.resetsAt} /></>}
+          {f.resetsAt && !subscription && (
+            <>
+              {" "}
+              ·{" "}
+              {new Date(f.resetsAt).toLocaleString("zh-CN", {
+                hour12: false,
+              })}{" "}
+              重置
+            </>
+          )}
+        </small>
+      </div>
+    );
+  };
   return (
     <section className="account-profile" aria-label="账户资料">
       {!hideIdentity && (email || name || plan) && (
@@ -85,41 +121,22 @@ export function AccountProfile({ account, client, state, act, busy, hideIdentity
           )}
         </div>
       )}
-      {facts.length > 0 && <Facts fields={facts.slice(0, 6)} />}
+      {facts.length > 0 && <Facts fields={subscription ? facts : facts.slice(0, 6)} />}
       {quotas.length > 0 && (
         <div className="account-quotas">
-          {quotas.map((f) => (
-              <div
-                className={
-                  "account-quota" +
-                  (f.status === "rate-limited" ? " limited" : "")
-                }
-                key={f.id}
-              >
-                <div>
-                  <strong>{f.label}</strong>
-                  <span>剩余 {Number(f.remainingPercent.toFixed(1))}%</span>
+          {subscription
+            ? groupQuotaWindows(quotas).map(([group, windows]) => (
+                <div className="account-quota-group" key={group} role={group ? "group" : undefined} aria-label={group || undefined}>
+                  {group ? <h4 className="quota-group-title">{group}</h4> : null}
+                  {windows.map(renderQuota)}
                 </div>
-                <UsageMeter label={f.label + ' 剩余额度'} value={f.remainingPercent} quota={f} />
-                <small>
-                  已用 {Number(f.usedPercent.toFixed(1))}%
-                  {f.status === "rate-limited" ? " · 已达上限" : ""}
-                  {f.resetsAt && (
-                    <>
-                      {" "}
-                      ·{" "}
-                      {new Date(f.resetsAt).toLocaleString("zh-CN", {
-                        hour12: false,
-                      })}{" "}
-                      重置
-                    </>
-                  )}
-                </small>
-              </div>
-            ))}
+              ))
+            : quotas.map(renderQuota)}
         </div>
       )}
       <div className="account-profile-source">
+        {subscription && quota.remote && quota.source && <small>{quota.source.replace(" · 上次查询", "")}</small>}
+        {subscription && quota.updatedAt && <small><ElapsedTime value={quota.updatedAt} prefix="查询于 " /></small>}
         {(p.stale || quota.stale) && <small>上次查询结果</small>}
         {p.quotaMode === 'console' && <small>{p.note}</small>}
         {p.infoLinks?.map((link) => (

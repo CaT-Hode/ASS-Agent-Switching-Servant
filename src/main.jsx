@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Network,
@@ -8,8 +8,6 @@ import {
   ChevronRight,
   Settings2,
   X,
-  Download,
-  Folder,
   Monitor,
   CheckCircle2,
   AlertCircle,
@@ -28,27 +26,29 @@ import { Clients } from "./clients.jsx";
 import { ConnectionDialog } from "./connections.jsx";
 import { useIconMotion } from "./icon-motion.jsx";
 import { Providers } from "./providers.jsx";
-import { Updates, UpdateBanner } from "./updates.jsx";
+import { UpdateBanner } from "./updates.jsx";
+import { Settings } from "./settings.jsx";
 import { modelKey, ModelCheckButton } from "./model-inspection.jsx";
 import { DiagnosticTime } from "./diagnostic-time.jsx";
 import { Overview } from "./overview.jsx";
 import { latestSnapshot } from "./state-snapshot.mjs";
 import { transitionUI, Presence } from './surface-motion.jsx';
 import { usageModelName } from './usage-view.mjs';
-import { ThemeControl, applyTheme } from "./theme.jsx";
+import { applyTheme, useSystemTheme } from "./theme.jsx";
 import { InteractiveBrand } from "./interactive-brand.jsx";
 import { AssLogo } from "./ass-logo.jsx";
 import { WindowControls } from "./window-controls.jsx";
 import { DiagnosticDetails } from "./diagnostic-details.jsx";
 import "./theme.css";
 import "./motion.css";
+import "./disclosures.css";
 const api = window.ass;
 const Conversations = lazy(() => import("./conversations.jsx").then((m) => ({ default: m.Conversations })));
 const RequestMonitor = lazy(() => import('./request-monitor.jsx').then(module => ({ default: module.RequestMonitor })));
 const NAVIGATION = [
   ['overview', LayoutGrid, '路由总览'], ['monitor', Zap, '请求监控'], ['providers', Boxes, '供应商与模型'],
   ['clients', Monitor, '客户端与账户'], ['conversations', MessagesSquare, '对话管理'],
-  ['diagnostics', Activity, '连接诊断'], ['updates', Download, '关于 ASS'],
+  ['diagnostics', Activity, '连接诊断'], ['settings', Settings2, '设置'],
 ];
 const pageMotion = (from, to) => {
   const delta = NAVIGATION.findIndex(([id]) => id === to) - NAVIGATION.findIndex(([id]) => id === from);
@@ -113,7 +113,7 @@ function RequestTable({ rows }) {
           <div className="request-row" key={r.time + i}>
             <span className="muted mono">{date(r.time)}</span>
             <span className="ellipsis" title={r.model}>
-              {usageModelName(r.model)}
+              {usageModelName(r.model, r.client)}
             </span>
             <span className="muted">{r.source}</span>
             <span className={r.ok ? "success" : "danger"} title={r.diagnostic?.failure ?
@@ -138,7 +138,7 @@ function Diagnostics({ state, providers, act, busy }) {
   ).length;
   return (
     <>
-      <div className="diagnostic-toolbar">
+      <div className="diagnostic-toolbar page-action-bar">
         <div>
           <h2>
             模型连接测试 <span className="count">{available}</span>
@@ -147,7 +147,7 @@ function Diagnostics({ state, providers, act, busy }) {
             每个模型最多测试 30 秒，可单独取消。测试可能产生 API 费用。
           </p>
         </div>
-        {batch?.running ? (
+        <div className="page-actions">{batch?.running ? (
           <Button
             icon={Square}
             disabled={batch.stopping}
@@ -166,7 +166,7 @@ function Diagnostics({ state, providers, act, busy }) {
           >
             一键测试
           </Button>
-        )}
+        )}</div>
       </div>
       {state.diagnosticHistoryError && (
         <p className="danger" role="alert">
@@ -266,27 +266,7 @@ function Diagnostics({ state, providers, act, busy }) {
             <dt>TLS 校验</dt>
             <dd>已开启 · Chromium 系统网络栈</dd>
           </div>
-          <div>
-            <dt>数据目录</dt>
-            <dd className="ellipsis" title={state.dataDir}>
-              {state.dataDir}
-            </dd>
-          </div>
         </dl>
-        <div className="actions">
-          <Button
-            icon={Folder}
-            onClick={() => act("data", () => api.call("open-data"))}
-          >
-            打开数据目录
-          </Button>
-          <Button
-            icon={Download}
-            onClick={() => act("export", () => api.call("export"))}
-          >
-            导出配置（无密钥）
-          </Button>
-        </div>
       </div>
       <section className="recent-section">
         <h2>最近请求</h2>
@@ -297,14 +277,29 @@ function Diagnostics({ state, providers, act, busy }) {
 }
 function App() {
   useIconMotion();
-  const [state, setState] = useState(null),
+  useSystemTheme();
+  const [snapshot, setState] = useState(null),
     [view, setViewLocal] = useState("overview"),
     [clientTarget, setClientTargetLocal] = useState("codex"),
     [busy, setBusy] = useState(""),
     [toast, setToast] = useState(null);
+  const [requestActivity, setRequestActivity] = useState(null);
+  const [settingsSection, setSettingsSection] = useState('general');
+  const state = useMemo(() => {
+    if (!snapshot || !requestActivity || requestActivity.sequence <= snapshot.sequence) return snapshot;
+    const { clients, active, recent, requestRevision } = requestActivity;
+    return { ...snapshot, recent, requestRevision, service: { ...snapshot.service, active },
+      connections: { ...snapshot.connections, clients: Object.fromEntries(
+        Object.entries(snapshot.connections.clients).map(([id, status]) => [id, { ...status, active: clients[id] ?? status.active }])) } };
+  }, [snapshot, requestActivity]);
+  const theme = state?.preferences.theme;
+  useLayoutEffect(() => {
+    if (theme && document.documentElement.dataset.theme !== theme) applyTheme(theme);
+  }, [theme]);
   const [connectionRequest, setConnectionRequest] = useState(null);
   const [providerDetail, setProviderDetail] = useState(null);
   const [conversationTarget, setConversationTarget] = useState(null);
+  const [usageConversationTarget, setUsageConversationTarget] = useState(null);
   const viewTarget = useRef('overview');
   const shownView = useRef('overview');
   function remember(input) {
@@ -346,7 +341,7 @@ function App() {
   );
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
-  }, [view]);
+  }, [view, settingsSection]);
   useEffect(() => {
     if (!api) return;
     api
@@ -355,13 +350,13 @@ function App() {
         setState((current) => latestSnapshot(current, next));
         setViewLocal("overview");
         shownView.current = 'overview';
-        applyTheme(next.preferences.theme);
         setClientTargetLocal(next.preferences.client);
       })
       .catch((e) => setToast({ error: true, message: e.message }));
     const unsubscribe = api.subscribe((next) => setState((current) => latestSnapshot(current, next)));
+    const unsubscribeActivity = api.onRequestActivity(setRequestActivity);
     const unsubscribeError = api.onStateError((message) => setToast({ error: true, message }));
-    return () => { unsubscribe(); unsubscribeError(); };
+    return () => { unsubscribe(); unsubscribeActivity(); unsubscribeError(); };
   }, []);
   useEffect(() => {
     if (toast) {
@@ -410,22 +405,15 @@ function App() {
         <p>正在加载本机路由…</p>
       </div>
     );
-  const providers = [
-    {
-      id: "official",
-      name: "OpenAI 官方",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      models: state.officialModels,
-    },
-    ...state.providers,
-  ];
+  const officialSource = state.modelSources?.find(source => source.id === 'official');
+  const providers = officialSource ? [officialSource, ...state.providers] : state.providers;
   const title = NAVIGATION.find(([id]) => id === view)?.[2];
   const brand = <InteractiveBrand>
     <AssLogo interactive />
     <div><div className="brand-title"><strong className="brand-wordmark" aria-label="ASS"><span className="brand-letter" data-letter="A">A</span><span className="brand-letter" data-letter="S">S</span><span className="brand-letter" data-letter="S">S</span></strong>
-      <button className="version-button" aria-label="查看 ASS 版本与更新" title={state.updates.available ? "发现新版本" : "版本与更新"} onClick={() => setView("updates")}>
+      <span className="version-button" title={`ASS v${state.version}`}>
         {state.updates.available && <span className="update-dot" />}<span className="brand-version-label" data-version={`v${state.version}`}>v{state.version}</span>
-      </button>
+      </span>
     </div><small>AI 路由</small></div>
   </InteractiveBrand>;
   return (
@@ -454,7 +442,10 @@ function App() {
               key={id}
               className={view === id ? "active" : ""}
               aria-current={view === id ? "page" : undefined}
-              onClick={() => setView(id)}
+              onClick={() => {
+                if (id === "conversations" && view !== id) setUsageConversationTarget(null);
+                setView(id);
+              }}
             >
               <Icon size={21} />
               <span>{label}</span>
@@ -484,7 +475,6 @@ function App() {
               管理客户端接入
             </Button>
           </section>
-          <ThemeControl value={state.preferences.theme} onChange={(theme) => remember({ theme })} />
         </div>
       </aside>
       <main>
@@ -493,19 +483,25 @@ function App() {
           <div className="error-box">{state.startupError}</div>
         )}
         {state.nativeScanError && <div role="status" className="error-box">{state.nativeScanError}</div>}
-        {view !== "updates" && (
+        {view !== "settings" && (
           <UpdateBanner
             updates={state.updates}
             act={act}
-            onView={() => setView("updates")}
+            onView={() => { setSettingsSection('updates'); setView('settings'); }}
           />
         )}
         <div className="page-content">{view === "overview" ? (
           <Overview
             {...{ state, act, setView, setClientTarget }}
+            onOpenUsageConversation={target => {
+              setUsageConversationTarget(target);
+              setView("conversations");
+            }}
           />
         ) : view === 'monitor' ? (
-          <Suspense fallback={<div className="empty"><Loader2 className="spin" /><p>读取请求监控…</p></div>}><RequestMonitor state={state} /></Suspense>
+          <Suspense fallback={<div className="empty"><Loader2 className="spin" /><p>读取请求监控…</p></div>}>
+            <RequestMonitor state={state} onPreferences={requestMonitor => remember({ requestMonitor })} />
+          </Suspense>
         ) : view === "providers" ? (
           <Providers
             {...{ state, providers, act, busy }}
@@ -523,16 +519,20 @@ function App() {
             initialClient={clientTarget}
             onSelectClient={setClientTarget}
             openProvider={openProvider}
-            onConversations={(id) => { setConversationTarget(id); setView("conversations"); }}
+            onConversations={(id) => {
+              setUsageConversationTarget(null);
+              setConversationTarget(id);
+              setView("conversations");
+            }}
           />
         ) : view === "conversations" ? (
           <Suspense fallback={<div className="empty"><Loader2 className="spin" /><p>读取对话管理…</p></div>}>
-            <Conversations state={state} initialHarness={conversationTarget}
+            <Conversations state={state} initialHarness={conversationTarget} initialSelection={usageConversationTarget}
               onNotify={(message, error = false) => setToast({ message, error })}
               onClient={(id) => { setClientTarget(id); setView("clients"); }} />
           </Suspense>
-        ) : view === "updates" ? (
-          <Updates {...{ state, act, busy }} />
+        ) : view === "settings" ? (
+          <Settings {...{ state, act, busy, remember }} section={settingsSection} setSection={setSettingsSection} />
         ) : (
           <Diagnostics {...{ state, providers, act, busy }} />
         )}</div>

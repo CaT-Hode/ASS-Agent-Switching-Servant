@@ -27,6 +27,20 @@ function revealTheme(theme, origin, onCommit, resolved = resolvedTheme(theme)) {
     { animate: resolved !== document.documentElement.dataset.colorTheme });
 }
 try { applyTheme(localStorage.getItem("ass-theme")); } catch { applyTheme("system"); }
+export function useSystemTheme() {
+  useEffect(() => {
+    const media = matchMedia('(prefers-color-scheme: dark)');
+    const update = () => {
+      const resolved = media.matches ? 'dark' : 'light';
+      if (document.documentElement.dataset.theme !== 'system' || document.documentElement.dataset.colorTheme === resolved) return;
+      const control = document.querySelector('.theme-toggle');
+      if (control) revealTheme('system', control, undefined, resolved);
+      else applyTheme('system', resolved);
+    };
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+}
 const themePositions = { light: 0, system: .5, dark: 1 };
 const themeNames = { light: "浅色", system: "自动", dark: "深色" };
 const modes = ["light", "system", "dark"];
@@ -75,15 +89,10 @@ export function ThemeControl({ value = "system", onChange }) {
     visibility(); document.addEventListener("visibilitychange", visibility);
     return () => document.removeEventListener("visibilitychange", visibility);
   }, []);
-  useEffect(() => { setTheme(value); applyTheme(value); }, [value]);
+  useEffect(() => { setTheme(value); }, [value]);
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
-    const update = () => {
-      setSystemDark(media.matches);
-      const resolved = media.matches ? 'dark' : 'light';
-      if (document.documentElement.dataset.theme === 'system' && document.documentElement.dataset.colorTheme !== resolved)
-        revealTheme('system', button.current, undefined, resolved);
-    };
+    const update = () => setSystemDark(media.matches);
     media.addEventListener("change", update); update();
     return () => media.removeEventListener("change", update);
   }, []);

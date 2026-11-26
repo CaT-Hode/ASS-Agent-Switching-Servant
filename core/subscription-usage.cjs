@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
+const antigravityQuota = require("./antigravity-quota.cjs");
 
 function tokenAccountId(access) {
   try {
@@ -22,6 +23,7 @@ function nativeSubscriptionProvider(client, account) {
     !account.ready
   )
     return null;
+  if (client.id === "antigravity") return antigravityQuota.provider(client, account);
   const provider = account.provider || account.oauthProvider;
   const kind = ["openai", "openai-codex"].includes(provider)
     ? "openai"
@@ -109,26 +111,85 @@ function quota(id, label, used, resets) {
     resetsAt: resetTime(resets),
   };
 }
-function parseSubscription(kind, data) {
-  if (kind === "anthropic") {
-    const limits = data?.rate_limits || data;
-    return [
-      ["five_hour", "5h"],
-      ["seven_day", "周"],
-    ]
-      .map(([key, label]) => {
-        const w = limits?.[key];
-        return quota(
-          key,
-          label,
-          w?.utilization ?? w?.used_percentage,
-          w?.resets_at,
-        );
-      })
-      .filter(Boolean);
+function quotaAmount(id, label, value, unit, extra = {}) {
+  return { id, label, value: String(value), unit, kind: "amount", quotaDetail: true, ...extra };
+}
+function nonnegative(value) {
+  if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim())) value = Number(value);
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+function minorUnits(amount, exponent) {
+  const value = nonnegative(amount);
+  return value !== null && Number.isInteger(exponent) && exponent >= 0 && exponent <= 6
+    ? value / 10 ** exponent : null;
+}
+function claudeSpend(data) {
+  const spend = data?.spend;
+  const legacy = data?.extra_usage;
+  const modern = typeof spend?.enabled === "boolean";
+  if (modern ? !spend.enabled : legacy?.is_enabled !== true) return null;
+  const currency = modern ? spend.used?.currency : legacy.currency ?? "USD";
+  if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) return null;
+  const decimals = legacy?.decimal_places ?? 2;
+  const used = modern ? minorUnits(spend.used?.amount_minor, spend.used?.exponent)
+    : minorUnits(legacy.used_credits, decimals);
+  if (used === null) return null;
+  const limit = modern
+    ? spend.limit?.currency === currency ? minorUnits(spend.limit.amount_minor, spend.limit.exponent) : null
+    : minorUnits(legacy.monthly_limit, decimals);
+  return quotaAmount("claude-extra-usage", "额外付费已用", used, currency,
+    limit === null ? {} : { limit: String(limit) });
+}
+function claudeQuotaFields(data) {
+  const legacy = data?.rate_limits || data;
+  const limits = Array.isArray(data?.limits) ? data.limits : [];
+  const windows = [
+    ["five_hour", "5h", "session"],
+    ["seven_day", "周", "weekly_all"],
+  ].map(([key, label, kind]) => {
+    const w = legacy?.[key];
+    const scoped = limits.find(item => item?.kind === kind);
+    return quota(key, label, w?.utilization ?? w?.used_percentage, w?.resets_at)
+      || quota(key, label, scoped?.percent, scoped?.resets_at);
+  }).filter(Boolean);
+  const models = new Map();
+  for (const [key, label] of [["opus", "Opus"], ["sonnet", "Sonnet"], ["fable", "Fable"]]) {
+    const w = legacy?.["seven_day_" + key];
+    const field = quota("weekly-" + key, label + " 周额度", w?.utilization ?? w?.used_percentage, w?.resets_at);
+    if (field) models.set(key, { ...field, group: "模型周额度" });
   }
-  const limits =
-    data?.rateLimitsByLimitId?.codex || data?.rateLimits || data?.rate_limit;
+  for (const item of limits) {
+    const name = item?.kind === "weekly_scoped" && item.scope?.model?.display_name;
+    if (typeof name !== "string" || !/^[a-z\d][a-z\d .+_-]{0,47}$/i.test(name)) continue;
+    const key = name.split(/\s+/)[0].toLowerCase();
+    if (models.has(key)) continue;
+    const field = quota("weekly-" + key, name + " 周额度", item.percent, item.resets_at);
+    if (field) models.set(key, { ...field, group: "模型周额度" });
+  }
+  const spend = claudeSpend(data);
+  return [...windows, ...models.values(), ...(spend ? [spend] : [])];
+}
+function parseCodexResetCredits(data, now = Date.now()) {
+  if (!Array.isArray(data?.credits)) return null;
+  const expiries = [];
+  let missingExpiryCount = 0;
+  for (const credit of data.credits) {
+    if (typeof credit?.status !== "string") return null;
+    if (credit.status !== "available") continue;
+    if (credit.expires_at == null) {
+      missingExpiryCount++;
+    } else {
+      const expires = Date.parse(credit.expires_at);
+      if (!Number.isFinite(expires)) return null;
+      if (expires > now) expiries.push(new Date(expires).toISOString());
+    }
+  }
+  expiries.sort();
+  return quotaAmount("codex-reset-credits", "可用重置", expiries.length + missingExpiryCount, "次", {
+    expiries, missingExpiryCount, ...(expiries.length ? { expiresAt: expiries[0] } : {}),
+  });
+}
+function codexWindows(limits, prefix = "") {
   return [
     limits?.primary_window || limits?.primary,
     limits?.secondary_window || limits?.secondary,
@@ -151,7 +212,7 @@ function parseSubscription(kind, data) {
                 : `${mins} 分钟`
               : `窗口 ${i + 1}`;
       return quota(
-        String(i),
+        prefix + i,
         label,
         w.used_percent ?? w.usedPercent,
         w.reset_at ?? w.resetsAt,
@@ -159,4 +220,31 @@ function parseSubscription(kind, data) {
     })
     .filter(Boolean);
 }
-module.exports = { nativeSubscriptionProvider, subscriptionProvider, parseSubscription };
+function parseSubscription(kind, data) {
+  if (kind === "anthropic") return claudeQuotaFields(data);
+  const limits =
+    data?.rateLimitsByLimitId?.codex || data?.rateLimits || data?.rate_limit;
+  const fields = codexWindows(limits);
+  const seen = new Set();
+  for (const pool of Array.isArray(data?.additional_rate_limits) ? data.additional_rate_limits : []) {
+    const name = pool?.limit_name;
+    if (typeof name !== "string" || !/^[a-z\d][a-z\d .+_()/-]{0,59}$/i.test(name)) continue;
+    const id = name.toLowerCase().replace(/[^a-z\d]+/g, "-");
+    if (seen.has(id)) continue;
+    const windows = codexWindows(pool.rate_limit, "codex-extra-" + id + "-");
+    if (windows.length) {
+      fields.push(...windows.map(field => ({ ...field, group: name })));
+      seen.add(id);
+    }
+  }
+  const credits = data?.credits || limits?.credits;
+  if (credits?.unlimited === true && credits.has_credits !== false) {
+    fields.push(quotaAmount("codex-credits", "Codex Credits", "不限", ""));
+  } else {
+    const balance = nonnegative(credits?.balance);
+    if (balance !== null && (credits.has_credits !== false || balance === 0))
+      fields.push(quotaAmount("codex-credits", "Codex Credits", balance, ""));
+  }
+  return fields;
+}
+module.exports = { nativeSubscriptionProvider, subscriptionProvider, parseSubscription, parseCodexResetCredits };

@@ -1,11 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { RefreshCw, ExternalLink } from "./icons.jsx";
-import { ElapsedTime } from "./diagnostic-time.jsx";
+import { ElapsedTime, QuotaResetTime } from "./diagnostic-time.jsx";
 import { exactTime } from "./relative-time.mjs";
 import { UsageMeter } from './usage-meter.jsx';
 import { AccountPlan } from './account-profile.jsx';
+import { groupQuotaWindows, quotaAmounts, quotaAmountText } from './usage-view.mjs';
 const api = window.ass;
-export function SupplierQuota({ p, state }) {
+export const quotaAccountCaption = (account) =>
+  account.profile?.fields?.find((field) => field.id === "email")?.value ||
+  account.profile?.fields?.find((field) => field.id === "name")?.value || account.label;
+
+export function useSupplierQuota(p, state) {
   const [loading, setLoading] = useState(false),
     [error, setError] = useState("");
   const clientId =
@@ -17,7 +22,9 @@ export function SupplierQuota({ p, state }) {
   const client = state.harnesses.clients.find((c) => c.id === clientId);
   const accounts =
     client?.accounts.filter(
-      (a) => a.kind !== "api" && (a.quota?.canRefresh || a.profile?.canRefresh),
+      (a) => p.nativeAccountId
+        ? a.id === p.nativeAccountId
+        : a.kind !== "api" && (a.quota?.canRefresh || a.profile?.canRefresh),
     ) || [];
   const selected = state.preferences.quotaAccounts?.[p.id];
   const account =
@@ -30,22 +37,9 @@ export function SupplierQuota({ p, state }) {
   const consoleOnly = profile?.quotaMode === 'console';
   const balance =
     !clientId && !profile?.canRefresh && !consoleOnly ? state.balances[p.id] : null;
-  const queryable = clientId ? !!account : p.hasKey && p.enabled !== false && profile?.balanceQueryable !== false;
-  const infoLinks = profile?.infoLinks || [];
-  const fields = profile?.fields || [];
-  const quotas = fields.filter((f) => f.kind === "quota");
-  const amounts = fields.filter(
-    (f) => f.id.startsWith("balance-") || f.id === "remaining",
-  );
-  const rows = amounts.length
-    ? amounts.map((f) => ({ label: f.label, value: f.value, unit: f.unit }))
-    : balance?.ok
-      ? balance.rows || [balance]
-      : [];
-  const time = profile?.updatedAt || balance?.time;
-  const warning = !consoleOnly && (error || profile?.error || balance?.error);
-  const caption = (a) =>
-    a.profile?.fields?.find((f) => f.id === "email")?.value || a.label;
+  const queryable = clientId
+    ? !!(account?.quota?.canRefresh || account?.profile?.canRefresh)
+    : p.hasKey && p.enabled !== false && profile?.balanceQueryable !== false;
   useEffect(() => {
     setError("");
     if (!queryable) return;
@@ -74,10 +68,42 @@ export function SupplierQuota({ p, state }) {
     account?.id,
     state.modelDirectoryRevisions?.[p.id],
   ]);
-  if (!queryable && !time && !infoLinks.length) return null;
+  async function refresh() {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api.call("supplier-refresh", p.id, account?.id);
+      if (result?.ok === false) setError(result.message || "额度查询失败");
+    } catch {
+      setError("额度查询失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+  return { clientId, client, account, accounts, profile, consoleOnly, balance, queryable, loading, error, setError, refresh };
+}
+
+export function SupplierQuotaRefresh({ name, quota }) {
+  return quota.queryable && <button type="button" className="model-icon supplier-quota-refresh"
+    aria-label={name + " 刷新额度"} title="刷新额度" disabled={quota.loading} onClick={quota.refresh}>
+    <RefreshCw size={14} className={quota.loading ? "spin" : undefined} />
+  </button>;
+}
+
+export function SupplierQuota({ p, quota, accountInHeader }) {
+  const { clientId, account, accounts, profile, consoleOnly, balance, queryable, loading, error, setError } = quota;
+  const infoLinks = profile?.infoLinks || [];
+  const fields = profile?.fields || [];
+  const quotas = fields.filter((f) => f.kind === "quota");
+  const subscription = ["codex", "claude", "antigravity"].includes(clientId);
+  const amounts = quotaAmounts(fields, clientId, !!profile?.remote);
+  const rows = amounts.length ? amounts : balance?.ok ? balance.rows || [balance] : [];
+  const time = profile?.updatedAt || balance?.time;
+  const warning = !consoleOnly && (error || profile?.error || balance?.error);
+  if (!account && !queryable && !time && !infoLinks.length) return null;
   return (
     <div className="supplier-quota" aria-label={p.name + " 额度"}>
-      <div className="supplier-quota-heading">
+      {!accountInHeader && <div className="supplier-quota-heading">
         {account && <AccountPlan account={account} />}
         {accounts.length > 1 ? (
           <select
@@ -96,17 +122,17 @@ export function SupplierQuota({ p, state }) {
           >
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>
-                {caption(a)}
+                {quotaAccountCaption(a)}
               </option>
             ))}
           </select>
         ) : (
           <span
             className="quota-account"
-            title={account ? caption(account) : "当前接口返回的额度"}
+            title={account ? quotaAccountCaption(account) : "当前接口返回的额度"}
           >
             {account
-              ? caption(account)
+              ? quotaAccountCaption(account)
               : consoleOnly
                 ? "OpenAI API"
               : quotas.length || rows.some((r) => r.unit === "%")
@@ -114,27 +140,8 @@ export function SupplierQuota({ p, state }) {
                 : "可用余额"}
           </span>
         )}
-        {queryable && <button
-          className="model-icon"
-          aria-label={p.name + " 刷新额度"}
-          title="刷新额度"
-          disabled={loading}
-          onClick={async () => {
-            setLoading(true);
-            setError("");
-            try {
-              const result = await api.call("supplier-refresh", p.id, account?.id);
-              if (result?.ok === false) setError(result.message || "额度查询失败");
-            } catch {
-              setError("额度查询失败");
-            } finally {
-              setLoading(false);
-            }
-          }}
-        >
-          <RefreshCw size={14} className={loading ? "spin" : undefined} />
-        </button>}
-      </div>
+        <SupplierQuotaRefresh name={p.name} quota={quota} />
+      </div>}
       <div className="supplier-quota-content">
       {consoleOnly && <span className="muted tiny">{profile.note}</span>}
       {infoLinks.map((link) => (
@@ -143,24 +150,34 @@ export function SupplierQuota({ p, state }) {
         </button>
       ))}
       {!!quotas.length && (
-        <div className="supplier-quota-windows">
-          {quotas.map((q) => (
-            <div
-              key={q.id}
-              title={
-                q.resetsAt ? "重置：" + exactTime(q.resetsAt) : "未返回重置时间"
-              }
-            >
-              <div>
-                <span>{q.label}</span>
-                <strong>
-                  {q.remainingPercent.toLocaleString("zh-CN", {
-                    maximumFractionDigits: 1,
-                  })}
-                  % 剩余
-                </strong>
+        <div className="supplier-quota-groups">
+          {(p.nativeAccountId || subscription ? groupQuotaWindows(quotas) : [["", quotas]]).map(([group, windows]) => (
+            <div key={group} role={group ? "group" : undefined} aria-label={group || undefined}>
+              {group ? <h3 className="quota-group-title">{group}</h3> : null}
+              <div className="supplier-quota-windows">
+                {windows.map((q) => (
+                  <div
+                    key={q.id}
+                    title={q.resetsAt ? "重置：" + exactTime(q.resetsAt) : "未返回重置时间"}
+                  >
+                    <div>
+                      <span>{q.label}</span>
+                      <strong>
+                        {q.remainingPercent.toLocaleString("zh-CN", { maximumFractionDigits: 1 })}
+                        % 剩余
+                      </strong>
+                    </div>
+                    <UsageMeter
+                      label={[p.name, group, q.label, "剩余额度"].filter(Boolean).join(" ")}
+                      value={q.remainingPercent}
+                      quota={q}
+                    />
+                    {subscription && <small className="muted">
+                      {q.resetsAt ? <QuotaResetTime value={q.resetsAt} /> : "重置时间未知"}
+                    </small>}
+                  </div>
+                ))}
               </div>
-              <UsageMeter label={p.name + ' ' + q.label + ' 剩余额度'} value={q.remainingPercent} quota={q} />
             </div>
           ))}
         </div>
@@ -168,25 +185,29 @@ export function SupplierQuota({ p, state }) {
       {!!rows.length && (
         <div className="supplier-amount">
           {rows.map((r, i) => (
-            <span key={i} title={r.label}>
-              {r.value} <small>{r.unit}</small>
+            <span key={r.id || i} title={r.unknown ? "接口未返回可确认的数值" : r.label}>
+              {(p.nativeAccountId || r.quotaDetail) && <small>{r.label} </small>}
+              {r.quotaDetail ? quotaAmountText(r) : <>{r.value} <small>{r.unit}</small></>}
             </span>
           ))}
         </div>
       )}
       {!consoleOnly && !quotas.length && !rows.length && (
         <span className="muted tiny">
-          {loading
-            ? "查询中…"
-            : warning
-              ? "额度暂不可用"
-              : time
-                ? "未返回额度"
-                : "尚未查询"}
+          {!queryable && account
+            ? account.message || "已检测到 OAuth 账户"
+            : loading
+              ? "查询中…"
+              : warning
+                ? "额度暂不可用"
+                : time
+                  ? "未返回额度"
+                  : "尚未查询"}
         </span>
       )}
       </div>
       <div className="supplier-quota-time">
+        {!accountInHeader && subscription && profile?.remote && profile.source && <span>{profile.source.replace(" · 上次查询", "")}</span>}
         {time && <ElapsedTime value={time} />}
         {warning && (
           <span className="danger" title={warning}>

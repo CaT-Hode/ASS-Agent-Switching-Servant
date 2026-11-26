@@ -5,26 +5,35 @@ const number = v => known(v) ? v : 0;
 const key = row => row.requestId || [row.time, row.source, row.model].join(':');
 const dayKey = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 const eligible = row => row.model && row.client !== 'diagnostics' && row.operation !== 'count_tokens';
+export const widgetProviderName = name => (typeof name === 'string' ? name.replace(/官方/g, '').replace(/\s+/g, ' ').trim() : '') || '未标注';
 export const WIDGET_FRAME_INSET = 6;
-export const WIDGET_CONTENT_INSET = 10;
 export const WIDGET_ROW_HEIGHT = 27;
 export const WIDGET_SECTION_GAP = 4;
 export const WIDGET_USAGE_HEIGHT = 22;
-export const WIDGET_HEAT_BOTTOM = 10;
+export const WIDGET_QUOTA_HEIGHT = 24;
+export const WIDGET_MAX_RADIUS = 48;
+export const WIDGET_GLASS_DEFAULTS = { bezelWidth: 18, distortion: 40 };
+export const WIDGET_GLASS_LIMITS = { bezelWidth: [6, 64], distortion: [0, 100] };
 const WIDGET_WIDTH_INSET = 52;
 export const widgetWidth = width => width - WIDGET_WIDTH_INSET;
 export const widgetWidthSetting = visible => visible + WIDGET_WIDTH_INSET;
 export const widgetHeatRadius = radius => Math.max(4, Math.min(8, Math.round(radius / 6)));
-export const widgetHeight = (count, capacity, width = 340, showHeatmap = true, showUsage = false) => {
+export const widgetQuotaHeight = count => count * (WIDGET_SECTION_GAP + WIDGET_QUOTA_HEIGHT);
+export function widgetContentInsets(radius = 36) {
+  const inset = Math.round((radius - 36) * 2 / 3);
+  return { horizontal: Math.max(6, 10 + inset), top: Math.max(4, 8 + inset), bottom: Math.max(6, 10 + inset) };
+}
+export const widgetHeight = (count, capacity, width = 340, showHeatmap = true, showUsage = false, quotaCount = 0, radius) => {
+  const { top, bottom } = widgetContentInsets(radius);
   const rows = Math.max(1, Math.min(capacity, count));
-  const heat = showHeatmap ? WIDGET_SECTION_GAP + widgetHeatHeight(width) : 0;
+  const heat = showHeatmap ? WIDGET_SECTION_GAP + widgetHeatHeight(width, radius) : 0;
   const usage = showUsage ? WIDGET_SECTION_GAP + WIDGET_USAGE_HEIGHT : 0;
-  return Math.ceil(2 * WIDGET_FRAME_INSET + 8 + rows * WIDGET_ROW_HEIGHT + heat + usage + WIDGET_HEAT_BOTTOM);
+  return Math.ceil(2 * WIDGET_FRAME_INSET + top + rows * WIDGET_ROW_HEIGHT + heat + usage + widgetQuotaHeight(quotaCount) + bottom);
 };
 // The 2x12 heatmap uses square cells; derive its DIP height from the same
 // inner width used by the renderer so the window fits the heatmap.
-export const widgetHeatHeight = (width = 340) => {
-  const inner = widgetWidth(width) - 2 * (WIDGET_FRAME_INSET + WIDGET_CONTENT_INSET);
+export const widgetHeatHeight = (width = 340, radius) => {
+  const inner = widgetWidth(width) - 2 * (WIDGET_FRAME_INSET + widgetContentInsets(radius).horizontal);
   return Math.max(32, (inner - 33) / 6 + 3);
 };
 export const widgetDuration = ms => Number.isFinite(ms) && ms >= 0 ? Math.floor(ms / 1000) + 's' : '—';
@@ -86,7 +95,7 @@ export class WidgetRequests {
     // and then leaves independently so newer requests never trap older completed rows.
     this.slots = this.slots.filter(slot => slot.finished === null || now - slot.finished < 15000);
     return this.slots.map(({ id, row }) => ({ id, model: usageModelName(row.model, row.client), rawModel: row.model,
-      provider: row.source || '未标注', client: row.client, inProgress: !!row.inProgress,
+      provider: widgetProviderName(row.source), client: row.client, inProgress: !!row.inProgress,
       phase: row.phase, ok: row.taskOk ?? row.ok, ms: row.ms,
       tps: known(row.tps) ? row.tps : null, endToEndTps: known(row.endToEndTps) ? row.endToEndTps : null,
       estimated: row.tpsEstimated === true, shortSample: shortVisibleSample(row),

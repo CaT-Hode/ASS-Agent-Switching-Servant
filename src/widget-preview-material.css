@@ -1,0 +1,21 @@
+.widget-demo-stage {
+  position: relative;
+  isolation: isolate;
+  background: #151324 url('./assets/widget-demo.webp') center / cover;
+}
+.widget-demo-material {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.widget-demo-material:not([data-painted]) { visibility: hidden; }
+.widget-demo-stage:not(:has(.widget-demo-material[data-painted])) .widget-panel[data-preview] {
+  background: light-dark(#f9fcffed, #242435e3);
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .widget-demo-stage { background: Canvas; }
+  .widget-demo-material { display: none; }
+}

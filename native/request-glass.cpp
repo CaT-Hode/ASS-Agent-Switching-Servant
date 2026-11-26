@@ -24,13 +24,17 @@ UINT_PTR retryTimer=0;
 constexpr UINT msgSyncGeometry=WM_APP+17;
 constexpr UINT msgRebind=WM_APP+18;
 constexpr int cursorSettleMs=16,wgcSettleMs=45,dxgiIdleIntervalMs=16,wgcIdleIntervalMs=60;
+// Accommodate the full settings range, including all rows and both quota bars,
+// with room for spring overshoot. A slider step must not recreate capture.
+constexpr float maxWidgetWidthDip=588.f,maxWidgetHeightDip=436.f;
 
 // Shared state between Electron UI thread (options/drag/rebind) and dedicated glassThread.
 std::mutex stateMutex;
-float radius=36,inset=6,targetWidth=0,targetHeight=0,heatHeight=43;
+float radius=48,inset=6,targetWidth=0,targetHeight=0,heatHeight=43;
+float bezelWidth=18,distortion=40;
 float visualWidth=0,visualHeight=0,widthVelocity=0,heightVelocity=0;
 float jellyPressure=0,jellyPressureVel=0,pressTarget=0,jellyStretchY=0,jellyStretchYVel=0;
-float rowHeight=27,contentInset=10,sectionGap=4,heatBottom=10,summaryHeight=0;
+float rowHeight=27,contentInset=10,sectionGap=4,heatBottom=10,summaryHeight=0,quotaHeight=0;
 int requestRows=0;
 int capacityW=0,capacityH=0,anchorBottom=0;
 int lastX=0,lastY=0,lastW=0,lastH=0,lastPad=0;
@@ -41,7 +45,7 @@ uint64_t creates=0,moves=0;
 HRESULT failure=S_OK;
 DG_Stats cachedStats{};
 
-// Pending UI geometry sync (posted ONLY when window moves/resizes or first frame reveals).
+// Keep one presented geometry in flight until the UI thread has positioned both HWNDs.
 struct SyncRect {int x=0,y=0,w=0,h=0,pad=0;};
 std::mutex syncMutex;
 SyncRect pendingSync{};
@@ -106,7 +110,7 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
     if(FAILED(comInit)){PostRebind(nullptr,comInit);return;}
     HANDLE handles[2]={wakeEvent,waitTimer};
     bool firstRun=true;
-    int syncedX=INT_MIN,syncedY=INT_MIN,syncedW=0,syncedH=0;
+    int syncedX=INT_MIN,syncedY=INT_MIN,syncedW=0,syncedH=0,syncedPad=0;
     POINT prevCursor{INT_MIN,INT_MIN};
     ULONGLONG lastCursorMoveTick=0;
     bool useVSync=false;
@@ -179,8 +183,8 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
             h=int(std::lround(visualHeight))-2*pad;
             if(w<1||h<1){useVSync=false;sleepMs=wgcIdleIntervalMs;continue;}
 
-            capW=int(std::ceil((std::max(480.f,targetWidth)+32)*dpi))-2*pad;
-            capH=int(std::ceil((std::max(362.f,targetHeight)+48)*dpi))-2*pad;
+            capW=int(std::ceil((std::max(maxWidgetWidthDip,targetWidth)+32)*dpi))-2*pad;
+            capH=int(std::ceil((std::max(maxWidgetHeightDip,targetHeight)+48)*dpi))-2*pad;
             if(capW!=capacityW||capH!=capacityH)needRebind=true;
 
             w=std::clamp(w,1,std::max(1,capacityW));
@@ -203,7 +207,7 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
             localDragging=dragging;localMoving=moving;
 
             p.dpi_scale=dpi;p.corner_radius_dip=radius;
-            p.bezel_dip=18;p.thickness_dip=72;p.refraction_strength=.40f;p.tint=.08f;p.highlight_strength=.68f;
+            p.bezel_dip=bezelWidth;p.thickness_dip=72;p.refraction_strength=distortion/100.f;p.tint=.08f;p.highlight_strength=.68f;
             p.pressure=reduced?0.f:std::clamp(jellyPressure,-1.f,1.f);
             p.shape_y_px=reduced?0.f:std::clamp(jellyStretchY,-5.f*dpi,5.f*dpi);
 
@@ -218,7 +222,7 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
             for(unsigned i=0;i<3;++i)p.probes[i]={w*(.2f+.3f*i),h*.5f};
 
             if(requestRows){
-                float footerPx=(heatBottom+heatHeight+summaryHeight+sectionGap)*dpi;
+                float footerPx=(heatBottom+heatHeight+summaryHeight+quotaHeight+sectionGap)*dpi;
                 float maxRowsPx=std::max(4.f*dpi,h-footerPx-6.f*dpi);
                 float rowsHeight=std::min((requestRows*rowHeight-4.f)*dpi,maxRowsPx);
                 float rowsTop=std::max(4.f*dpi,h-footerPx-rowsHeight);
@@ -226,6 +230,14 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
                 constexpr float rowBackingBlurDip=9.f;
                 p.materials[p.material_count++]={contentInset*dpi,rowsTop,
                     std::max(1.f,w-2*contentInset*dpi),rowsHeight,1,float(requestRows),0,4*dpi,inner,rowBackingBlurDip*dpi};
+            }
+            constexpr float quotaBarHeightDip=24.f,quotaGapDip=4.f,quotaRadiusDip=12.f,quotaBlurDip=7.f;
+            int quotaBars=int(quotaHeight/(quotaBarHeightDip+quotaGapDip));
+            if(quotaBars){
+                float barsHeight=(quotaBars*quotaBarHeightDip+(quotaBars-1)*quotaGapDip)*dpi;
+                p.materials[p.material_count++]={contentInset*dpi,h-heatBottom*dpi-barsHeight,
+                    std::max(1.f,w-2*contentInset*dpi),barsHeight,1,float(quotaBars),0,quotaGapDip*dpi,
+                    quotaRadiusDip*dpi,quotaBlurDip*dpi};
             }
             inMotion=localDragging||localMoving||resizing||jelling;
 #ifdef ASS_GLASS_REVIEW
@@ -239,13 +251,15 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
             continue;
         }
 
-        bool geomChanged=x!=syncedX||y!=syncedY||w!=syncedW||h!=syncedH;
-        bool needReveal=!revealed.load(std::memory_order_acquire);
+        bool geomChanged=x!=syncedX||y!=syncedY||w!=syncedW||h!=syncedH||pad!=syncedPad;
+        bool geometryPending=geomChanged&&syncPosted.load(std::memory_order_acquire);
+        bool canRender=!geometryPending;
 
 #ifdef ASS_GLASS_REVIEW
         if(int delay=renderDelayMs.load())std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-        if(!samplingPaused){
+        canRender=canRender&&!samplingPaused;
 #endif
+        if(canRender){
             HRESULT hr=DG_RenderPresentViewport(handle,x,y,w,h,&p);
             if(FAILED(hr)){
                 PostRebind(nullptr,hr);
@@ -254,11 +268,21 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
             }
             if(hr==S_OK){
                 lastPresentedTick.store(GetTickCount64(),std::memory_order_relaxed);
-                if(needReveal)revealed.store(true,std::memory_order_release);
+                if(geomChanged){
+                    revealed.store(true,std::memory_order_release);
+                    {
+                        std::lock_guard guard(syncMutex);
+                        pendingSync={x,y,w,h,pad};
+                    }
+                    syncPosted.store(true,std::memory_order_release);
+                    if(PostMessageW(wake,msgSyncGeometry,0,0)){
+                        syncedX=x;syncedY=y;syncedW=w;syncedH=h;syncedPad=pad;
+                    }else{
+                        syncPosted.store(false,std::memory_order_release);
+                    }
+                }
             }
-#ifdef ASS_GLASS_REVIEW
         }
-#endif
 
         // Decide next wait strategy AFTER rendering so fresh WGC/DXGI state determines cadence immediately:
         // - Drag/resize/jelly: lock to DwmFlush() (native monitor refresh rate).
@@ -270,7 +294,7 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
         ULONGLONG afterTick=GetTickCount64();
         bool settling=(afterTick-lastPresentedTick.load(std::memory_order_relaxed))<240;
         bool cursorActive=cursorNear&&((afterTick-lastCursorMoveTick)<250);
-        if(inMotion){
+        if(inMotion||geometryPending){
             useVSync=true;sleepMs=0;
         }else if(activeBackend==2){
             // On WGC, pool.FrameArrived wakes wakeEvent in <0.1ms on every real desktop frame!
@@ -285,18 +309,6 @@ void WorkerLoop(DG_Handle handle,HWND host,HWND wake,HMONITOR initialMonitor){
         }
         reportedPacerMs.store(useVSync?0:sleepMs,std::memory_order_relaxed);
 
-        // Completely decoupled from Electron UI thread when stationary!
-        // Only post a coalesced geometry sync when (x,y,w,h) changed or the first frame needs reveal.
-        if(geomChanged||(needReveal&&revealed.load(std::memory_order_acquire))){
-            {
-                std::lock_guard guard(syncMutex);
-                pendingSync={x,y,w,h,pad};
-            }
-            syncedX=x;syncedY=y;syncedW=w;syncedH=h;
-            if(!syncPosted.exchange(true,std::memory_order_acq_rel)){
-                if(!PostMessageW(wake,msgSyncGeometry,0,0))syncPosted.store(false,std::memory_order_release);
-            }
-        }
 #ifdef ASS_GLASS_REVIEW
         if(stepReviewSeq){
             std::lock_guard guard(reviewMutex);
@@ -353,8 +365,8 @@ void RebindGlass(){
     {
         std::lock_guard guard(stateMutex);
         pad=int(std::lround(inset*dpi));
-        capW=int(std::ceil((std::max(480.f,targetWidth)+32)*dpi))-2*pad;
-        capH=int(std::ceil((std::max(362.f,targetHeight)+48)*dpi))-2*pad;
+        capW=int(std::ceil((std::max(maxWidgetWidthDip,targetWidth)+32)*dpi))-2*pad;
+        capH=int(std::ceil((std::max(maxWidgetHeightDip,targetHeight)+48)*dpi))-2*pad;
         x=lastX;y=lastY;w=std::clamp(lastW,1,std::max(1,capW));h=std::clamp(lastH,1,std::max(1,capH));
     }
     if(capW<1||capH<1)return;
@@ -404,13 +416,16 @@ LRESULT CALLBACK WakeProc(HWND window,UINT message,WPARAM wp,LPARAM lp){
 #ifdef ASS_GLASS_REVIEW
             geometryMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
 #endif
-            if(FAILED(hr)){workerError.store(hr,std::memory_order_release);RebindGlass();}
-            else{
-                DG_EnsurePresentedVisible(glass);
-                std::lock_guard guard(stateMutex);++moves;
+            if(FAILED(hr)){
+                syncPosted.store(false,std::memory_order_release);
+                workerError.store(hr,std::memory_order_release);
+                RebindGlass();
+                return 0;
             }
+            DG_EnsurePresentedVisible(glass);
+            std::lock_guard guard(stateMutex);++moves;
         }
-        // Clear coalescing flag strictly AFTER DeferWindowPos finishes so UI queue never floods.
+        // Accept the next geometry only after DeferWindowPos finishes.
         syncPosted.store(false,std::memory_order_release);
         return 0;
     }
@@ -439,8 +454,11 @@ napi_value Options(napi_env env,napi_callback_info info){
         {
             std::lock_guard guard(stateMutex);
             float prevHeight=targetHeight,prevWidth=targetWidth;
+            float prevRadius=radius,prevBezel=bezelWidth,prevDistortion=distortion;
             int prevRows=requestRows;
             radius=float(std::clamp(Number(env,args[0],"radius",radius),8.,48.));
+            bezelWidth=float(std::clamp(Number(env,args[0],"bezelWidth",bezelWidth),6.,64.));
+            distortion=float(std::clamp(Number(env,args[0],"distortion",distortion),0.,100.));
             inset=float(Number(env,args[0],"inset",inset));
             targetWidth=float(Number(env,args[0],"width",targetWidth));
             targetHeight=float(Number(env,args[0],"height",targetHeight));
@@ -448,6 +466,7 @@ napi_value Options(napi_env env,napi_callback_info info){
             // Hidden heatmap height is zero; the widest configured window has 90.2 DIP of heat cells.
             heatHeight=float(std::clamp(Number(env,args[0],"heatHeight",heatHeight),0.,96.));
             summaryHeight=float(std::clamp(Number(env,args[0],"summaryHeight",0.),0.,32.));
+            quotaHeight=float(std::clamp(Number(env,args[0],"quotaHeight",0.),0.,56.));
             rowHeight=float(std::clamp(Number(env,args[0],"rowHeight",rowHeight),20.,36.));
             contentInset=float(std::clamp(Number(env,args[0],"contentInset",contentInset),4.,24.));
             sectionGap=float(std::clamp(Number(env,args[0],"sectionGap",sectionGap),0.,12.));
@@ -460,7 +479,8 @@ napi_value Options(napi_env env,napi_callback_info info){
                     jellyPressureVel+=(deltaH>0?-5.8f:5.2f)*mag;
                 }
                 wake=true;
-            }else if(owner&&(requestRows!=prevRows||(prevWidth>0&&std::abs(targetWidth-prevWidth)>=1.f))){
+            }else if(owner&&(requestRows!=prevRows||(prevWidth>0&&std::abs(targetWidth-prevWidth)>=1.f)||
+                radius!=prevRadius||bezelWidth!=prevBezel||distortion!=prevDistortion)){
                 wake=true;
             }
         }

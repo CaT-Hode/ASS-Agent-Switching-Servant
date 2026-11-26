@@ -7,7 +7,7 @@ import { SettingsSwitch } from './settings-switch.jsx';
 import { SettingsRange } from './settings-range.jsx';
 import { ClientSettings } from './settings-client.jsx';
 import { SettingsWidgetPreview } from './settings-widget-preview.jsx';
-import { widgetWidth, widgetWidthSetting } from '../core/request-widget-view.mjs';
+import { WIDGET_GLASS_DEFAULTS, WIDGET_GLASS_LIMITS, WIDGET_MAX_RADIUS, widgetWidth, widgetWidthSetting } from '../core/request-widget-view.mjs';
 import './settings.css';
 
 const sections = [
@@ -39,6 +39,7 @@ function NumberOptions({ label, value, values, format = String, onChange, disabl
 
 const columns = [
   ['provider', '供应商', '显示实际处理请求的供应商或订阅来源。'],
+  ['harness', '客户端（Harness）', '显示发起请求的客户端名称。'],
   ['throughput', '可见输出 TPS', '显示文本和工具参数的接收速率。'],
   ['cache', '缓存命中率', '显示缓存读取占输入的比例。'],
   ['duration', '请求耗时', '进行中的请求显示实时耗时。'],
@@ -46,14 +47,32 @@ const columns = [
 
 const widgetRanges = [
   { key: 'width', label: '窗口宽度', min: widgetWidth(320), max: widgetWidth(640), unit: 'DIP', fallback: 340 },
-  { key: 'radius', label: '窗口圆角', min: 8, max: 48, unit: 'DIP', fallback: 36 },
+  { key: 'radius', label: '窗口圆角', min: 8, max: WIDGET_MAX_RADIUS, unit: 'DIP', fallback: WIDGET_MAX_RADIUS },
   { key: 'rows', label: '最多请求行数', min: 1, max: 8, unit: '行', fallback: 5 },
 ];
+const glassRanges = [
+  { key: 'bezelWidth', label: '折射边缘宽度', unit: 'DIP' },
+  { key: 'distortion', label: '背景扭曲幅度', unit: '%' },
+].map(range => {
+  const [min, max] = WIDGET_GLASS_LIMITS[range.key];
+  return { ...range, min, max, fallback: WIDGET_GLASS_DEFAULTS[range.key] };
+});
 
-function WidgetSettings({ widget, theme, act, busy }) {
+function WidgetSettings({ widget, quotaChoices, theme, act, busy }) {
   const [draft, setDraft] = useState(null);
   const configure = patch => act('widget-settings', () => window.ass.call('request-widget', patch));
   const disabled = !!busy;
+  const quotaIds = widget.quotaBars || [];
+  const quotaBars = quotaIds.map(id => quotaChoices.find(choice => choice.id === id) || { label: '额度不可用', remainingPercent: null });
+  const renderRanges = ranges => ranges.map(({ key, fallback, ...range }) => {
+    const value = widget[key] ?? fallback;
+    const patch = next => ({ [key]: key === 'width' ? widgetWidthSetting(next) : next });
+    return <div key={key} className="settings-row settings-widget-range-row">
+      <div className="settings-row-copy"><strong>{range.label}</strong></div>
+      <SettingsRange {...range} value={key === 'width' ? widgetWidth(value) : value} disabled={disabled}
+        onPreview={next => setDraft(next === null ? null : patch(next))} onCommit={next => configure(patch(next))} />
+    </div>;
+  });
   return <div className="settings-widget-layout">
     <div className="settings-widget-options">
       <div className="settings-card">
@@ -63,33 +82,53 @@ function WidgetSettings({ widget, theme, act, busy }) {
       </div>
       <section className="settings-group" aria-label="悬浮窗外观">
         <div className="settings-group-heading"><h4>外观</h4>
-          <button type="button" className="text-button" disabled={disabled} onClick={() => configure({ rows: 5, width: 340, radius: 36 })}>恢复默认外观</button>
+          <button type="button" className="text-button" disabled={disabled}
+            onClick={() => configure({ rows: 5, width: 340, radius: WIDGET_MAX_RADIUS, ...WIDGET_GLASS_DEFAULTS })}>恢复默认外观</button>
         </div>
-        <div className="settings-card">
-          {widgetRanges.map(({ key, fallback, ...range }) => {
-            const value = widget[key] ?? fallback;
-            const patch = next => ({ [key]: key === 'width' ? widgetWidthSetting(next) : next });
-            return <div key={key} className="settings-row settings-widget-range-row">
-              <div className="settings-row-copy"><strong>{range.label}</strong></div>
-              <SettingsRange {...range} value={key === 'width' ? widgetWidth(value) : value} disabled={disabled}
-                onPreview={next => setDraft(next === null ? null : patch(next))} onCommit={next => configure(patch(next))} />
-            </div>;
-          })}
-        </div>
+        <div className="settings-card">{renderRanges(widgetRanges)}</div>
+      </section>
+      <section className="settings-group" aria-label="液态玻璃">
+        <div className="settings-group-heading"><h4>液态玻璃</h4></div>
+        <div className="settings-card">{renderRanges(glassRanges)}</div>
       </section>
       <section className="settings-group" aria-label="悬浮窗显示内容">
         <div className="settings-group-heading"><h4>显示内容</h4></div>
         <div className="settings-card">
           {columns.map(([key, label, detail]) => <SwitchRow key={key} label={label} detail={detail}
-            checked={widget.columns?.[key] !== false} disabled={disabled} onChange={value => configure({ columns: { [key]: value } })} />)}
+            checked={widget.columns?.[key] ?? (key !== 'harness')} disabled={disabled} onChange={value => configure({ columns: { [key]: value } })} />)}
           <SwitchRow label="今日 Token 热力图" detail="按小时显示今天的 Token 用量。"
             checked={widget.showHeatmap !== false} disabled={disabled} onChange={showHeatmap => configure({ showHeatmap })} />
           <SwitchRow label="今日 Token 汇总" detail="显示今日总量、输入和输出，可独立于热力图开启。"
             checked={widget.showUsage} disabled={disabled} onChange={showUsage => configure({ showUsage })} />
         </div>
       </section>
+      <section className="settings-group" aria-label="悬浮窗订阅额度条">
+        <div className="settings-group-heading"><h4>订阅额度条</h4></div>
+        <div className="settings-card">
+          {[0, 1].map(index => {
+            const label = `额度条 ${index + 1}`, current = quotaIds[index] || '';
+            const detail = !quotaChoices.length ? '账户与额度中有可用订阅窗口后即可选择。'
+              : index === 0 ? '显示在热力图下方。' : undefined;
+            return <div key={index} className="settings-row settings-widget-quota-row">
+              <div className="settings-row-copy"><strong>{label}</strong>{detail && <p>{detail}</p>}</div>
+              <select className="settings-select" value={current} aria-label={label}
+                disabled={disabled || (!quotaChoices.length && !current) || (index === 1 && !quotaIds[0])}
+                onChange={event => {
+                  const next = [...quotaIds];
+                  next[index] = event.target.value;
+                  configure({ quotaBars: next.filter(Boolean) });
+                }}>
+                <option value="">不显示</option>
+                {current && !quotaChoices.some(choice => choice.id === current) && <option value={current}>原选择暂不可用</option>}
+                {quotaChoices.filter(choice => choice.id !== quotaIds[1 - index]).map(choice =>
+                  <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+              </select>
+            </div>;
+          })}
+        </div>
+      </section>
     </div>
-    <SettingsWidgetPreview widget={draft ? { ...widget, ...draft } : widget} theme={theme} />
+    <SettingsWidgetPreview widget={draft ? { ...widget, ...draft } : widget} {...{ quotaBars, theme }} />
   </div>;
 }
 
@@ -113,7 +152,8 @@ export function Settings({ state, act, busy, section, setSection, remember }) {
           <SwitchRow label="开机启动" detail="登录 Windows 后在后台启动 ASS。"
             checked={state.autoStart} disabled={!!busy} onChange={value => act('auto', () => window.ass.call('autostart', value))} />
         </div>}
-        {section === 'widget' && <WidgetSettings widget={state.requestWidget || preferences.requestWidget || {}} theme={preferences.theme} {...{ act, busy }} />}
+        {section === 'widget' && <WidgetSettings widget={state.requestWidget || preferences.requestWidget || {}}
+          quotaChoices={state.widgetQuotaChoices || []} theme={preferences.theme} {...{ act, busy }} />}
         {section === 'clients' && <ClientSettings {...{ state, busy, act }} />}
         {section === 'data' && <>
           <div className="settings-card">

@@ -27,6 +27,7 @@ import { quotaDateTime } from "./relative-time.mjs";
 import { hasFreshQuotaSample, quotaWindowKey } from "../core/quota-history.mjs";
 import { QuotaHistory, ResetCreditDetails } from "./quota-monitor.jsx";
 import { UsageDrilldown } from "./usage-drilldown.jsx";
+import { harnessLogo } from "./provider-brand.mjs";
 import "./overview.css";
 const api = window.ass;
 const count = (n) => n.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
@@ -319,6 +320,7 @@ function DailyOnly({ stats, onDrill }) {
 }
 function AccountCard({ row, refresh, busy, monitor, changeMonitor, now }) {
   const { account: a } = row;
+  const logo = harnessLogo(row.client.id);
   const antigravity = row.client.id === "antigravity";
   const codex = row.client.id === "codex" && a.kind !== "api";
   const monitored = a.kind !== "api" && ["antigravity", "claude", "codex"].includes(row.client.id);
@@ -375,8 +377,8 @@ function AccountCard({ row, refresh, busy, monitor, changeMonitor, now }) {
   return (
     <article className="overview-account" data-expanded-codex={codex || undefined} data-antigravity={antigravity || undefined}>
       <header>
-        <span className="overview-account-avatar">
-          <UserRound size={19} />
+        <span className="overview-account-avatar" aria-hidden="true">
+          {logo ? <img src={logo} alt="" /> : <UserRound size={19} />}
         </span>
         <div>
           <strong title={row.name}>{row.name}</strong>

@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { motionRows } from '../core/request-widget-view.mjs';
+import { WIDGET_MAX_RADIUS, motionRows } from '../core/request-widget-view.mjs';
 import { WidgetSurface } from './widget-surface.jsx';
 import { X } from './icons.jsx';
 import './menus.css';
 import './request-widget.css';
 export function RequestWidget() {
-  const [state, setState] = useState({ rows: [], heat: { cells: [] }, radius: 36 });
+  const [state, setState] = useState({ rows: [], heat: { cells: [] }, radius: WIDGET_MAX_RADIUS });
   const [entries, setEntries] = useState([]);
   const [menu, setMenu] = useState(null);
   const menuRef = useRef(null);

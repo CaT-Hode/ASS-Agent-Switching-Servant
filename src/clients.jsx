@@ -32,12 +32,13 @@ import { AntigravityPanel } from "./antigravity-panel.jsx";
 import { ClientProcessChoice } from "./client-process-choice.jsx";
 import { CodexDesktopLaunch } from "./codex-desktop-launch.jsx";
 import { detectedClients } from "./usage-view.mjs";
+import { harnessLogo } from "./provider-brand.mjs";
 const api = window.ass;
-const clientBrands = { codex: "openai", claude: "anthropic", opencode: "opencode", dsh: "deepseek", pi: "pi", kimi: "kimi", zcode: "zai", antigravity: "antigravity" };
 function ClientEntry({ client: c, activeClient, onSelect }) {
+  const logo = harnessLogo(c.id);
   return <div className={"client-entry" + (c.id === activeClient ? " active" : "")}>
     <button className="client-select" aria-label={c.name} aria-pressed={c.id === activeClient} onClick={() => onSelect(c.id)}>
-      <span className="client-glyph" aria-hidden="true">{clientBrands[c.id] ? <img src={"./providers/" + clientBrands[c.id] + ".svg"} alt="" /> : <Terminal size={23} data-motion-icon={undefined} />}</span>
+      <span className="client-glyph" aria-hidden="true">{logo ? <img src={logo} alt="" /> : <Terminal size={23} data-motion-icon={undefined} />}</span>
       <strong>{c.name}</strong><i className={"client-detected-dot" + (c.detected ? " found" : "")} title={c.detected ? "已识别" : "未识别"} /><ChevronRight size={14} />
     </button>
   </div>;

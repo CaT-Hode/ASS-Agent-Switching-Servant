@@ -87,7 +87,8 @@ class RequestWidget {
     const settings = this.preferences.state.requestWidget, area = this.screen.getPrimaryDisplay().workArea;
     const source = this.read();this.count = this.rows.update(source.active, source.history.rows, Date.now()).length;
     this.visualCount = this.count;
-    const height = this.model.widgetHeight(this.count, settings.rows, settings.width, settings.showHeatmap, settings.showUsage);
+    const height = this.model.widgetHeight(this.count, settings.rows, settings.width, settings.showHeatmap, settings.showUsage,
+      settings.quotaBars?.length, settings.radius);
     const width = this.model.widgetWidth(settings.width);
     const display = this.screen.getDisplayNearestPoint({ x: settings.x ?? area.x + area.width - width - 24, y: settings.y ?? area.y + 50 }).workArea;
     const x = Math.max(display.x, Math.min(display.x + display.width - width, settings.x ?? area.x + area.width - width - 24));
@@ -121,12 +122,17 @@ class RequestWidget {
     const settings = this.preferences.state.requestWidget, count = this.visualCount ?? this.count ?? 0;
     const showHeatmap = settings.showHeatmap !== false;
     const showUsage = settings.showUsage === true;
-    return { radius: settings.radius, inset: this.model.WIDGET_FRAME_INSET, width: this.model.widgetWidth(settings.width),
-      height: this.model.widgetHeight(count, settings.rows, settings.width, showHeatmap, showUsage), rows: Math.min(settings.rows, count),
-      heatHeight: showHeatmap ? this.model.widgetHeatHeight(settings.width) : 0, rowHeight: this.model.WIDGET_ROW_HEIGHT,
+    const quotaCount = settings.quotaBars?.length ?? 0;
+    const insets = this.model.widgetContentInsets(settings.radius);
+    return { radius: settings.radius, bezelWidth: settings.bezelWidth, distortion: settings.distortion,
+      inset: this.model.WIDGET_FRAME_INSET, width: this.model.widgetWidth(settings.width),
+      height: this.model.widgetHeight(count, settings.rows, settings.width, showHeatmap, showUsage, quotaCount, settings.radius),
+      rows: Math.min(settings.rows, count),
+      heatHeight: showHeatmap ? this.model.widgetHeatHeight(settings.width, settings.radius) : 0, rowHeight: this.model.WIDGET_ROW_HEIGHT,
       summaryHeight: showUsage ? this.model.WIDGET_USAGE_HEIGHT + (showHeatmap ? this.model.WIDGET_SECTION_GAP : 0) : 0,
-      contentInset: this.model.WIDGET_CONTENT_INSET, sectionGap: showHeatmap || showUsage ? this.model.WIDGET_SECTION_GAP : 0,
-      heatBottom: this.model.WIDGET_HEAT_BOTTOM };
+      quotaHeight: this.model.widgetQuotaHeight(quotaCount),
+      contentInset: insets.horizontal, sectionGap: showHeatmap || showUsage ? this.model.WIDGET_SECTION_GAP : 0,
+      heatBottom: insets.bottom };
   }
   layout() {
     if (!this.window) return;
@@ -166,7 +172,7 @@ class RequestWidget {
     }
     const theme = (this.light ?? !this.nativeTheme.shouldUseDarkColors) ? 'light' : 'dark';
     return { rows: rows.slice(0, capacity), ...(showHeatmap && (heatChanged || includeHeat) ? { heat: this.heat } : {}), usageKey,
-      ...(showUsage ? { usageSummary: this.usageSummary } : {}), radius, columns, showHeatmap, showUsage,
+      ...(showUsage ? { usageSummary: this.usageSummary } : {}), radius, columns, showHeatmap, showUsage, quotaBars: source.quotaBars ?? [],
       theme, glass: this.glassReady, error: this.error || '' };
   }
   tick() {
@@ -175,7 +181,7 @@ class RequestWidget {
     const frame = this.frame();
     const signature = JSON.stringify({
       rows: frame.rows, usageKey: frame.usageKey, radius: frame.radius,
-      columns: frame.columns, showHeatmap: frame.showHeatmap, showUsage: frame.showUsage,
+      columns: frame.columns, showHeatmap: frame.showHeatmap, showUsage: frame.showUsage, quotaBars: frame.quotaBars,
       theme: frame.theme, glass: frame.glass, error: frame.error,
     });
     this.scheduleNextTick(frame.rows.length > 0);

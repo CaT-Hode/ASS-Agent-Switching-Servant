@@ -34,6 +34,21 @@ const aliases = {
   bytedance: "doubao",
   tencent: "hunyuan",
 };
+const harnessBrands = {
+  codex: "openai",
+  claude: "anthropic",
+  opencode: "opencode",
+  dsh: "deepseek",
+  pi: "pi",
+  kimi: "kimi",
+  zcode: "zai",
+  antigravity: "antigravity",
+};
+
+export function harnessLogo(id) {
+  return Object.hasOwn(harnessBrands, id) ? `./providers/${harnessBrands[id]}.svg` : null;
+}
+
 export function providerBrand(p, service) {
   if (p.id === "official") return "openai";
   const native = {

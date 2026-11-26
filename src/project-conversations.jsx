@@ -6,8 +6,8 @@ import { useConversationColumns } from './conversation-columns.jsx';
 import { detectedClients } from './usage-view.mjs';
 import { ConversationMarkdown } from './conversation-markdown.mjs';
 import { ConversationHistory, HistoryBadge, HistorySource } from './conversation-history.jsx';
+import { harnessLogo } from './provider-brand.mjs';
 const api = window.ass, labels = { codex: 'Codex', claude: 'Claude Code', dsh: 'DSH', opencode: 'OpenCode', pi: 'pi' };
-const brands = { codex: 'openai', claude: 'anthropic', dsh: 'deepseek', opencode: 'opencode', pi: 'pi' };
 const originLabels = { ...labels, claude: 'CC' };
 const time = (s) => s ? new Date(s).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 const errorText = (e) => e.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
@@ -130,7 +130,7 @@ export function ProjectConversations({ state, initialHarness, initialSelection, 
     <div className="project-sync-toolbar page-action-bar"><div className="conversation-tabs" aria-label="会话客户端">{available.map((c) => <button key={c.id} aria-pressed={view === c.id} onClick={() => {
       setView(c.id); setFocusedRecord(''); setOffset(0); setBefore(0); if (!shared) setSelected(null); setNativeView(false);
       api.call('ui-preferences', { conversations: { harness: c.id } }).catch((e) => setError(errorText(e)));
-    }}><img src={'./providers/' + brands[c.id] + '.svg'} alt="" />{labels[c.id]}</button>)}</div>
+    }}><img src={harnessLogo(c.id)} alt="" />{labels[c.id]}</button>)}</div>
       <div className="conversation-scope" aria-label="对话范围">{[['active', '当前对话'], ['inactive', '归档及残留']].map(([id, label]) => <button key={id} aria-pressed={scope === id} onClick={() => { setScope(id); setFocusedRecord(''); setOffset(0); setBefore(0); setSelected(null); }}>{label}{id === 'inactive' && !!list?.inactive?.[view] && <small>{list.inactive[view]}</small>}</button>)}</div>
       <span className="conversation-count">{list ? items.reduce((n, p) => n + (p.enabled ? p.count : p.counts?.[view] || 0), 0) + ' 个对话' : '读取记录…'}</span>
       <div className="page-actions"><button className="button" disabled={!!busy} onClick={() => setHistoryOpen(true)}><ShieldCheck size={15} />历史与存储</button>

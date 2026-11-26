@@ -1,11 +1,11 @@
 .widget-panel { --inner-radius: clamp(0px, calc(var(--radius) - 16px), 10px); --heat-current-edge: #dbb1ff; --heat-current-glow: #b87af068; position: relative; display: flex; flex-direction: column; gap: 4px;
-  margin: 6px; height: calc(100% - 12px); padding: 8px 10px 10px; border-radius: var(--radius); corner-shape: superellipse(2); overflow: hidden;
+  margin: 6px; height: calc(100% - 12px); padding: var(--widget-padding); border-radius: var(--radius); corner-shape: superellipse(2); overflow: hidden;
   transform-origin: center bottom;
   box-shadow: 0 2px 6px #00000048, 0 0 0 .5px #ffffff1a;
   transition: color 240ms ease, box-shadow 240ms ease; }
 .widget-panel[data-glass="false"] { background: #242229; }
 .widget-panel[data-theme="dark"] { color-scheme: dark; color: #f0edf6; }
-.widget-panel[data-preview] { background: light-dark(#f9fcfff0, #242a33e3); user-select: none; }
+.widget-panel[data-preview] { user-select: none; }
 .widget-panel[data-preview] .widget-request { font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; }
 .widget-panel[data-preview] .widget-row-material::after, .widget-panel[data-preview] .widget-heat-ripple { animation: none; }
 .widget-error { position: absolute; left: 7px; top: 2px; font-size: 10px; color: #e8b996; }
@@ -36,7 +36,7 @@
 .widget-request[data-phase="failed"] .widget-row-material { background: #a7546840; }
 .widget-request[data-phase="failed"] { animation: widget-failed-nudge 320ms ease-out 1; }
 .widget-model { overflow: hidden; text-overflow: ellipsis; font-weight: 600; font-size: 12px; padding-right: 3px; }
-.widget-provider { color: #d3cadfbd; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; padding-right: 1px; }
+.widget-harness, .widget-provider { color: #d3cadfbd; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; padding-right: 3px; }
 .widget-tps { color: #e0c7ff; text-align: right; font-size: 11.5px; padding-right: 1.5px; }
 .widget-tps sup { font-size: .65em; line-height: 0; }
 .widget-cache { color: #d2cbdca3; text-align: right; font-size: 10.5px; padding-right: 1.5px; }
@@ -51,6 +51,18 @@
   white-space: nowrap; color: light-dark(#3e5360, #ccc6d6); font-size: 10px; font-variant-numeric: tabular-nums; }
 .widget-usage strong { margin-left: 4px; color: light-dark(#18435c, #f0e3ff); font-size: 11px; font-weight: 660; }
 .widget-usage small { color: inherit; font: inherit; }.widget-usage small span { margin-left: 5px; }
+.widget-quota-bar { position: relative; flex: none; font-size: 10px; font-variant-numeric: tabular-nums; }
+.widget-quota-caption { position: absolute; z-index: 1; inset: 0; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 0 9px; pointer-events: none; color: light-dark(#16263e, #fff9ff);
+  text-shadow: 0 1px 2px light-dark(#fffd, #0c0919d9); }
+.widget-quota-caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.widget-quota-caption strong { flex: none; font-weight: 660; }
+.widget-quota-bar .usage-meter {
+  height: 100%; margin: 0; border-radius: 12px; corner-shape: superellipse(2);
+  background: light-dark(#bbc5d470, #33314578);
+  box-shadow: inset 0 0 0 1px light-dark(#f5ffff69, #e5d8ff2e);
+}
+.widget-quota-bar .usage-meter-fill { corner-shape: inherit; opacity: .72; }
 .widget-heatmap { display: grid; grid-auto-flow: column; grid-template-columns: repeat(12,minmax(0,1fr)); grid-template-rows: repeat(2,auto); gap: 3px; }
 .widget-heatcell { position: relative; width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: var(--heat-radius); corner-shape: superellipse(2); background: #66626b5c;
   box-shadow: inset 0 0 8px #a493c008;
@@ -74,7 +86,7 @@
   box-shadow: 0 2px 6px #0f172a26, 0 .5px 2px #0f172a1c, 0 0 0 .5px #0f172a1f; }
 .widget-panel[data-theme="light"][data-glass="false"] { background: #f3f3f3; }
 .widget-panel[data-theme="light"] .widget-request { text-shadow: 0 1px 2px #fff9; }
-.widget-panel[data-theme="light"] .widget-provider { color: #334553ef; }
+.widget-panel[data-theme="light"] :is(.widget-harness,.widget-provider) { color: #334553ef; }
 .widget-panel[data-theme="light"] .widget-tps { color: #155d85; }
 .widget-panel[data-theme="light"] :is(.widget-cache,.widget-duration) { color: #344958ed; }
 .widget-panel[data-theme="light"] .widget-request[data-phase="waiting"] .widget-row-material { background: #f4ead785; }

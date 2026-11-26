@@ -114,6 +114,8 @@ const {
 } = require("../core/subscription-usage.cjs");
 const { AccountInfo, ACCOUNT_DOCS } = require("../core/account-info.cjs");
 const { historyProvider: oauthInfoProvider } = require("../core/oauth-info.cjs");
+const { widgetQuotaClients, widgetQuotaChoices, currentWidgetQuotaBar, selectedWidgetQuotaBars } = require("../core/request-widget-quota.mjs");
+let widgetQuotaWindows = [];
 const testMode = process.argv.includes("--qa");
 const customData = process.env.ASS_TEST_DATA;
 if (testMode && customData) app.setPath("userData", customData);
@@ -417,10 +419,54 @@ async function fillVerifiedSupplier(provider) {
 async function refreshAccountInfo(id, options) {
   // Quota refresh is independent of model discovery. A cached quota must not
   // trigger another full client scan and a forced /models request.
-  return accountInfo.refresh(id, options);
+  const result = await accountInfo.refresh(id, options);
+  const [, clientId] = id.split(":");
+  if (!canPublish() && id.startsWith("native-info:") && widgetQuotaClients.has(clientId))
+    refreshWidgetQuotaChoices();
+  return result;
 }
 function snapshot() {
   return withReadScope(buildSnapshot);
+}
+function decorateSavedAccountQuotas(client) {
+  oauthHistory?.decorate(client);
+  for (const account of client.accounts) {
+    if (!account.oauthRecordId) continue;
+    const provider = oauthInfoProvider(oauthHistory, harnesses, client.id, account.oauthRecordId);
+    if (!provider) continue;
+    const remote = accountInfo.public(provider);
+    if (["kimi", "zcode"].includes(client.id)) {
+      const local = account.profile || { fields: [], docs: [] };
+      const ids = new Set(remote.fields.map((f) => f.id));
+      account.profile = { ...local, ...remote, docs: [...new Set([...local.docs, ...remote.docs])],
+        fields: [...local.fields.filter((f) => !ids.has(f.id)), ...remote.fields] };
+    } else account.quota = remote;
+  }
+}
+function cacheWidgetQuotaChoices(clients) {
+  const next = widgetQuotaChoices(clients);
+  const { enabled, quotaBars } = preferences.state.requestWidget;
+  const changed = enabled && quotaBars.length &&
+    JSON.stringify(selectedWidgetQuotaBars(quotaBars, next)) !== JSON.stringify(selectedWidgetQuotaBars(quotaBars, widgetQuotaWindows));
+  widgetQuotaWindows = next;
+  if (changed) requestWidget?.notifyActivity();
+}
+function refreshWidgetQuotaChoices() {
+  const { enabled, quotaBars } = preferences.state.requestWidget;
+  if (!enabled || !quotaBars.length) return;
+  try {
+    withReadScope(() => {
+      const clients = harnesses.snapshot({ accountsOnly: true }).clients.filter(client => widgetQuotaClients.has(client.id));
+      for (const client of clients) {
+        for (const account of client.accounts) {
+          const provider = nativeSubscriptionProvider(client, account);
+          if (provider) account.quota = accountInfo.public(provider);
+        }
+        decorateSavedAccountQuotas(client);
+      }
+      cacheWidgetQuotaChoices(clients);
+    });
+  } catch (error) { runtimeHealth?.record("widget-quotas", error); }
 }
 async function refreshClientState(clientId) {
   // Manual refresh is one complete state transition, not a partial repaint.
@@ -488,21 +534,8 @@ function buildSnapshot() {
         };
       }
     }
-  for (const client of clientState.clients) {
-    oauthHistory?.decorate(client);
-    for (const account of client.accounts) {
-      if (!account.oauthRecordId) continue;
-      const provider = oauthInfoProvider(oauthHistory, harnesses, client.id, account.oauthRecordId);
-      if (!provider) continue;
-      const remote = accountInfo.public(provider);
-      if (["kimi", "zcode"].includes(client.id)) {
-        const local = account.profile || { fields: [], docs: [] };
-        const ids = new Set(remote.fields.map((f) => f.id));
-        account.profile = { ...local, ...remote, docs: [...new Set([...local.docs, ...remote.docs])],
-          fields: [...local.fields.filter((f) => !ids.has(f.id)), ...remote.fields] };
-      } else account.quota = remote;
-    }
-  }
+  for (const client of clientState.clients) decorateSavedAccountQuotas(client);
+  cacheWidgetQuotaChoices(clientState.clients);
   // History cards are account UI only: never turn inactive grants into a native
   // model source or read credentials from their former file location. Build the
   // source list after decorating the current account so a successful ZCode
@@ -532,6 +565,7 @@ function buildSnapshot() {
     home: harnesses.nativeHome, env: harnesses.nativeEnv, directories: providerModels, nativeApiModels,
     ownsModel: (client, account, model) => nativeConfig.ownsModel(client.id, account, model),
   });
+  const now = Date.now();
   return {
     ...publicState,
     nativeScanError: clients.error,
@@ -547,6 +581,7 @@ function buildSnapshot() {
     connections: connections.snapshot(),
     wslSync: wslSync?.public(),
     requestWidget: requestWidget?.public(),
+    widgetQuotaChoices: widgetQuotaWindows.map(choice => ({ id: choice.id, ...currentWidgetQuotaBar(choice, now) })),
     claudeDesktop: (() => { try { return claudeDesktop.status(proxyConfig.clients.claude?.localToken, servicePort); }
       catch (error) { return { configured: false, owned: false, current: false, conflict: true, error: error.message }; } })(),
     antigravity: {
@@ -1219,7 +1254,10 @@ else {
         // Antigravity account status is read-only. This adapter only recovers
         // an OAuth transaction left by an older ASS version.
         external: { "antigravity-keyring": require("../core/antigravity-status.cjs").keyringAdapter },
-        onChange: push,
+        onChange: () => {
+          if (!canPublish()) refreshWidgetQuotaChoices();
+          push();
+        },
         refresh: async () => {
           if (!connections.busy && !router.clientActive('codex')) proxyConfig.refreshOfficialCatalog();
         },
@@ -1316,9 +1354,13 @@ else {
         read: () => ({ active: liveMonitorSnapshot(),
           history: { rows: requestHistory.rows, revision: requestHistory.revision },
           usageUpdatedAt: usageHistory.state.updatedAt,
-          readUsage: () => usageHistory.public() }),
+          readUsage: () => usageHistory.public(),
+          quotaBars: selectedWidgetQuotaBars(preferences.state.requestWidget.quotaBars, widgetQuotaWindows) }),
         refreshUsage: () => usageHistory.refresh({ automatic: true }), onChange: () => { updateTrayMenu();push(); } });
-      if (preferences.state.requestWidget.enabled) requestWidget.open();
+      if (preferences.state.requestWidget.enabled) {
+        refreshWidgetQuotaChoices();
+        requestWidget.open();
+      }
       register("snapshot", () => snapshot());
       register('request-widget', input => requestWidget.configure(input));
       register('request-monitor', revision => {

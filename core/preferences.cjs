@@ -2,7 +2,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { atomic } = require("./config.cjs");
 const { CLIENT_IDS, ids: clientIds } = require("./client-registry.cjs");
+const { WIDGET_GLASS_DEFAULTS, WIDGET_GLASS_LIMITS, WIDGET_MAX_RADIUS } = require("./request-widget-view.mjs");
 const widgetColumns = { provider: true, throughput: true, cache: true, duration: true };
+const widgetColumnKeys = ['harness', ...Object.keys(widgetColumns)];
 const defaults = {
   view: "overview",
   theme: "system",
@@ -14,8 +16,8 @@ const defaults = {
   quotaMonitor: { lowThreshold: 0, pinned: {} },
   antigravityHook: false,
   antigravityMcp: false,
-  requestWidget: { enabled: false, width: 340, radius: 36, rows: 5, materialVersion: 1, layoutVersion: 2,
-    showHeatmap: true, showUsage: false, columns: widgetColumns },
+  requestWidget: { enabled: false, width: 340, radius: WIDGET_MAX_RADIUS, rows: 5, materialVersion: 1, layoutVersion: 2,
+    ...WIDGET_GLASS_DEFAULTS, showHeatmap: true, showUsage: false, quotaBars: [], columns: widgetColumns },
   requestMonitor: { range: "day", provider: "all", client: "all", status: "all", diagnostics: false, group: "requests" },
   conversations: { harness: "codex", pinned: false, scope: "projects", project: "", columns: { projects: 235, threads: 205 } },
   usage: { client: "all", range: "month", tab: "activity", group: "client" },
@@ -63,14 +65,25 @@ class Preferences {
       if (typeof value.enabled === 'boolean') next.requestWidget.enabled = value.enabled;
       if (typeof value.showHeatmap === 'boolean') next.requestWidget.showHeatmap = value.showHeatmap;
       if (typeof value.showUsage === 'boolean') next.requestWidget.showUsage = value.showUsage;
+      if (Array.isArray(value.quotaBars)) {
+        const ids = new Set();
+        for (const id of value.quotaBars) {
+          if (typeof id === "string" && /^[a-f0-9]{64}$/.test(id)) ids.add(id);
+          if (ids.size === 2) break;
+        }
+        next.requestWidget.quotaBars = [...ids];
+      }
       if (value.columns && typeof value.columns === 'object' && !Array.isArray(value.columns)) {
         next.requestWidget.columns = { ...next.requestWidget.columns };
-        for (const key of Object.keys(widgetColumns)) {
+        for (const key of widgetColumnKeys) {
           if (typeof value.columns[key] === 'boolean') next.requestWidget.columns[key] = value.columns[key];
         }
       }
-      for (const [key, min, max] of [['width', 320, 640], ['radius', 8, 48], ['rows', 1, 8], ['x', -100000, 100000], ['y', -100000, 100000], ['bottom', -100000, 100000]])
+      for (const [key, min, max] of [['width', 320, 640], ['radius', 8, WIDGET_MAX_RADIUS], ['rows', 1, 8], ['x', -100000, 100000], ['y', -100000, 100000], ['bottom', -100000, 100000]])
         if (Number.isInteger(value[key]) && value[key] >= min && value[key] <= max) next.requestWidget[key] = value[key];
+      for (const [key, [min, max]] of Object.entries(WIDGET_GLASS_LIMITS)) {
+        if (Number.isInteger(value[key]) && value[key] >= min && value[key] <= max) next.requestWidget[key] = value[key];
+      }
     }
     if (input.conversations && typeof input.conversations === "object") {
       next.conversations = { ...defaults.conversations, ...next.conversations };

@@ -49,14 +49,14 @@
 .settings-widget-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .86fr); align-items: start; gap: 16px; }
 .settings-widget-options { min-width: 0; }
 .settings-widget-range-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; align-items: stretch; padding-block: 10px 8px; }
+.settings-widget-quota-row { display: grid; grid-template-columns: minmax(70px, .55fr) minmax(0, 1fr); gap: 8px; }
+.settings-widget-quota-row select { width: 100%; min-width: 0; }
 .settings-widget-preview { position: sticky; top: calc(var(--window-chrome-height, 44px) + 14px); min-width: 0; overflow: hidden;
   border: 1px solid var(--settings-line); border-radius: 13px; background: var(--settings-card); }
 .settings-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 15px; }
 .settings-preview-heading h4 { margin: 0; font-size: 13px; }
 .settings-preview-heading span, .settings-widget-preview > p { font-size: 11px; color: var(--muted); }
-.settings-preview-stage { display: grid; place-items: center; min-height: 126px; padding-block: 16px;
-  background: radial-gradient(ellipse at 54% 22%, light-dark(#f0e9fc, #322644), transparent 73%),
-    linear-gradient(160deg, light-dark(#e6eef4, #1f2530), light-dark(#e2e9e7, #233434)); }
+.settings-preview-stage { display: grid; place-items: center; min-height: 180px; padding-block: 24px; }
 .settings-preview-fit { position: relative; }
 .settings-preview-window { position: absolute; transform-origin: top left; }
 .settings-widget-preview > p { padding: 10px 15px; }

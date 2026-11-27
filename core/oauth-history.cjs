@@ -173,6 +173,7 @@ class OAuthHistory {
       const entry = { id, harness: state.source.harness, provider: g.row.provider,
         identity: g.identity, grantKey: g.grantKey, grant: g.grant,
         metadata: g.metadata, lastRefresh: g.lastRefresh, profile: g.row.profile, query: g.query,
+        ...(previous?.alias ? { alias: previous.alias } : {}),
         fingerprint, firstSeenAt: previous?.firstSeenAt || new Date(this.now()).toISOString(),
         updatedAt: new Date(this.now()).toISOString(), sourceModified: state.modified, sourceFile: key(state.auth.file) };
       entries = entries.filter((e) => e.id !== id).concat(entry);
@@ -267,9 +268,11 @@ class OAuthHistory {
   publicEntry(e) {
     const data = e.harness === "codex" ? { tokens: e.grant } : e.harness === "claude" ? { claudeAiOauth: e.grant } : { [e.provider]: e.grant };
     const row = additional.SUPPORTED.has(e.harness) ? additional.publicGrant(e.harness, e.provider, e.grant) : parseRecords(e.harness, data)[0];
+    const agyLabel = e.harness === "antigravity" ? "Gemini · " + e.id.slice(0, 6).toUpperCase() : "";
     return { id: "oauth-history:" + e.id, oauthRecordId: e.id, kind: "oauth-history",
       provider: e.provider, authType: "oauth", badge: "OAuth", source: "已保存账户",
-      label: row.label || (e.harness === "codex" ? "ChatGPT" : e.provider),
+      label: agyLabel || row.label || (e.harness === "codex" ? "ChatGPT" : e.provider),
+      ...(agyLabel && e.alias ? { oauthAlias: e.alias } : {}),
       profile: e.profile, ready: row.ready, status: row.status, message: row.message, expiresAt: row.expiresAt,
       firstSeenAt: e.firstSeenAt, updatedAt: e.updatedAt, identityKnown: !!e.identity };
   }
@@ -291,6 +294,11 @@ class OAuthHistory {
         a.oauthRecordId = id;
         const saved = records.find((e) => e.id === id);
         a.updatedAt = saved?.updatedAt;
+        if (client.id === "antigravity") {
+          const { label, oauthAlias } = this.publicEntry(saved);
+          a.label = label;
+          a.oauthAlias = oauthAlias;
+        }
         let target;
         try { target = this.target(client.id, saved.provider); } catch {}
         a.oauthCurrent = !!target && key(sourceFile(source)) === key(sourceFile(target)) && !target.blocked;
@@ -318,8 +326,17 @@ class OAuthHistory {
     this.tickets.set(ticket, { harness, id, fingerprint: state.fingerprint, revision: entry.fingerprint,
       target: key(state.auth.file), expires: this.now() + 120000 });
     const f = entry.profile?.fields || [];
-    return { ticket, harness, label: f.find((v) => v.id === "email")?.value || f.find((v) => v.id === "name")?.value || this.publicEntry(entry).label,
+    return { ticket, harness, label: entry.alias || f.find((v) => v.id === "email")?.value || f.find((v) => v.id === "name")?.value || this.publicEntry(entry).label,
       target: state.source.storage === "keyring" ? "Windows 凭据管理器 · gemini:antigravity" : state.auth.file };
+  }
+  renameAntigravityAccount(id, name) {
+    const entry = this.lookup("antigravity", id);
+    if (typeof name !== "string" || name.length > 48 || /[\u0000-\u001f\u007f]/.test(name))
+      throw Error("请输入 48 个字以内的账户备注");
+    const alias = name.trim();
+    if (alias === (entry.alias || "")) return;
+    this.persist(this.entries.map((item) => item === entry ? { ...item, alias } : item));
+    this.onChange();
   }
   apply(ticket, confirmed) {
     const t = this.tickets.get(ticket);

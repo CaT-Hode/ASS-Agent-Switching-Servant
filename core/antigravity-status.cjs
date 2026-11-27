@@ -1,4 +1,4 @@
-// Read-only Antigravity native login inventory. Storage constants and the
+// Antigravity native login inventory and fixed Windows credential adapter. The
 // StoredToken JSON schema come from the official agy 1.2.9 Windows artifact;
 // see docs/antigravity-native.md. Never read Gemini CLI's oauth_creds.json.
 const fs = require("node:fs");
@@ -7,7 +7,7 @@ const os = require("node:os");
 const { execFile, execFileSync, spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { text, claims } = require("./account-info.cjs");
-const { safePath } = require("./native-fields.cjs");
+const { safePath, read: readNative, document } = require("./native-fields.cjs");
 
 const TOKEN_FILE = "jetski-standalone-oauth-token";
 const KEYRING_SOURCE = "Windows 凭据管理器 · gemini:antigravity";
@@ -188,6 +188,7 @@ namespace ASS {
   }
 }
 '@
+  [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
   $inputValue = [Console]::In.ReadToEnd()
   $separator = $inputValue.IndexOf([char]10)
   if ($separator -lt 0) { throw 'invalid input' }
@@ -248,17 +249,30 @@ function historyFile(source) {
 }
 function historySources(options) {
   const root = credentialRoot(options), now = options.now || Date.now(), fallback = path.join(root, TOKEN_FILE);
+  const keyring = same(root, path.join(options.home, ".gemini")) ? options.keyring : undefined;
   let storage = "";
   if (filePreferred(root, now)) storage = "file";
-  else if (options.keyring?.status === "detected" && typeof options.keyring.raw === "string") storage = "keyring";
-  else if (options.keyring?.status === "missing" && fs.existsSync(fallback)) storage = "file";
-  else if (options.keyring?.status === "missing") storage = "keyring";
-  else if (options.keyring?.status && options.keyring.status !== "detected" && fs.existsSync(fallback)) storage = "file";
-  else if (!options.keyring && fs.existsSync(fallback)) storage = "file";
-  else if (options.override && fs.existsSync(fallback)) storage = "file";
+  else if (keyring?.status === "detected" && typeof keyring.raw === "string") storage = "keyring";
+  else if (fs.existsSync(fallback) && (keyring?.status === "missing" || !keyring && !shouldReadKeyring(options))) storage = "file";
+  else if (keyring?.status === "missing") storage = "keyring";
   if (!storage) return [];
   return [{ harness: "antigravity", dir: root, root, storage, native: true,
-    keyring: options.keyring, keyringAdapter: options.keyringAdapter || options.keyring?.adapter || keyringAdapter }];
+    keyring, keyringAdapter: options.keyringAdapter || keyring?.adapter || keyringAdapter }];
+}
+function oauthSwitchIssue(options, env = {}) {
+  const root = credentialRoot(options);
+  if (!same(root, path.join(options.home, ".gemini")))
+    return "当前使用自定义凭据目录。切换账户需要 agy 的默认原生凭据目录";
+  if (Object.entries(env).some(([name, value]) => /^AGY_LLM_GATEWAY_URL$/i.test(name) && value?.trim()))
+    return "当前环境启用了 Antigravity 模型网关。请在原生 Google 登录环境中切换账户";
+  if (Object.entries(env).some(([name, value]) => /^AGY_ADC_AUTH$/i.test(name) && /^(true|t|1)$/i.test(value?.trim())))
+    return "当前环境启用了 Google Cloud ADC。请在原生 Google OAuth 环境中切换账户";
+  try {
+    const file = path.join(root, "antigravity-cli", "settings.json");
+    if (document(readNative(file), "json").data.modelProvider)
+      return "当前 agy 配置使用了其他模型供应商。请先在原生客户端切回 Google OAuth";
+  } catch { return "无法读取 agy 登录配置，请检查原生客户端设置"; }
+  return "";
 }
 function shouldReadKeyring(options) {
   // Test/custom homes must never silently read the host OS account.
@@ -320,4 +334,4 @@ function inspect(options, read, makeAccount) {
   return { sources, accounts, modelAccounts: [] };
 }
 module.exports = { locations, inspect, parseStoredToken, readKeyring, readKeyringRawSync, writeKeyringRawSync,
-  shouldReadKeyring, historySources, historyFile, keyringAdapter, KEYRING_SOURCE };
+  shouldReadKeyring, historySources, historyFile, oauthSwitchIssue, keyringAdapter, KEYRING_SOURCE };

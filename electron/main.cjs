@@ -62,7 +62,7 @@ const { NativeLogin } = require("../core/native-login.cjs");
 const { OpenRouterAuth } = require("../core/openrouter-auth.cjs");
 const { UpdateChecker } = require("../core/updates.cjs");
 const { InjectionFiles } = require("../core/injection-files.cjs");
-const { ClientProcesses } = require("../core/client-processes.cjs");
+const { ClientProcesses, runPowerShell } = require("../core/client-processes.cjs");
 const { Connections } = require("../core/connections.cjs");
 const { ClientRestart } = require("../core/client-restart.cjs");
 const { CodexWorkspaceRelay } = require('../core/codex-workspace-relay.cjs');
@@ -88,11 +88,13 @@ const {
   clearMcpRuntime: clearAgyMcpRuntime,
   handleAgyMcp,
 } = require("../core/agy-mcp.cjs");
-const { inspectCli: inspectAgyCli } = require("../core/antigravity-cli.cjs");
+const { inspectCli: inspectAgyCli, KIND: AGY_QUOTA } = require("../core/antigravity-cli.cjs");
 const { listAntigravityConversations } = require("../core/antigravity-conversations.cjs");
 let requestHistory;
 let agyLive;
 let agyGatewayActive = false;
+let agyQuotaJob = null;
+let agyIdentityCheckedAt = 0;
 const accountTransactions = require("../core/account-transactions.cjs");
 const { modelSources, nativeModels } = require("../core/model-inventory.cjs");
 const { nativeOfficialProvider: resolveNativeOfficialProvider } = require("../core/native-official.cjs");
@@ -417,6 +419,17 @@ async function fillVerifiedSupplier(provider) {
   if (models.length) store.updateProvider({ ...current, models, nativeCatalogInitialized: true });
 }
 async function refreshAccountInfo(id, options) {
+  if (!id.startsWith("native-info:antigravity:")) return queryAccountInfo(id, options);
+  if (agyQuotaJob?.id === id) return agyQuotaJob.promise;
+  if (agyQuotaJob || connections.busy) throw Error("Antigravity 正在查询额度或切换账户，请稍后重试");
+  const promise = queryAccountInfo(id, options).finally(() => {
+    agyQuotaJob = null;
+    oauthHistory.scanSafe({ immediate: true });
+  });
+  agyQuotaJob = { id, promise };
+  return promise;
+}
+async function queryAccountInfo(id, options) {
   // Quota refresh is independent of model discovery. A cached quota must not
   // trigger another full client scan and a forced /models request.
   const result = await accountInfo.refresh(id, options);
@@ -424,6 +437,39 @@ async function refreshAccountInfo(id, options) {
   if (!canPublish() && id.startsWith("native-info:") && widgetQuotaClients.has(clientId))
     refreshWidgetQuotaChoices();
   return result;
+}
+async function refreshCurrentQuota(clientId, kind) {
+  const provider = withReadScope(() => {
+    const client = informationClient(clientId);
+    const accounts = client?.accounts.filter((account) => account.authType === "oauth" && account.ready) || [];
+    const current = accounts.find((account) => account.oauthCurrent) ||
+      accounts.find((account) => account.kind === "native" && account.oauthCurrent === undefined);
+    return informationProvider(client, current);
+  });
+  if (provider?.subscriptionKind !== kind) return;
+  const quota = accountInfo.public(provider);
+  if (quota.remote && !quota.stale && (kind !== AGY_QUOTA || quota.fields.some((f) => f.kind === "quota"))) return;
+  try { await refreshAccountInfo(provider.id, { automatic: true }); }
+  finally { push(); }
+}
+async function readAgyIdentity() {
+  await harnesses.refreshAntigravityOAuth();
+  agyIdentityCheckedAt = Date.now();
+}
+async function assertOAuthSwitchIdle(id) {
+  await nativeLogin.assertIdle(id);
+  if (id !== "antigravity") return;
+  if (agyQuotaJob) throw Error("Antigravity 正在查询额度，请稍后切换账户");
+  if (testMode) return;
+  let result;
+  try {
+    [result] = await runPowerShell(`$ErrorActionPreference = 'Stop'
+      $null = [Console]::In.ReadToEnd()
+      $names = @('agy', 'Antigravity', 'Antigravity IDE', 'antigravity-ide')
+      @{ running = @(Get-Process | Where-Object { $_.ProcessName -in $names }).Count } | ConvertTo-Json -Compress`, {});
+    if (!Number.isInteger(result?.running)) throw Error();
+  } catch { throw Error("无法确认 Antigravity 已退出，请稍后重试"); }
+  if (result.running) throw Error("请先正常退出 Antigravity CLI、App 和 IDE，再切换共享的 Google 账户");
 }
 function snapshot() {
   return withReadScope(buildSnapshot);
@@ -444,7 +490,10 @@ function decorateSavedAccountQuotas(client) {
   }
 }
 function cacheWidgetQuotaChoices(clients) {
-  const next = widgetQuotaChoices(clients);
+  const next = widgetQuotaChoices(clients, (client, account) => {
+    const provider = informationProvider(client, account);
+    return provider?.subscriptionKind === "openai" ? accountInfo.knownQuotaWindowKeys(provider) : [];
+  });
   const { enabled, quotaBars } = preferences.state.requestWidget;
   const changed = enabled && quotaBars.length &&
     JSON.stringify(selectedWidgetQuotaBars(quotaBars, next)) !== JSON.stringify(selectedWidgetQuotaBars(quotaBars, widgetQuotaWindows));
@@ -1097,6 +1146,10 @@ else {
         crypto: safeStorage,
         getProvider: accountProvider,
         fetcher: upstream,
+        refreshAntigravityIdentity: async () => {
+          await readAgyIdentity();
+          if (harnesses.antigravityKeyring?.status === "unreadable") throw Error("Antigravity 系统凭据无法读取");
+        },
       });
       openRouterAuth = new OpenRouterAuth({
         fetchUpstream: upstream,
@@ -1250,9 +1303,6 @@ else {
         sources: () => harnesses.oauthHistorySources(),
         target: (id, provider) => harnesses.oauthHistoryTarget(id, provider),
         allows: (id, provider) => harnesses.oauthHistoryAllows(id, provider),
-        // Kept only for recovery of a transaction created by an older ASS;
-        // Antigravity account status is read-only. This adapter only recovers
-        // an OAuth transaction left by an older ASS version.
         external: { "antigravity-keyring": require("../core/antigravity-status.cjs").keyringAdapter },
         onChange: () => {
           if (!canPublish()) refreshWidgetQuotaChoices();
@@ -1260,6 +1310,10 @@ else {
         },
         refresh: async () => {
           if (!connections.busy && !router.clientActive('codex')) proxyConfig.refreshOfficialCatalog();
+          if (!connections.busy && !agyQuotaJob && Date.now() - agyIdentityCheckedAt >= 30000) {
+            await readAgyIdentity();
+            if (!testMode) void runtimeHealth.background('antigravity-quota-refresh', () => refreshCurrentQuota('antigravity', AGY_QUOTA));
+          }
         },
       });
       conversations = new ConversationLibrary({ dataDir, crypto: safeStorage,
@@ -1388,7 +1442,7 @@ else {
           if (sourceId === "official" || (!store.state.providers.some(p => p.id === sourceId) && /^native-(codex|claude|dsh|opencode|pi|kimi|zcode|antigravity)$/.test(sourceId))) {
             const clientId =
               sourceId === "official" ? "codex" : sourceId.slice(7);
-            if (clientId === "antigravity") await harnesses.refreshAntigravityOAuth();
+            if (clientId === "antigravity" && !agyQuotaJob && !connections.busy) await readAgyIdentity();
             const client = informationClient(clientId);
             const account = client?.accounts.find(
               (a) => a.id === accountId && a.kind !== "api",
@@ -1470,7 +1524,7 @@ else {
         return shell.openExternal(service[target]);
       });
       register("account-info", async (clientId, accountId) => {
-        if (clientId === "antigravity") await harnesses.refreshAntigravityOAuth();
+        if (clientId === "antigravity" && !agyQuotaJob && !connections.busy) await readAgyIdentity();
         const client = informationClient(clientId);
         const account = client?.accounts.find((a) => a.id === accountId);
         if (!account) throw Error("账户不存在");
@@ -1527,7 +1581,8 @@ else {
         nativeLogin.apply(ticket, choice, confirmed)));
       register("oauth-switch-preview", async (id, account) => {
         if (connections.busy) throw Error("正在修改客户端接入，请稍后切换账户");
-        await nativeLogin.assertIdle(id);
+        await assertOAuthSwitchIdle(id);
+        if (id === "antigravity") await readAgyIdentity();
         const local = ["codex", "claude"].includes(id) ? await conversations.list({ harness: id }) : null;
         const preview = oauthHistory.preview(id, account);
         await processes.refresh();
@@ -1535,10 +1590,21 @@ else {
         oauthHistory.tickets.get(preview.ticket).lifecycle = lifecycle;
         return { ...preview, lifecycle: restarter.public(lifecycle), conversations: local ? { count: local.count, retained: local.retained } : null };
       });
-      register("oauth-switch-apply", (ticket, confirmed, mode = "none") => connections.launch(() =>
-        switchClientAccount({ history: oauthHistory, library: conversations, restarter, router, blocked: connections.blocked,
-          ticket, confirmed, mode, selectTarget: (id) => harnesses.selectOAuthTarget(id), assertIdle: (id) => nativeLogin.assertIdle(id),
-          extraActive: () => probeControllers.size + diagnosticControllers.size })));
+      register("oauth-switch-apply", async (ticket, confirmed, mode = "none") => {
+        const isAgy = oauthHistory.tickets.get(ticket)?.harness === "antigravity";
+        const result = await connections.launch(async () => {
+          const switched = await switchClientAccount({ history: oauthHistory, library: conversations, restarter, router,
+            blocked: connections.blocked, ticket, confirmed, mode, selectTarget: (id) => harnesses.selectOAuthTarget(id),
+            assertIdle: assertOAuthSwitchIdle, extraActive: () => probeControllers.size + diagnosticControllers.size });
+          if (isAgy) {
+            await readAgyIdentity();
+            oauthHistory.scanSafe({ immediate: true });
+          }
+          return switched;
+        });
+        if (isAgy) void runtimeHealth.background('antigravity-quota-switch', () => refreshCurrentQuota('antigravity', AGY_QUOTA));
+        return result;
+      });
       register("conversations-list", (input) => conversations.list(input));
       register("conversation-open-link", async (value) => {
         const { conversationUrl } = await import('../core/conversation-url.mjs');
@@ -1740,8 +1806,21 @@ else {
         };
       });
       register("antigravity-open-cli", () => connections.launch(() => harnesses.launchAntigravityCli()));
+      register("antigravity-account-rename", (id, name) => oauthHistory.renameAntigravityAccount(id, name));
+      register("antigravity-add-account", () => connections.launch(async () => {
+        await assertOAuthSwitchIdle("antigravity");
+        await readAgyIdentity();
+        harnesses.oauthHistoryTarget("antigravity", "google-antigravity");
+        oauthHistory.scan({ immediate: true });
+        if (oauthHistory.error || oauthHistory.errors.antigravity || !safeStorage.isEncryptionAvailable())
+          throw Error("无法加密保存 Antigravity 登录，请检查 ASS 的 OAuth 历史");
+        return harnesses.launchAntigravityCli();
+      }));
       register("antigravity-login-status", async () => {
-        await harnesses.refreshAntigravityOAuth();
+        if (!agyQuotaJob && !connections.busy) {
+          await readAgyIdentity();
+          oauthHistory.scanSafe({ immediate: true });
+        }
         return { snapshot: snapshot() };
       });
       register("antigravity-model-launch", async (defaultRef = null) => {
@@ -2106,8 +2185,13 @@ else {
           },
         };
       oauthHistory.start();
-      if (!testMode) void runtimeHealth.background('native-scan', syncNativeSuppliers);
-      if (!testMode) updates.start();
+      if (!testMode) {
+        // Subscription quotas are independent of native API balance and model discovery.
+        void runtimeHealth.background('codex-quota-startup', () => refreshCurrentQuota('codex', 'openai'));
+        void runtimeHealth.background('antigravity-quota-startup', () => refreshCurrentQuota('antigravity', AGY_QUOTA));
+        void runtimeHealth.background('native-scan', syncNativeSuppliers);
+        updates.start();
+      }
     })
     .catch((error) => {
       dialog.showErrorBox("ASS 启动失败", error.message);

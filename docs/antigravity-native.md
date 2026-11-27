@@ -5,7 +5,8 @@ Google 的 Antigravity App 是独立桌面应用，Antigravity CLI 的命令是 
 ## ASS 当前支持
 
 - **Windows 安装发现与启动**：从 PATH 及 `%LOCALAPPDATA%/agy/bin/agy.exe` 等路径识别 CLI，通过产品元数据识别 App 和 IDE，支持启动原生 CLI 终端或打开桌面端。
-- **只读原生账户状态与额度**：读取 Windows 共享 OAuth 状态（`gemini:antigravity` 凭据库 / `.gemini/jetski-standalone-oauth-token`）或 `GEMINI_API_KEY` 模式；调用只读 `agy -p /usage` 与 `/credits`（0 次模型回合，需 CLI ≥ 1.1.11）展示订阅额度分组、重置时间与剩余点数。
+- **订阅额度与点数**。ASS 临时在后台调用 `agy -p /usage` 与 `/credits` 读取当前 Google OAuth 账户的额度分组、重置时间与剩余点数。查询需要 CLI ≥ 1.1.11，执行完立即退出，零模型回合。可以在额度卡手动刷新。ASS 启动发现额度缺失或过期时补查，切换账户后也会刷新。
+- **原生 Google 多账户**。在 **客户端与账户 → Antigravity → 添加 Google 账户** 打开原生终端，经 Google 完成新账户登录。ASS 加密保存每个已授权账号。结束原生会话并正常关闭 CLI、App 和 IDE 后，在相应卡片确认切换，下次启动使用选中的账户。切换使用 Windows 共享 OAuth 条目 `gemini:antigravity` 或原生文件回退 `.gemini/jetski-standalone-oauth-token`。余额和额度保留各自账户的缓存，在线查询使用当前启用的账户。[本机账户历史与切换](OAUTH-HISTORY.md)
 - **会话级三方模型注入（桌面版 & CLI，动态 Gateway 模式 + 原生多档 Effort）**：在“客户端与账户 → Antigravity → 供应商接入”中纳入任意供应商模型并选择默认模型：
   - **独立模型启动 → 启动桌面版 / 启动终端**：以隔离的 `--user-data-dir=<dataDir>/antigravity-desktop-gateway`（桌面版）或独立进程（`agy` CLI ≥ 1.5.5）配合官方环境变量 `AGY_LLM_GATEWAY_*` 启动，不修改 `~/.gemini/antigravity-cli/settings.json` 与 `admin_settings.json`。
   - **原生多档 Effort 切换**：ASS 通过 `GET /clients/agy/v1beta/models` 为每个支持多档思维强度的模型自动发布 `-(low|medium|high|xhigh|max)` 变体与 `thinking: true`，Antigravity 桌面版下拉框与 CLI `/effort` 会自动将同模型合并为单一条目并提供原生 Effort 档位切换，ASS 路由按所选档位向 Responses / Chat / Messages 上游透传真实 `reasoning.effort` / `output_config.effort` / `reasoning_effort`。
@@ -24,7 +25,7 @@ Google 的 Antigravity App 是独立桌面应用，Antigravity CLI 的命令是 
 | --- | --- |
 | 修改 Desktop 二进制 / `app.asar` 或绕过企业策略 | ASS 绝不篡改 Antigravity 可执行文件、不拦截 HTTPS 证书、不伪造组织策略；App / IDE 同窗口使用三方模型统一通过官方 MCP 桥接实现。 |
 | 持久改写 `settings.json` | 写入全局模型网关或 `modelProvider` 会影响原生 Google 账号体验，因此仅通过进程级环境变量和显式开关管理。 |
-| 登录与账号切换 | ASS 仅只读展示登录状态；登录、切换账号与退出由原生客户端或 `agy /logout` 完成。 |
+| 登录与账号切换 | 新账户通过原生 Google 登录授权。ASS 支持默认共享存储中的 Google OAuth 账户，切换在客户端退出后生效。API Key、Google Cloud ADC 与第三方模型网关各自使用其登录方式。 |
 | WSL 中的 `agy` | 留待后续版本单独适配 Linux 凭据库与会话路径。 |
 
 ## 本机实测记录

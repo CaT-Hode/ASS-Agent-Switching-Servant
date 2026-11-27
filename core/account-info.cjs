@@ -6,7 +6,13 @@ const { atomic } = require("./config.cjs");
 const { parseSubscription, parseCodexResetCredits } = require("./subscription-usage.cjs");
 const { recordQuotaHistory, quotaRetentionMs } = require("./quota-history.mjs");
 const oauthInfo = require("./oauth-info.cjs");
-const { KIND: ANTIGRAVITY_QUOTA, UPDATE_REQUIRED: ANTIGRAVITY_UPDATE_REQUIRED, displayFields: antigravityFields } = require("./antigravity-quota.cjs");
+const {
+  KIND: ANTIGRAVITY_QUOTA,
+  UPDATE_REQUIRED: ANTIGRAVITY_UPDATE_REQUIRED,
+  LOGIN_REQUIRED: ANTIGRAVITY_LOGIN_REQUIRED,
+  NATIVE_OAUTH_REQUIRED: ANTIGRAVITY_NATIVE_OAUTH_REQUIRED,
+  displayFields: antigravityFields,
+} = require("./antigravity-quota.cjs");
 const { canQueryBalance, isOpenAIApi } = require('./balance.cjs');
 const { withReadScope } = require("./read-scope.cjs");
 
@@ -482,7 +488,8 @@ function queryError(error, label = "资料") {
     return `${label}查询无法连接系统代理，请检查代理设置`;
   if (/^HTTP \d{3}$/.test(message)) return `${label}查询失败 · ${message}`;
   if (error instanceof SyntaxError) return `${label}接口返回无效 JSON`;
-  if (["资料响应为空", "资料响应过大", "接口未返回可识别的账户资料", "未返回订阅额度窗口", ANTIGRAVITY_UPDATE_REQUIRED].includes(message)) return message;
+  if (["资料响应为空", "资料响应过大", "接口未返回可识别的账户资料", "未返回订阅额度窗口",
+    ANTIGRAVITY_UPDATE_REQUIRED, ANTIGRAVITY_LOGIN_REQUIRED, ANTIGRAVITY_NATIVE_OAUTH_REQUIRED].includes(message)) return message;
   return `${label}查询失败，请检查网络或接口权限`;
 }
 class AccountInfo {
@@ -491,12 +498,14 @@ class AccountInfo {
     crypto: vault,
     getProvider,
     fetcher,
+    refreshAntigravityIdentity,
     now = Date.now,
   }) {
     this.file = path.join(dataDir, "account-info.enc.json");
     this.vault = vault;
     this.getProvider = getProvider;
     this.fetcher = fetcher;
+    this.refreshAntigravityIdentity = refreshAntigravityIdentity;
     this.now = now;
     this.cache = {};
     this.jobs = new Map();
@@ -571,6 +580,17 @@ class AccountInfo {
     if (!fields) return previous ? { quotaOwner, quotaHistory: previous.quotaHistory, quotaObservedAt: previous.quotaObservedAt } : {};
     const time = Date.parse(observedAt);
     return { quotaOwner, quotaHistory: recordQuotaHistory(previous?.quotaHistory, fields, time), quotaObservedAt: time };
+  }
+  knownQuotaWindowKeys(provider) {
+    const entry = this.cache[provider.id];
+    if (!entry?.quotaHistory || !(entry.quotaObservedAt >= this.now() - quotaRetentionMs)) return [];
+    const owner = quotaHistoryOwner(provider, fingerprint(provider));
+    if (!owner || entry.quotaOwner !== owner) return [];
+    // Keep only the windows reported by that account's latest successful query.
+    return Object.keys(entry.quotaHistory).filter(key => {
+      const samples = entry.quotaHistory[key];
+      return Array.isArray(samples) && samples.at(-1)?.[0] === entry.quotaObservedAt;
+    });
   }
   public(provider) {
     const base = apiProfile(provider),
@@ -728,6 +748,12 @@ class AccountInfo {
     const results = [];
     if (kind === ANTIGRAVITY_QUOTA) {
       for (const request of requests) results.push(await querySection(request));
+      try { await this.refreshAntigravityIdentity?.(); }
+      catch {
+        const message = "无法确认 Antigravity 当前账户，未采用查询结果";
+        this.errors.set(key, message);
+        return { ok: false, message };
+      }
     } else {
       results.push(...await Promise.all(requests.map(querySection)));
     }

@@ -15,6 +15,7 @@ ASS（Agent-Switching-Servant）是 Windows 桌面的 AI 路由与账户助手�
 在 **设置 → 请求悬浮窗** 打开悬浮窗。可使用液态玻璃滑条或数值输入调整宽度、圆角和最多显示的请求行数。「液态玻璃」分组可单独调整折射边缘的宽度和背景扭曲的幅度。拖动时右侧预览即时更新，松手后将设置应用到桌面悬浮窗。
 
 - 「显示内容」中的 **客户端（Harness）** 列默认关闭，开启后可查看已识别的发起客户端。「供应商」列可独立开关，显示实际处理请求的简短名称。可见输出 TPS、缓存命中率和耗时也可分别显示或隐藏。模型与状态始终保留。
+- 在设置预览上拖动表头分隔线，可以同时调整相邻两列。松手后保存列宽并应用到桌面悬浮窗。
 - **今日 Token 热力图**用 24 个格子表示本地时间的 24 个小时。悬停可查看该小时的输入和输出。也可单独开启今日 Token 汇总。
 - **订阅额度条**最多显示两条。每条可独立选择已查询到的 Codex、Claude Code 或 Antigravity 订阅窗口，例如 Codex 每周额度和 Antigravity Gemini 5 小时额度。半透明磨砂额度条排在热力图下方，关闭热力图后也能单独显示。
 
@@ -36,7 +37,7 @@ ASS（Agent-Switching-Servant）是 Windows 桌面的 AI 路由与账户助手�
 | --- | --- |
 | Codex | ChatGPT OAuth 与订阅额度、OpenAI API、ASS 路由、默认模型和无账号启动 |
 | Claude Code | Claude OAuth 与订阅额度、Anthropic API、ASS 路由、CLI 默认模型和 Auto Mode 审查模型 |
-| Antigravity | Windows App、IDE 和 CLI 的安装识别与原生登录状态，订阅额度与点数。支持独立模型窗口、CLI Gateway、原生观测和个人窗口 MCP |
+| Antigravity | Windows App、IDE 和 CLI 的安装识别，保存与切换 Google 账户，后台刷新当前账户的订阅额度与点数。支持独立模型窗口、CLI Gateway、原生观测和个人窗口 MCP |
 | OpenCode | 原生账户、Go / Zen API、本机模型目录和第三方模型接入 |
 | pi | 兼容的本机 OAuth、第三方模型接入与 WSL 同步 |
 | DeepSeek Harness | DeepSeek API 余额、模型目录、第三方模型接入和插件日账本 |
@@ -53,7 +54,9 @@ ASS（Agent-Switching-Servant）是 Windows 桌面的 AI 路由与账户助手�
 
 ### Antigravity
 
-在 **客户端与账户 → Antigravity** 查看原生登录、订阅窗口、剩余点数和本机对话，续聊由原生 CLI 打开。使用 **独立模型启动** 可在单独的 Antigravity 桌面窗口或终端中选择已接入模型，个人 Google 账号窗口可以并行使用。
+在 **客户端与账户 → Antigravity** 选择 **添加 Google 账户**，由 AGY 完成 Google 登录。ASS 将已登录的账户加密保存在本机。正常退出 Antigravity 后，可从已保存的账户卡片切换下次启动使用的账户。ASS 使用短时 AGY 进程查询当前账户的订阅额度与点数，完成即退出。
+
+从此页也可以查看本机对话，由 AGY 打开原会话继续。使用 **独立模型启动** 可在单独的 Antigravity 桌面窗口或终端中选择已接入模型，个人 Google 账号窗口可以并行使用。
 
 官方账号窗口可通过 `ass-router` MCP 调用 ASS 模型。监听本机 App、IDE 和 CLI 的 Transcript 可在调用结束后记录用量，开启「原生监控 Hook」则可补充实时进行中状态。[Antigravity 接入与能力](docs/antigravity-native.md)
 

@@ -333,8 +333,10 @@ function AccountCard({ row, refresh, busy, monitor, changeMonitor, now }) {
   const accountStatus = <>
     <span className={"overview-account-present" + (!a.ready ? " danger" : "")}>
       <i />
-      {a.status === "expired" ? "授权已到期"
-        : a.status === "refresh-required" ? "待客户端刷新"
+      {a.kind === "oauth-history" && a.ready ? "已保存账户"
+        : a.status === "expired" ? "需要重新登录"
+        : a.status === "refresh-required" ? (antigravity && row.canRefresh
+          ? "可后台续期" : "待刷新授权")
           : a.ready ? "已添加" : "待配置"}
     </span>
     {row.source && <span>{row.source.replace(" · 上次查询", "")}</span>}

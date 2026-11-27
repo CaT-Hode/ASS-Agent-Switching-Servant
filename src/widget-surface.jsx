@@ -1,5 +1,6 @@
 import React, { memo, useLayoutEffect, useRef, useState } from 'react';
-import { WIDGET_QUOTA_HEIGHT, WIDGET_USAGE_HEIGHT, widgetContentInsets, widgetDuration as duration, widgetHeatRadius } from '../core/request-widget-view.mjs';
+import { WIDGET_QUOTA_HEIGHT, WIDGET_ROW_INLINE_PADDING, WIDGET_USAGE_HEIGHT, widgetColumnTracks, widgetContentInsets,
+  widgetDuration as duration, widgetHeatRadius, widgetVisibleColumns } from '../core/request-widget-view.mjs';
 import { clientName } from './request-monitor-view.mjs';
 import { UsageMeter } from './usage-meter.jsx';
 import './widget-surface.css';
@@ -84,9 +85,12 @@ function WidgetQuotaBar({ bar }) {
   const known = Number.isFinite(bar.remainingPercent);
   const percent = known ? Number(bar.remainingPercent.toFixed(1)) : null;
   const reset = Date.parse(bar.resetsAt);
-  const resetLabel = Number.isFinite(reset) ? ` · ${new Date(reset).toLocaleString('zh-CN', { hour12: false })} 重置` : '';
-  const label = `${bar.label} · ${known ? `剩余 ${percent}%` : '额度暂不可用'}${resetLabel}`;
-  return <div className="widget-quota-bar" style={{ height: WIDGET_QUOTA_HEIGHT }} title={label}>
+  const resetTime = Number.isFinite(reset) ? new Date(reset).toLocaleString('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }) : null;
+  const label = [bar.label, known ? `${percent}% remaining` : 'No quota data',
+    ...(resetTime ? [`Resets ${resetTime}`] : [])].join(' · ');
+  return <div className="widget-quota-bar" lang="en" style={{ height: WIDGET_QUOTA_HEIGHT }} title={label}>
     {known ? <UsageMeter value={percent} label={label} quota={{ id: bar.period, label: bar.label }} />
       : <div className="usage-meter" role="img" aria-label={label} />}
     <div className="widget-quota-caption" aria-hidden="true"><span>{bar.label}</span><strong>{known ? `${percent}%` : '—'}</strong></div>
@@ -97,12 +101,11 @@ export function WidgetSurface({ frame, entries, onExit, panelRef, preview = fals
   const glass = frame.glass === true;
   const insets = widgetContentInsets(frame.radius);
   const { harness = false, provider = true, throughput = true, cache = true, duration: showDuration = true } = frame.columns || {};
-  const requestColumns = ['minmax(0,1fr)', provider && (harness ? 'min(20%, 84px)' : '63px'), harness && 'min(22%, 104px)',
-    throughput && '40px', cache && '28px', showDuration && '24px']
-    .filter(Boolean).join(' ');
+  const requestColumns = widgetColumnTracks(widgetVisibleColumns(frame.columns), frame.columnWidths);
   return <div ref={panelRef} className="widget-panel" data-glass={glass} data-theme={frame.theme || 'dark'}
     data-preview={preview || undefined} style={{ '--radius': frame.radius+'px', '--heat-radius': widgetHeatRadius(frame.radius)+'px',
       '--widget-padding': [insets.top, insets.horizontal, insets.bottom].map(value => value + 'px').join(' '),
+      '--request-inline-padding': WIDGET_ROW_INLINE_PADDING + 'px',
       '--request-columns': requestColumns }}
     role={preview ? 'img' : 'main'} aria-label={preview ? '请求悬浮窗布局示例' : '实时请求悬浮窗'} {...events}>
     {!glass && frame.error && <span className="widget-error" title={frame.error} aria-label={frame.error}>!</span>}

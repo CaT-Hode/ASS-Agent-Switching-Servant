@@ -117,6 +117,7 @@ function AccountCard({
   openProvider,
   editProvider,
   switchOAuth,
+  renameAgy,
 }) {
   const selected = a.oauthRecordId ? a.oauthCurrent : a.id === client.selected;
   const warning = [
@@ -145,7 +146,7 @@ function AccountCard({
           )}
         </span>
         <div className="account-card-title">
-          <h3>{a.profile?.fields?.find((f) => f.id === "email")?.value || a.profile?.fields?.find((f) => ["name", "keyLabel"].includes(f.id))?.value || a.label}</h3>
+          <h3>{a.oauthAlias || a.profile?.fields?.find((f) => f.id === "email")?.value || a.profile?.fields?.find((f) => ["name", "keyLabel"].includes(f.id))?.value || a.label}</h3>
         </div>
         <AccountPlan account={a} />
         <span className="tag">{a.badge}</span>
@@ -222,7 +223,7 @@ function AccountCard({
         {a.oauthRecordId ? <button
           className={"text-button account-choice" + (a.oauthCurrent ? " chosen" : "")}
           disabled={!!busy || a.oauthCurrent || !a.ready}
-          title={a.oauthCurrent ? "原生凭据文件当前记录的账户" : "切换原生客户端的 OAuth 凭据"}
+          title={a.oauthCurrent ? "原生客户端当前使用的账户" : "切换原生客户端账户"}
           onClick={() => switchOAuth(a)}
         >
           {a.oauthCurrent ? <Check size={13} /> : <ArrowRightLeft size={13} />}
@@ -239,6 +240,10 @@ function AccountCard({
           {selected && <Check size={13} />}
           {selected ? "下次启动使用" : "设为启动账户"}
         </button>}
+        {client.id === "antigravity" && a.oauthRecordId && <button
+          type="button" className="text-button" disabled={!!busy}
+          aria-label={(a.oauthAlias || a.label) + " 编辑备注"}
+          onClick={() => renameAgy(a)}>编辑备注</button>}
         {!client.nativeLoginOnly && a.kind !== "oauth-history" && <div className="actions">
           {a.kind !== "api" && a.authType !== "api" && (
             <>
@@ -303,6 +308,8 @@ export function Clients({
     [nativeKey, setNativeKey] = useState(null),
     [switching, setSwitching] = useState(null),
     [loggingIn, setLoggingIn] = useState(null),
+    [addingAgy, setAddingAgy] = useState(false),
+    [renamingAgy, setRenamingAgy] = useState(null),
     [refreshResult, setRefreshResult] = useState(null),
     [launchNotice, setLaunchNotice] = useState(""),
     [notice, setNotice] = useState("");
@@ -551,6 +558,8 @@ export function Clients({
             <ClientInjection key={"injection:" + client.id} {...{ client, state, act, busy, onManage }} />
             <header className="client-accounts-heading"><h3>官方账户 <span className="count">{client.accounts.length}</span></h3>
               {!client.nativeLoginOnly && <button className="button" ref={addButton} onClick={() => setAdding(true)}><Plus size={14} />添加账户</button>}
+              {antigravitySelected && client.launcher?.ready && <button className="button" disabled={!!busy}
+                onClick={() => setAddingAgy(true)}><Plus size={14} />添加 Google 账户</button>}
               {["kimi", "zcode"].includes(client.id) && <button className="icon-button" disabled={!!busy}
                 aria-label={"登录 " + client.name + " 账户"} title="登录账户"
                 onClick={() => act("native-login-preview", async () => {
@@ -565,6 +574,7 @@ export function Clients({
                   account={a}
                   {...{ client, state, act, busy, run, openProvider }}
                   editProvider={setEditor}
+                  renameAgy={setRenamingAgy}
                   switchOAuth={(a) => act("oauth-switch-preview", async () => {
                     const preview = await api.call("oauth-switch-preview", client.id, a.oauthRecordId);
                     setSwitching({ ...preview, clientName: client.name });
@@ -578,7 +588,7 @@ export function Clients({
                     {antigravitySelected
                       ? client.credentialSources.some(source => source.status === "unreadable")
                         ? "暂时无法读取 Antigravity 登录状态。请点击刷新状态。"
-                        : "未检测到 Google 登录。请在 Antigravity 登录后切回此页面。"
+                        : "未检测到 Google 登录。请添加 Google 账户，或在 Antigravity 中完成登录。"
                       : "暂无官方账户"}
                   </p>
                 </div>
@@ -646,6 +656,10 @@ export function Clients({
       {loggingIn && <NativeLoginDialog preview={loggingIn}
         onClose={() => setLoggingIn(null)}
         onDone={(message) => { setLoggingIn(null); setNotice(message); }} />}
+      {addingAgy && <AntigravityAddDialog
+        onClose={() => setAddingAgy(false)}
+        onDone={() => { setAddingAgy(false); setNotice("完成 Google 登录后，ASS 会自动保存此账户。"); }} />}
+      {renamingAgy && <AntigravityRenameDialog account={renamingAgy} onClose={() => setRenamingAgy(null)} />}
       {adding && (
         <AddAccount
           key={client.id}
@@ -714,6 +728,7 @@ function OAuthSwitchDialog({ preview, onClose, onDone }) {
     onClose={onClose} dismissible={!pending}
     fallbackFocus={() => document.querySelector('.client-heading button[aria-label="刷新状态"]')}>
     <p>切换到 <strong>{preview.label}</strong>？当前登录与本地对话会保留。</p>
+    {preview.harness === "antigravity" && <p>下次启动 AGY 时使用此账户。共用 Windows 凭据的 Antigravity App 和 IDE 也会读取这次选择。</p>}
     <ClientProcessChoice plan={preview.lifecycle} value={mode} onChange={setMode} disabled={pending} actionLabel="仅切换账户" />
     <details className="account-origin"><summary>目标凭据位置</summary><code>{preview.target}</code></details>
     {error && <p className="error-box" role="alert">{error}</p>}
@@ -726,5 +741,49 @@ function OAuthSwitchDialog({ preview, onClose, onDone }) {
         finally { setPending(false); }
       }}>{pending ? "切换中…" : "确定"}</button>
     </footer>
+  </Modal>;
+}
+
+function AntigravityAddDialog({ onClose, onDone }) {
+  const [pending, setPending] = useState(false), [error, setError] = useState("");
+  return <Modal title="添加 Antigravity Google 账户" className="oauth-switch-dialog"
+    onClose={onClose} dismissible={!pending}
+    fallbackFocus={() => document.querySelector(".client-accounts-heading button")}>
+    <p>ASS 会先加密保存当前账户，再打开 AGY。若终端已经登录，请输入 <code>/logout</code>，然后在登录流程中选择要添加的 Google 账户。</p>
+    <p>完成后，这个账户会出现在列表中。退出 AGY 后可以切换回之前保存的账户。</p>
+    {error && <p className="error-box" role="alert">{error}</p>}
+    <footer>
+      <button className="button" disabled={pending} onClick={onClose} data-autofocus>取消</button>
+      <button className="button primary" disabled={pending} onClick={async () => {
+        setPending(true); setError("");
+        try { await api.call("antigravity-add-account"); onDone(); }
+        catch (e) { setError(e.message); }
+        finally { setPending(false); }
+      }}>{pending ? "打开中…" : "打开 AGY 登录"}</button>
+    </footer>
+  </Modal>;
+}
+
+function AntigravityRenameDialog({ account, onClose }) {
+  const [alias, setAlias] = useState(account.oauthAlias || "");
+  const [pending, setPending] = useState(false), [error, setError] = useState("");
+  return <Modal title="Antigravity 账户备注" className="oauth-switch-dialog" onClose={onClose} dismissible={!pending}>
+    <form onSubmit={async (event) => {
+      event.preventDefault();
+      setPending(true); setError("");
+      try { await api.call("antigravity-account-rename", account.oauthRecordId, alias); onClose(); }
+      catch (e) { setError(e.message); }
+      finally { setPending(false); }
+    }}>
+      <label className="field">本机显示名称
+        <input value={alias} onChange={(event) => setAlias(event.target.value)} disabled={pending}
+          placeholder={account.label} maxLength={48} data-autofocus />
+      </label>
+      {error && <p className="error-box" role="alert">{error}</p>}
+      <footer>
+        <button type="button" className="button" disabled={pending} onClick={onClose}>取消</button>
+        <button type="submit" className="button primary" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
+      </footer>
+    </form>
   </Modal>;
 }

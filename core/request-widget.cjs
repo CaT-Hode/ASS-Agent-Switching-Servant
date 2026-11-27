@@ -148,7 +148,7 @@ class RequestWidget {
   }
   // Content-only frame builder: never touches native glass stats during 1s content ticks.
   frame(includeHeat = false) {
-    const { rows: capacity, columns, showHeatmap = true, showUsage = false, radius } = this.preferences.state.requestWidget;
+    const { rows: capacity, columns, columnWidths, showHeatmap = true, showUsage = false, radius } = this.preferences.state.requestWidget;
     const source = this.read(), now = Date.now(), rows = this.rows.update(source.active, source.history.rows, now);
     this.count = rows.length;
     const usageUpdatedAt = source.usageUpdatedAt !== undefined ? source.usageUpdatedAt : source.usage?.updatedAt;
@@ -172,7 +172,7 @@ class RequestWidget {
     }
     const theme = (this.light ?? !this.nativeTheme.shouldUseDarkColors) ? 'light' : 'dark';
     return { rows: rows.slice(0, capacity), ...(showHeatmap && (heatChanged || includeHeat) ? { heat: this.heat } : {}), usageKey,
-      ...(showUsage ? { usageSummary: this.usageSummary } : {}), radius, columns, showHeatmap, showUsage, quotaBars: source.quotaBars ?? [],
+      ...(showUsage ? { usageSummary: this.usageSummary } : {}), radius, columns, columnWidths, showHeatmap, showUsage, quotaBars: source.quotaBars ?? [],
       theme, glass: this.glassReady, error: this.error || '' };
   }
   tick() {
@@ -181,7 +181,7 @@ class RequestWidget {
     const frame = this.frame();
     const signature = JSON.stringify({
       rows: frame.rows, usageKey: frame.usageKey, radius: frame.radius,
-      columns: frame.columns, showHeatmap: frame.showHeatmap, showUsage: frame.showUsage, quotaBars: frame.quotaBars,
+      columns: frame.columns, columnWidths: frame.columnWidths, showHeatmap: frame.showHeatmap, showUsage: frame.showUsage, quotaBars: frame.quotaBars,
       theme: frame.theme, glass: frame.glass, error: frame.error,
     });
     this.scheduleNextTick(frame.rows.length > 0);

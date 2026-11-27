@@ -7,6 +7,7 @@ const dayKey = date => `${date.getFullYear()}-${String(date.getMonth()+1).padSta
 const eligible = row => row.model && row.client !== 'diagnostics' && row.operation !== 'count_tokens';
 export const widgetProviderName = name => (typeof name === 'string' ? name.replace(/官方/g, '').replace(/\s+/g, ' ').trim() : '') || '未标注';
 export const WIDGET_FRAME_INSET = 6;
+export const WIDGET_ROW_INLINE_PADDING = 3;
 export const WIDGET_ROW_HEIGHT = 27;
 export const WIDGET_SECTION_GAP = 4;
 export const WIDGET_USAGE_HEIGHT = 22;
@@ -17,6 +18,36 @@ export const WIDGET_GLASS_LIMITS = { bezelWidth: [6, 64], distortion: [0, 100] }
 const WIDGET_WIDTH_INSET = 52;
 export const widgetWidth = width => width - WIDGET_WIDTH_INSET;
 export const widgetWidthSetting = visible => visible + WIDGET_WIDTH_INSET;
+const requestColumns = [
+  { id: 'model', label: '模型', min: 48 },
+  { id: 'provider', label: '供应商', min: 32, preferred: 63 },
+  { id: 'harness', label: 'Harness', min: 34, preferred: 60 },
+  { id: 'throughput', label: 'TPS', min: 29, preferred: 40 },
+  { id: 'cache', label: '缓存', min: 22, preferred: 28 },
+  { id: 'duration', label: '耗时', min: 18, preferred: 24 },
+];
+export const WIDGET_COLUMN_LIMITS = Object.fromEntries(requestColumns.slice(1)
+  .map(({ id, min }) => [id, [min, widgetWidth(640)]]));
+
+export const widgetVisibleColumns = (columns = {}) => requestColumns.filter(({ id }) =>
+  id === 'model' || (id === 'harness' ? columns.harness === true : columns[id] !== false));
+
+export function widgetColumnTracks(fields, widths, scale = 1) {
+  const showHarness = fields.some(({ id }) => id === 'harness');
+  const extras = fields.slice(1).map(({ id, min, preferred }) =>
+    Math.max(0, (widths?.[id] ?? (id === 'provider' && showHarness ? 48 : preferred)) - min));
+  const totalExtra = extras.reduce((sum, n) => sum + n, 0);
+  const floor = fields.reduce((sum, field) => sum + field.min, 0) * scale;
+  // Compress preferred widths together when the window is narrow. It keeps
+  // the metrics readable, and the model column receives the remaining space.
+  return [`minmax(${fields[0].min * scale}px, 1fr)`, ...fields.slice(1).map(({ min }, index) => {
+    const extra = extras[index];
+    return extra
+      ? `calc(${min * scale}px + min(${extra * scale}px, max(0px, 100% - ${floor}px) * ${extra / totalExtra}))`
+      : `${min * scale}px`;
+  })].join(' ');
+}
+
 export const widgetHeatRadius = radius => Math.max(4, Math.min(8, Math.round(radius / 6)));
 export const widgetQuotaHeight = count => count * (WIDGET_SECTION_GAP + WIDGET_QUOTA_HEIGHT);
 export function widgetContentInsets(radius = 36) {

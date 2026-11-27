@@ -312,7 +312,8 @@ class HarnessManager {
   async refreshAntigravityOAuth() {
     const options = { home: this.nativeHome, override: this.state.credentialHomes.antigravity,
       launcher: this.launcher("antigravity") };
-    this.antigravityKeyring = antigravity.shouldReadKeyring(options) ? await antigravity.readKeyring() : undefined;
+    this.antigravityKeyring = antigravity.shouldReadKeyring(options)
+      ? await antigravity.readKeyring({ includeGrant: true }) : undefined;
   }
   oauthHistorySources() {
     const native = ["kimi", "zcode"].flatMap((id) => additional.locations(id, {
@@ -323,7 +324,9 @@ class HarnessManager {
       catch { return [{ ...location, harness: id, authFile: path.join(location.dir, "config.toml"),
         issue: "Kimi OAuth 配置无法读取" }]; }
     }));
-    return [...native, ...SPECS.filter((s) => s.oauth && !s.nativeLoginOnly).flatMap(({ id }) => [
+    const agy = antigravity.historySources({ home: this.nativeHome,
+      override: this.state.credentialHomes.antigravity, keyring: this.antigravityKeyring });
+    return [...native, ...agy, ...SPECS.filter((s) => s.oauth && !s.nativeLoginOnly).flatMap(({ id }) => [
       ...this.nativeLocations(id)
         .map((dir) => ({ harness: id, dir, native: true })),
       ...this.state.profiles.filter((p) => p.harness === id)
@@ -333,7 +336,7 @@ class HarnessManager {
   oauthHistoryAllows(id, provider) {
     if (id === "kimi") return /^kimi:[a-f0-9]{20}$/.test(provider);
     if (id === "zcode") return ["zai", "bigmodel"].includes(provider);
-    if (id === "antigravity") return false;
+    if (id === "antigravity") return provider === "google-antigravity";
     return this.spec(id).oauth && (id === "pi" ? this.piProviders.some((p) => p.id === provider)
       : ACCOUNT_SERVICES[id].includes(provider));
   }
@@ -420,6 +423,15 @@ class HarnessManager {
   }
   oauthHistoryTarget(id, provider) {
     if (!this.spec(id).oauth) throw Error("此客户端不支持 OAuth 账户切换");
+    if (id === "antigravity") {
+      const options = { home: this.nativeHome, override: this.state.credentialHomes.antigravity,
+        keyring: this.antigravityKeyring };
+      const [source] = antigravity.historySources(options);
+      const blocked = antigravity.oauthSwitchIssue(options, this.nativeEnv);
+      if (blocked) throw Error(blocked);
+      if (!source) throw Error("Antigravity 原生 OAuth 凭据不可读。请在原生终端完成登录后刷新状态");
+      return source;
+    }
     if (id === "kimi") {
       const { dir } = kimiConfig.target(this);
       const source = this.oauthHistorySources().find((s) => s.harness === id && s.provider === provider && s.dir === dir);

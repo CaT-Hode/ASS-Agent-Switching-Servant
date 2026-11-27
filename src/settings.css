@@ -55,8 +55,31 @@
   border: 1px solid var(--settings-line); border-radius: 13px; background: var(--settings-card); }
 .settings-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 15px; }
 .settings-preview-heading h4 { margin: 0; font-size: 13px; }
+.settings-preview-heading .text-button { margin-left: auto; white-space: nowrap; }
 .settings-preview-heading span, .settings-widget-preview > p { font-size: 11px; color: var(--muted); }
 .settings-preview-stage { display: grid; place-items: center; min-height: 180px; padding-block: 24px; }
+.settings-preview-sample { display: grid; justify-items: center; gap: 2px; }
+.settings-widget-column-header {
+  position: relative; display: grid; height: 27px; align-items: stretch; border-radius: 8px;
+  background: #13111fc4; color: #eae3f6; box-shadow: inset 0 0 0 1px #d7c8ff37, 0 3px 8px #07020c43;
+  font: 550 10px/1 "Segoe UI", "Microsoft YaHei UI", sans-serif; user-select: none;
+}
+.settings-widget-column-cell { position: relative; display: grid; align-items: center; min-width: 0; }
+.settings-widget-column-cell > span:first-child { display: block; padding-inline: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-widget-column-divider {
+  position: absolute; inset: 0 -6px 0 auto; z-index: 1; width: 12px;
+  cursor: col-resize; touch-action: none; outline: none;
+}
+.settings-widget-column-divider::after {
+  content: ""; position: absolute; inset: 6px auto 6px 5px; width: 2px; border-radius: 2px; background: #ddcffc62;
+}
+.settings-widget-column-divider:is(:hover,:focus-visible)::after,
+.settings-widget-column-header[data-resizing] .settings-widget-column-divider:focus::after { background: #e6ceff; }
+.settings-widget-column-divider[aria-disabled="true"] { cursor: default; }
+@media (forced-colors: active) {
+  .settings-widget-column-divider::after { background: CanvasText; }
+  .settings-widget-column-divider:focus-visible { outline: 1px solid Highlight; }
+}
 .settings-preview-fit { position: relative; }
 .settings-preview-window { position: absolute; transform-origin: top left; }
 .settings-widget-preview > p { padding: 10px 15px; }

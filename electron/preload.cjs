@@ -84,6 +84,8 @@ const allowed = [
   "client-detect",
   "client-open-desktop",
   "antigravity-open-cli",
+  "antigravity-add-account",
+  "antigravity-account-rename",
   "antigravity-login-status",
   "antigravity-model-launch",
   "antigravity-desktop-launch",

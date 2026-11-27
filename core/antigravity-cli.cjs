@@ -5,6 +5,8 @@ const { versionSupported } = require("./agy-injection.cjs");
 
 const KIND = "antigravity-quota";
 const UPDATE_REQUIRED = "只读额度查询需要 Antigravity CLI 1.1.11 或更新版本";
+const LOGIN_REQUIRED = "Antigravity 登录已失效，请重新登录后查询额度";
+const NATIVE_OAUTH_REQUIRED = "当前环境使用 Gateway 或 Google Cloud ADC，无法查询原生 OAuth 额度";
 const label = (value) =>
   typeof value === "string" && value.trim() && value.length <= 180 && !/[\x00-\x1f\x7f]/.test(value)
     ? value.trim()
@@ -59,6 +61,7 @@ function provider(client, account) {
 }
 
 function parseQuota(command, output) {
+  if (output?.status === "ERROR" && authenticationRequired(output.error)) throw Error(LOGIN_REQUIRED);
   if (output?.status !== "SUCCESS" || output.command?.name !== command)
     throw Error("接口未返回可识别的账户资料");
   const data = output.command.data;
@@ -148,22 +151,32 @@ function parseEffort(output) {
   };
 }
 
-function agy(executable, args, timeout = 15000) {
+function authenticationRequired(message) {
+  return typeof message === "string" && /\bauthentication required\b/i.test(message);
+}
+
+function readCommandArgs(command) {
+  return ["-p", "/" + command, "--disable-slash-commands=false", "--output-format", "json"];
+}
+
+function agy(executable, args, timeout = 15000, env = process.env) {
   return new Promise((resolve, reject) => {
     const child = execFile(
       executable,
       args,
       {
         cwd: os.homedir(),
+        env,
         windowsHide: true,
         timeout,
         maxBuffer: 512 * 1024,
         encoding: "utf8",
       },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         if (error)
           return reject(
-            error.killed ? Object.assign(Error(), { name: "TimeoutError" }) : Error("无法调用 Antigravity CLI"),
+            error.killed ? Object.assign(Error(), { name: "TimeoutError" })
+              : Error(authenticationRequired(stderr) ? LOGIN_REQUIRED : "无法调用 Antigravity CLI"),
           );
         resolve(stdout);
       },
@@ -172,8 +185,11 @@ function agy(executable, args, timeout = 15000) {
   });
 }
 
-function requests(providerInfo) {
+function requests(providerInfo, { run = agy, env = process.env } = {}) {
   // Earlier CLI versions can treat a slash command in print mode as a prompt.
+  const accountOverride = Object.entries(env).some(([name, value]) =>
+    (/^AGY_LLM_GATEWAY_URL$/i.test(name) && value?.trim()) ||
+    (/^AGY_ADC_AUTH$/i.test(name) && /^(?:true|t|1)$/i.test(value?.trim())));
   let version;
   return [
     ["usage", "Antigravity 订阅额度"],
@@ -182,10 +198,11 @@ function requests(providerInfo) {
     section,
     label: sectionLabel,
     run: async () => {
-      version ||= agy(providerInfo.executable, ["--version"]);
+      if (accountOverride) throw Error(NATIVE_OAUTH_REQUIRED);
+      version ||= run(providerInfo.executable, ["--version"], 8000, env);
       const parsed = parseVersion(await version);
       if (!parsed?.quotaSupported) throw Error(UPDATE_REQUIRED);
-      const stdout = await agy(providerInfo.executable, ["-p", "/" + section, "--output-format", "json"]);
+      const stdout = await run(providerInfo.executable, readCommandArgs(section), 15000, env);
       return { data: JSON.parse(stdout) };
     },
   }));
@@ -206,8 +223,8 @@ async function inspectCli(executable, { run = agy } = {}) {
 
   if (version.quotaSupported) {
     const [modelRes, effortRes, catalogRes] = await Promise.allSettled([
-      run(executable, ["-p", "/model", "--output-format", "json"], 12000),
-      run(executable, ["-p", "/effort", "--output-format", "json"], 12000),
+      run(executable, readCommandArgs("model"), 12000),
+      run(executable, readCommandArgs("effort"), 12000),
       run(executable, ["models"], 15000),
     ]);
     if (modelRes.status === "fulfilled") {
@@ -238,6 +255,8 @@ async function inspectCli(executable, { run = agy } = {}) {
 module.exports = {
   KIND,
   UPDATE_REQUIRED,
+  LOGIN_REQUIRED,
+  NATIVE_OAUTH_REQUIRED,
   provider,
   parseVersion,
   parseQuota,

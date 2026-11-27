@@ -1,7 +1,9 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
-import { WIDGET_GLASS_DEFAULTS, WIDGET_MAX_RADIUS, todayHeatmap, widgetHeight, widgetWidth } from '../core/request-widget-view.mjs';
+import { WIDGET_FRAME_INSET, WIDGET_GLASS_DEFAULTS, WIDGET_MAX_RADIUS, WIDGET_ROW_INLINE_PADDING, todayHeatmap,
+  widgetContentInsets, widgetHeight, widgetVisibleColumns, widgetWidth } from '../core/request-widget-view.mjs';
 import { WidgetSurface } from './widget-surface.jsx';
 import { WidgetPreviewMaterial } from './widget-preview-material.jsx';
+import { WidgetColumnHeader } from './widget-column-header.jsx';
 
 export const sampleEntries = [
   ['codex', 'GPT-6.2 Astra', 'OpenAI', 46.8, 89, 4200, 'streaming'],
@@ -21,7 +23,7 @@ export const sampleUsage = todayHeatmap({ rows: sampleHours.map((value, hour) =>
   day: '2026-01-01', hour, input: value * 14000, output: value * 1100,
 })) }, [], new Date(2026, 0, 1, 15, 30));
 
-export function SettingsWidgetPreview({ widget, quotaBars, theme }) {
+export function SettingsWidgetPreview({ widget, quotaBars, theme, disabled, onColumnWidths }) {
   const stage = useRef(null), panel = useRef(null);
   const [available, setAvailable] = useState(null);
   const [systemDark, setSystemDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches);
@@ -42,17 +44,27 @@ export function SettingsWidgetPreview({ widget, quotaBars, theme }) {
   const scale = Math.min(1, Math.max(1, (available ?? width + 40) - 40) / width);
   const color = theme === 'dark' || theme === 'system' && systemDark ? 'dark' : 'light';
   const { bezelWidth, distortion } = { ...WIDGET_GLASS_DEFAULTS, ...widget };
+  const fields = widgetVisibleColumns(widget.columns);
+  const inlineInset = WIDGET_FRAME_INSET + widgetContentInsets(radius).horizontal + WIDGET_ROW_INLINE_PADDING;
+  const headerWidth = (width - 2 * inlineInset) * scale;
   return <aside className="settings-widget-preview" aria-label="请求悬浮窗预览">
-    <div className="settings-preview-heading"><h4>预览</h4><span>{width} × {height} DIP</span></div>
+    <div className="settings-preview-heading"><h4>预览</h4><span>{width} × {height} DIP</span>
+      {Object.keys(widget.columnWidths || {}).length > 0 && <button type="button" className="text-button"
+        disabled={disabled} onClick={() => onColumnWidths(null)}>重置列宽</button>}
+    </div>
     <div ref={stage} className="settings-preview-stage widget-demo-stage">
-      <div className="settings-preview-fit" style={{ width: width * scale, height: height * scale }}>
-        <div className="settings-preview-window" style={{ width, height, scale }}>
-          <WidgetSurface preview panelRef={panel} frame={{ theme: color, glass: true, radius, columns: widget.columns, quotaBars,
-            showHeatmap, showUsage, heat: sampleUsage, usageSummary: sampleUsage }} entries={sampleEntries.slice(0, rows)} />
+      <div className="settings-preview-sample">
+        <WidgetColumnHeader {...{ fields, scale, disabled, panel }} widths={widget.columnWidths} width={headerWidth} onCommit={onColumnWidths} />
+        <div className="settings-preview-fit" style={{ width: width * scale, height: height * scale }}>
+          <div className="settings-preview-window" style={{ width, height, scale }}>
+            <WidgetSurface preview panelRef={panel} frame={{ theme: color, glass: true, radius, columns: widget.columns,
+              columnWidths: widget.columnWidths, quotaBars, showHeatmap, showUsage, heat: sampleUsage, usageSummary: sampleUsage }}
+              entries={sampleEntries.slice(0, rows)} />
+          </div>
         </div>
       </div>
       <WidgetPreviewMaterial panel={panel} {...{ radius, bezelWidth, distortion, scale }} theme={color} />
     </div>
-    <p>请求与热力图为示例 · 桌面材质会随背景变化{scale < 1 ? ' · 已缩放' : ''}</p>
+    <p>{fields.length > 1 ? '拖动表头分隔线调整列宽 · ' : ''}请求与热力图为示例{scale < 1 ? ' · 已缩放' : ''}</p>
   </aside>;
 }

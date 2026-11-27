@@ -7,7 +7,7 @@ import { AccountPlan } from './account-profile.jsx';
 import { groupQuotaWindows, quotaAmounts, quotaAmountText } from './usage-view.mjs';
 const api = window.ass;
 export const quotaAccountCaption = (account) =>
-  account.profile?.fields?.find((field) => field.id === "email")?.value ||
+  account.oauthAlias || account.profile?.fields?.find((field) => field.id === "email")?.value ||
   account.profile?.fields?.find((field) => field.id === "name")?.value || account.label;
 
 export function useSupplierQuota(p, state) {

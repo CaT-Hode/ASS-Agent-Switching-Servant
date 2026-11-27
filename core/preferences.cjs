@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { atomic } = require("./config.cjs");
 const { CLIENT_IDS, ids: clientIds } = require("./client-registry.cjs");
-const { WIDGET_GLASS_DEFAULTS, WIDGET_GLASS_LIMITS, WIDGET_MAX_RADIUS } = require("./request-widget-view.mjs");
+const { WIDGET_COLUMN_LIMITS, WIDGET_GLASS_DEFAULTS, WIDGET_GLASS_LIMITS, WIDGET_MAX_RADIUS } = require("./request-widget-view.mjs");
 const widgetColumns = { provider: true, throughput: true, cache: true, duration: true };
 const widgetColumnKeys = ['harness', ...Object.keys(widgetColumns)];
 const defaults = {
@@ -17,7 +17,7 @@ const defaults = {
   antigravityHook: false,
   antigravityMcp: false,
   requestWidget: { enabled: false, width: 340, radius: WIDGET_MAX_RADIUS, rows: 5, materialVersion: 1, layoutVersion: 2,
-    ...WIDGET_GLASS_DEFAULTS, showHeatmap: true, showUsage: false, quotaBars: [], columns: widgetColumns },
+    ...WIDGET_GLASS_DEFAULTS, showHeatmap: true, showUsage: false, quotaBars: [], columns: widgetColumns, columnWidths: {} },
   requestMonitor: { range: "day", provider: "all", client: "all", status: "all", diagnostics: false, group: "requests" },
   conversations: { harness: "codex", pinned: false, scope: "projects", project: "", columns: { projects: 235, threads: 205 } },
   usage: { client: "all", range: "month", tab: "activity", group: "client" },
@@ -78,6 +78,15 @@ class Preferences {
         for (const key of widgetColumnKeys) {
           if (typeof value.columns[key] === 'boolean') next.requestWidget.columns[key] = value.columns[key];
         }
+      }
+      if (value.columnWidths === null) next.requestWidget.columnWidths = {};
+      else if (value.columnWidths && typeof value.columnWidths === 'object' && !Array.isArray(value.columnWidths)) {
+        const widths = { ...next.requestWidget.columnWidths };
+        for (const [key, [min, max]] of Object.entries(WIDGET_COLUMN_LIMITS)) {
+          const width = value.columnWidths[key];
+          if (Number.isFinite(width) && width >= min && width <= max) widths[key] = Math.round(width * 100) / 100;
+        }
+        next.requestWidget.columnWidths = widths;
       }
       for (const [key, min, max] of [['width', 320, 640], ['radius', 8, WIDGET_MAX_RADIUS], ['rows', 1, 8], ['x', -100000, 100000], ['y', -100000, 100000], ['bottom', -100000, 100000]])
         if (Number.isInteger(value[key]) && value[key] >= min && value[key] <= max) next.requestWidget[key] = value[key];

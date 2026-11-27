@@ -63,7 +63,7 @@ function WidgetSettings({ widget, quotaChoices, theme, act, busy }) {
   const configure = patch => act('widget-settings', () => window.ass.call('request-widget', patch));
   const disabled = !!busy;
   const quotaIds = widget.quotaBars || [];
-  const quotaBars = quotaIds.map(id => quotaChoices.find(choice => choice.id === id) || { label: '额度不可用', remainingPercent: null });
+  const quotaBars = quotaIds.map(id => quotaChoices.find(choice => choice.id === id) || { label: 'Quota Unavailable', remainingPercent: null });
   const renderRanges = ranges => ranges.map(({ key, fallback, ...range }) => {
     const value = widget[key] ?? fallback;
     const patch = next => ({ [key]: key === 'width' ? widgetWidthSetting(next) : next });
@@ -128,7 +128,8 @@ function WidgetSettings({ widget, quotaChoices, theme, act, busy }) {
         </div>
       </section>
     </div>
-    <SettingsWidgetPreview widget={draft ? { ...widget, ...draft } : widget} {...{ quotaBars, theme }} />
+    <SettingsWidgetPreview widget={draft ? { ...widget, ...draft } : widget} {...{ quotaBars, theme, disabled }}
+      onColumnWidths={columnWidths => configure({ columnWidths })} />
   </div>;
 }
 

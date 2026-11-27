@@ -195,11 +195,11 @@ export function overviewAccounts(state, clientFilter) {
       const amounts = quotaAmounts(fields, subscription ? client.id : null, !!a.quota?.remote);
       const row = {
         key,
-        quotaKey: a.oauthRecordId ? client.id + ":oauth:" + a.oauthRecordId : key,
+        quotaKey: client.id !== "antigravity" && a.oauthRecordId ? client.id + ":oauth:" + a.oauthRecordId : key,
         account: a,
         client,
         clients: [client.name],
-        name: get("email") || get("name") || a.label,
+        name: a.oauthAlias || get("email") || get("name") || a.label,
         plan: accountPlan(a),
         quotas: fields.filter((f) => f.kind === "quota" && Number.isFinite(f.remainingPercent)),
         amounts: amounts.length
